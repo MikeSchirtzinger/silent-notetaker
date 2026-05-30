@@ -1,0 +1,15 @@
+[package]
+name = "notetaker-server"
+version = "0.1.0"
+edition = "2021"
+description = "Static file server for the Silent Notetaker with cross-origin isolation (COOP/COEP) so the browser can run multithreaded WASM."
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tower-http = { version = "0.6", features = ["fs", "set-header", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }
+
+[profile.release]
+opt-level = 2

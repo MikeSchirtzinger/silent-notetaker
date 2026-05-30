@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Rust build output
+/server/target/
+target/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+
+# Backups / scratch
+*.bak
+*.log
+/tmp/
+
+# Local bridge auth token (never commit)
+token
+.config/
