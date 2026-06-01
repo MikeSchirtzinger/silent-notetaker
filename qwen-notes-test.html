@@ -32,6 +32,8 @@
       <select id="model">
         <option value="onnx-community/Qwen3-0.6B-ONNX">Qwen3-0.6B</option>
         <option value="onnx-community/Qwen3-1.7B-ONNX">Qwen3-1.7B</option>
+        <option value="onnx-community/Ternary-Bonsai-1.7B-ONNX">Ternary-Bonsai-1.7B</option>
+        <option value="Mike0021/MiniCPM5-1B-ONNX-Web">MiniCPM5-1B</option>
       </select>
     </span>
     <span>device
@@ -44,6 +46,8 @@
       <select id="dtype">
         <option value="q4f16">q4f16</option>
         <option value="q4">q4</option>
+        <option value="q2">q2</option>
+        <option value="q2f16">q2f16</option>
       </select>
     </span>
     <span>threads
@@ -164,7 +168,15 @@ async function run() {
       { role: 'system', content: $('system').value },
       { role: 'user', content: `Transcript:\n${$('transcript').value}` },
     ];
-    const prompt = gen.tokenizer.apply_chat_template(messages, { tokenize:false, add_generation_prompt:true, enable_thinking:false });
+    let prompt;
+    try {
+      prompt = gen.tokenizer.apply_chat_template(messages, { tokenize:false, add_generation_prompt:true, enable_thinking:false });
+    } catch (e) {
+      // Some exports (e.g. MiniCPM5 community build) don't embed chat_template in tokenizer_config.
+      // Build ChatML manually; <think></think> suppresses hybrid reasoning (Qwen3/MiniCPM convention).
+      prompt = `<|im_start|>system\n${$('system').value}<|im_end|>\n<|im_start|>user\nTranscript:\n${$('transcript').value}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n`;
+      $('status').textContent = 'no embedded chat_template → manual ChatML';
+    }
     $('status').textContent = 'generating…';
     const t0 = performance.now();
     const res = await gen(prompt, { max_new_tokens: 320, do_sample:false, return_full_text:false });
