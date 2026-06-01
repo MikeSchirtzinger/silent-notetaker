@@ -1,0 +1,7 @@
+# Cloudflare Pages / Netlify response headers.
+# Cross-origin isolation → crossOriginIsolated → SharedArrayBuffer → multithreaded WASM.
+# COEP=credentialless (not require-corp) so the cross-origin CDN/HF imports
+# (jsdelivr libraries + HuggingFace models, incl. titanet.onnx) still load.
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless

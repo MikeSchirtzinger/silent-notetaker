@@ -2152,7 +2152,13 @@ class SpeakerEmbedder {
       ort.env.wasm.numThreads = 1; // no cross-origin isolation under python http.server
       this.ort = ort;
       this.mel = (await (await fetch('mel_fb.json')).json()).matrix; // 80x257 slaney mel
-      this.session = await ort.InferenceSession.create('titanet.onnx', { executionProviders: ['wasm'] });
+      // TitaNet is 40MB — hosted on the HuggingFace CDN so the app can be served from
+      // static hosts with small per-file limits (e.g. Cloudflare Pages' 25MB cap), and
+      // so it loads from the same place as every other model. Set window.TITANET_URL
+      // before load to override (e.g. './titanet.onnx' for a fully-local/offline clone).
+      const TITANET_URL = (typeof window !== 'undefined' && window.TITANET_URL)
+        || 'https://huggingface.co/FluffyBunnies/titanet-small-onnx/resolve/main/titanet.onnx';
+      this.session = await ort.InferenceSession.create(TITANET_URL, { executionProviders: ['wasm'] });
       this.ready = true;
       this.onStatus?.('Speaker model ready');
       console.log('[speaker] TitaNet-small ready (onnxruntime-web WASM)');
