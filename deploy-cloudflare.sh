@@ -28,6 +28,6 @@ echo "▸ Bundle contents:"
 ls -lh "$DIST"
 
 echo "▸ Deploying to Cloudflare Pages project '$PROJECT' ..."
-wrangler pages deploy "$DIST" --project-name "$PROJECT"
+wrangler pages deploy "$DIST" --project-name "$PROJECT" --commit-dirty=true
 
 echo "✓ Done. Cross-origin isolation is set via _headers (COOP/COEP)."

@@ -24,3 +24,6 @@ venv/
 # Local bridge auth token (never commit)
 token
 .config/
+
+# Cloudflare Pages deploy bundle (assembled by deploy-cloudflare.sh)
+/dist/
