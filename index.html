@@ -887,6 +887,17 @@
     .summary-item::before { content: '•'; position: absolute; left: 0; color: var(--text-muted); }
     .summary-stats { font-size: 12px; color: var(--text-faint); margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
 
+    /* AI Meeting Notes (additive, on-device at Stop) */
+    .summary-section.ai-notes { margin-top: 20px; padding: 14px; border: 1px solid var(--accent-dim); border-radius: var(--radius-sm); background: var(--accent-dim); }
+    .ai-notes-header { color: var(--accent); display: flex; align-items: center; gap: 8px; }
+    .ai-badge { font-size: 10px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--accent); opacity: 0.85; border: 1px solid var(--accent-dim); border-radius: 999px; padding: 2px 8px; background: rgba(0,0,0,0.15); }
+    .ai-notes-group { margin-top: 12px; }
+    .ai-notes-group-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+    .ai-notes-group-label.decisions { color: var(--decisions); }
+    .ai-notes-group-label.actions   { color: var(--actions); }
+    .ai-notes-group-label.keypoints  { color: var(--keypoints); }
+    .ai-notes-group-label.questions  { color: var(--questions); }
+
     /* ─────────────────────────────────────────
        Claude Bridge indicator
     ───────────────────────────────────────── */
@@ -2351,6 +2362,88 @@ function rerollSmartQ() {
 const recapQuestionGenerator = new QuestionGenerator({ device: 'webgpu', dtype: 'q4', maxTokens: 160 });
 
 /* ════════════════════════════════════════════
+   Final Meeting Notes — Qwen note EXTRACTION (additive, at Stop, WebGPU).
+   Generates a clean, distilled note set from the full transcript when recording
+   stops (GPU is free then → ~3s/chunk on WebGPU). This is ADDITIVE: it never
+   rewrites the live regex notes the user watched form — it's a separate,
+   clearly-labelled AI artifact. Validated zero-shot prompt: few-shot examples get
+   parroted into output at 0.6B, so the prompt is example-free; the model prefers a
+   ':' separator, so the parser accepts '|' and ':'. Chunked because a 0.6B model's
+   recall drops on long inputs — small coherent chunks + cross-chunk dedup.
+═══════════════════════════════════════════ */
+const NOTES_SYSTEM =
+`You are a meeting note-taker. Read the transcript and write down EVERY substantive item worth remembering. Be thorough and exhaustive — a real meeting yields several decisions, tasks, facts, and open questions. Do not stop early or summarize; list each item separately.
+
+Rewrite each item as a short note in your own words, under 18 words. Skip greetings, filler, and small talk.
+
+Tag each note with the ONE category that fits best:
+- DECISION = a choice the group settled on or agreed to
+- ACTION = a task someone will do; name the owner and any deadline
+- KEYPOINT = an important fact, metric, number, or finding
+- QUESTION = an open question or an unresolved blocker
+
+Write one note per line in this exact shape:
+CATEGORY| note text
+where CATEGORY is literally one of: DECISION, ACTION, KEYPOINT, QUESTION.
+
+Extract ONLY from the transcript — never invent. Cover every distinct item. If nothing is note-worthy, output exactly: NONE
+Output only the note lines.`;
+
+const NOTE_CAT_MAP = { DECISION: 'decisions', ACTION: 'actions', KEYPOINT: 'keypoints', QUESTION: 'questions' };
+
+/** Parse Qwen note output. Accepts "TAG| text", "TAG: text", or "TAG - text"; drops NONE/empties. */
+function parseQwenNotes(raw) {
+  const out = [];
+  for (let line of String(raw || '').replace(/<think>[\s\S]*?<\/think>/g, '').split('\n')) {
+    line = line.trim();
+    if (!line || /^none\.?$/i.test(line)) continue;
+    const m = line.match(/^[-*\s]*(DECISION|ACTION|KEYPOINT|QUESTION)\s*[|:\-–]\s*(.+)$/i);
+    if (!m) continue;
+    let text = m[2].replace(/^["'\s]+|["'\s]+$/g, '').trim();
+    if (text.length < 4 || /^none\.?$/i.test(text)) continue;
+    if (text.length > 160) text = text.slice(0, 159).trim() + '…';
+    out.push({ cat: NOTE_CAT_MAP[m[1].toUpperCase()], text });
+  }
+  return out;
+}
+
+/** Split a transcript into ~target-char chunks on sentence boundaries (keeps context coherent). */
+function chunkTranscript(text, target = 1100) {
+  const sentences = String(text).match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [String(text)];
+  const chunks = [];
+  let cur = '';
+  for (const s of sentences) {
+    const seg = s.trim(); if (!seg) continue;
+    if (cur && (cur.length + seg.length + 1) > target) { chunks.push(cur); cur = ''; }
+    cur += (cur ? ' ' : '') + seg;
+  }
+  if (cur) chunks.push(cur);
+  return chunks;
+}
+
+/** Content-word set for dedup (reuses the open-question stopword list). */
+function _noteKw(t) {
+  return new Set((String(t).toLowerCase().match(/\b[a-z][a-z']{2,}\b/g) || []).filter(w => !OPENQ_STOP.has(w)));
+}
+/** Drop near-duplicate notes (same category, ≥60% keyword overlap) from overlapping chunks. */
+function dedupeNotes(notes) {
+  const kept = [];
+  for (const n of notes) {
+    const kw = _noteKw(n.text);
+    let dup = false;
+    for (const k of kept) {
+      if (k.cat !== n.cat) continue;
+      const kkw = _noteKw(k.text);
+      if (!kw.size || !kkw.size) { if (k.text.toLowerCase() === n.text.toLowerCase()) { dup = true; break; } continue; }
+      let inter = 0; for (const w of kw) if (kkw.has(w)) inter++;
+      if (inter / Math.min(kw.size, kkw.size) >= 0.6) { dup = true; break; }
+    }
+    if (!dup) kept.push(n);
+  }
+  return kept;
+}
+
+/* ════════════════════════════════════════════
    OpenQs — meeting-level open/unanswered question tracking.
    Questions detected by NoteEngine are tracked here; a later declarative
    utterance that shares ≥2 content words marks one "answered" (struck through).
@@ -3761,8 +3854,10 @@ class App {
 
     this.showSummary();
 
-    // Smart-questions recap (WebGPU — GPU is free now) — injects into the open summary modal.
+    // Stop-time on-device passes (WebGPU — GPU is free now) — inject into the open summary modal.
     const sq = loadSettings();
+    // Final Meeting Notes: additive Qwen note set (does NOT replace the live regex notes above).
+    if (sq.aiFinalNotes !== false) this.generateFinalNotes();
     if (sq.smartQuestions !== false && sq.smartqRecap !== false) this.generateQuestionRecap();
 
     // Request enhanced summary from Claude if connected
@@ -4379,11 +4474,13 @@ class App {
       <div class="summary-meta">${esc(s.date)} · ${esc(s.duration)}</div>
       <div class="summary-executive">${esc(s.executiveLine)}</div>
       ${sectionsHtml}
-      <div class="summary-stats">${s.totalWords.toLocaleString()} words transcribed · ${s.totalNotes} note${s.totalNotes !== 1 ? 's' : ''} captured</div>
+      <div class="summary-stats">${s.totalWords.toLocaleString()} words transcribed · ${s.totalNotes} note${s.totalNotes !== 1 ? 's' : ''} captured live</div>
+      <div id="aiNotesMount"></div>
     ` : `
       <div class="summary-title">${esc(s.title)}</div>
       <div class="summary-meta">${esc(s.date)} · ${esc(s.duration)}</div>
       <div class="modal-empty">No notes captured during this meeting.</div>
+      <div id="aiNotesMount"></div>
     `;
 
     const container = document.getElementById('modalContainer');
@@ -4456,6 +4553,52 @@ class App {
     sec.innerHTML = `<div class="summary-section-header questions">Questions to Take Forward</div>${html || '<div class="modal-empty">No additional questions surfaced.</div>'}`;
   }
 
+  /* Final Meeting Notes (additive): at Stop the GPU is free, so re-derive a clean,
+     distilled, correctly-categorized note set from the full transcript on WebGPU.
+     This does NOT touch the live regex notes above — it's a separate AI artifact,
+     clearly labelled. Chunked for recall, deduped across chunks. */
+  async generateFinalNotes() {
+    const mount = document.getElementById('aiNotesMount');
+    if (!mount) return;  // summary modal not open
+    const transcript = [...document.querySelectorAll('.transcript-text')].map(el => el.textContent.trim()).filter(Boolean).join(' ');
+    if (transcript.length < 80) { mount.remove(); return; }  // too little to synthesize from
+
+    const HEADER = `<div class="summary-section-header ai-notes-header">AI Meeting Notes<span class="ai-badge">on-device · Qwen · WebGPU</span></div>`;
+    mount.innerHTML = `<div class="summary-section ai-notes">${HEADER}<div class="recap-loading">Generating on-device…</div></div>`;
+
+    // A 0.6B model self-limits to ~4 notes per call regardless of input length, so feed it
+    // SMALL chunks (~2-3 sentences) and aggregate — validated sweet spot ≈500 chars. For long
+    // meetings, grow the chunk so the count (and WebGPU latency) stays bounded (~18 chunks).
+    const target = Math.max(500, Math.ceil(transcript.length / 18));
+    const chunks = chunkTranscript(transcript, target).slice(0, 22);
+    let notes = [];
+    try {
+      for (const chunk of chunks) {
+        const r = await recapQuestionGenerator.generate(chunk, { system: NOTES_SYSTEM, maxTokens: 256 });
+        notes.push(...parseQwenNotes(r.question));
+      }
+    } catch (e) {
+      console.warn('[ai-notes]', e && e.message || e);
+    }
+    notes = dedupeNotes(notes);
+
+    const sec = mount.querySelector('.ai-notes');
+    if (!sec) return;  // modal closed before generation finished
+    const groups = [
+      { cat: 'decisions', label: 'Decisions',     cls: 'decisions' },
+      { cat: 'actions',   label: 'Action Items',  cls: 'actions'   },
+      { cat: 'keypoints', label: 'Key Points',    cls: 'keypoints' },
+      { cat: 'questions', label: 'Open Questions', cls: 'questions' },
+    ];
+    let body = '';
+    for (const g of groups) {
+      const items = notes.filter(n => n.cat === g.cat);
+      if (!items.length) continue;
+      body += `<div class="ai-notes-group"><div class="ai-notes-group-label ${g.cls}">${g.label}</div>${items.map(n => `<div class="summary-item">${esc(n.text)}</div>`).join('')}</div>`;
+    }
+    sec.innerHTML = HEADER + (body || '<div class="modal-empty">No notes surfaced on-device.</div>');
+  }
+
   addScreenshotThumbnail(base64, timestamp) {
     const container = document.getElementById('screenshotsStrip');
     if (!container) return;
@@ -4526,7 +4669,18 @@ function showToast(msg, duration = 2200) {
    Copy summary markdown (from summary modal)
 ═══════════════════════════════════════════ */
 function copySummaryMarkdown() {
-  const md = app.notesToMarkdown();
+  let md = app.notesToMarkdown();
+  // Append the additive AI Meeting Notes (if generated) so the exported summary includes them.
+  const groups = [...document.querySelectorAll('#aiNotesMount .ai-notes-group')];
+  if (groups.length) {
+    md += '\n\n## AI Meeting Notes (on-device · Qwen)\n';
+    for (const g of groups) {
+      const label = g.querySelector('.ai-notes-group-label')?.textContent.trim() || '';
+      const items = [...g.querySelectorAll('.summary-item')].map(i => `- ${i.textContent.trim()}`);
+      if (items.length) md += `\n### ${label}\n${items.join('\n')}\n`;
+    }
+    md = md.trim();
+  }
   navigator.clipboard.writeText(md).then(() => {
     showToast('Copied to clipboard as Markdown');
   }).catch(() => {
@@ -5270,6 +5424,7 @@ const DEFAULT_SETTINGS = {
   screenshots: true,
   triggerDetection: true,
   autoSummary: true,
+  aiFinalNotes: true,        // Qwen-generated final meeting notes at Stop (WebGPU, additive — does not replace live notes)
   bridgeUrl: 'ws://localhost:8765',
   showTimestamps: true,      // per-line timestamps visible + included in copied text
   timeFormat: 'elapsed',     // 'elapsed' (12:34) | 'clock' (1:23 PM) | 'ago' (2m ago)
@@ -5371,6 +5526,11 @@ function openSettings() {
           <span class="settings-label">Auto Summary on Stop<span class="settings-hint">Show structured summary when recording ends</span></span>
           <input type="checkbox" id="settingSummary" class="settings-toggle" ${s.autoSummary ? 'checked' : ''}>
         </label>
+
+        <label class="settings-row settings-toggle-row">
+          <span class="settings-label">AI Final Notes<span class="settings-hint">On-device Qwen re-derives clean notes at Stop (WebGPU) — added below the live notes, never replaces them</span></span>
+          <input type="checkbox" id="settingAiNotes" class="settings-toggle" ${s.aiFinalNotes !== false ? 'checked' : ''}>
+        </label>
       </div>
 
       <div class="settings-section">
@@ -5424,6 +5584,7 @@ function applySettings() {
     screenshots: document.getElementById('settingScreenshots').checked,
     triggerDetection: document.getElementById('settingTriggers').checked,
     autoSummary: document.getElementById('settingSummary').checked,
+    aiFinalNotes: document.getElementById('settingAiNotes').checked,
     smartQuestions: document.getElementById('settingSmartQ').checked,
     smartqTypes: ['clarify', 'risk', 'followup'].filter(k =>
       document.getElementById('settingSmartQ' + k.charAt(0).toUpperCase() + k.slice(1)).checked),

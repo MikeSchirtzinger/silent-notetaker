@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Qwen Notes — capability harness</title>
+<style>
+  body { font: 14px/1.5 -apple-system, system-ui, sans-serif; background:#0d0f12; color:#e6e8eb; margin:0; padding:20px; }
+  h1 { font-size:16px; margin:0 0 12px; }
+  .row { display:flex; gap:16px; align-items:flex-start; }
+  .col { flex:1; min-width:0; }
+  textarea { width:100%; box-sizing:border-box; background:#15181d; color:#e6e8eb; border:1px solid #2a2f37; border-radius:6px; padding:10px; font:12px/1.5 ui-monospace, monospace; }
+  label { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#8b93a1; display:block; margin:14px 0 4px; }
+  button { background:#2563eb; color:#fff; border:0; border-radius:6px; padding:8px 16px; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:wait; }
+  select { background:#15181d; color:#e6e8eb; border:1px solid #2a2f37; border-radius:6px; padding:6px; }
+  #status { color:#fbbf24; font-size:12px; margin:10px 0; min-height:18px; white-space:pre-wrap; }
+  #raw { white-space:pre-wrap; background:#15181d; border:1px solid #2a2f37; border-radius:6px; padding:10px; font:12px/1.5 ui-monospace,monospace; min-height:60px; }
+  .note { padding:6px 10px; margin:4px 0; border-radius:6px; border-left:3px solid; }
+  .DECISION { border-color:#ffd700; background:rgba(255,215,0,.08); }
+  .ACTION   { border-color:#3b82f6; background:rgba(59,130,246,.08); }
+  .KEYPOINT { border-color:#00d4aa; background:rgba(0,212,170,.08); }
+  .QUESTION { border-color:#a78bfa; background:rgba(167,139,250,.08); }
+  .tag { font-size:10px; font-weight:700; opacity:.7; margin-right:8px; }
+  .controls { display:flex; gap:12px; align-items:center; margin:12px 0; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+  <h1>Qwen Notes — capability harness</h1>
+  <div class="controls">
+    <button id="runBtn">Extract notes</button>
+    <span>model
+      <select id="model">
+        <option value="onnx-community/Qwen3-0.6B-ONNX">Qwen3-0.6B</option>
+        <option value="onnx-community/Qwen3-1.7B-ONNX">Qwen3-1.7B</option>
+      </select>
+    </span>
+    <span>device
+      <select id="device">
+        <option value="webgpu">webgpu</option>
+        <option value="wasm">wasm</option>
+      </select>
+    </span>
+    <span>dtype
+      <select id="dtype">
+        <option value="q4f16">q4f16</option>
+        <option value="q4">q4</option>
+      </select>
+    </span>
+    <span>threads
+      <select id="threads">
+        <option value="0">default</option>
+        <option value="1">1</option>
+        <option value="4">4</option>
+        <option value="6">6</option>
+        <option value="8">8</option>
+        <option value="10">10</option>
+      </select>
+    </span>
+    <span id="meta" style="color:#8b93a1;font-size:12px"></span>
+  </div>
+  <div id="diag" style="color:#8b93a1;font-size:12px;margin-bottom:8px"></div>
+  <div id="status">idle</div>
+
+  <div class="row">
+    <div class="col">
+      <label>System prompt</label>
+      <textarea id="system" rows="14"></textarea>
+      <label>Transcript window</label>
+      <textarea id="transcript" rows="16"></textarea>
+    </div>
+    <div class="col">
+      <label>Parsed notes</label>
+      <div id="notes"></div>
+      <label>Raw model output</label>
+      <div id="raw"></div>
+    </div>
+  </div>
+
+<script type="module">
+import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.0.0-next.7/dist/transformers.min.js';
+env.allowLocalModels = false;
+env.useBrowserCache = true;
+
+const $ = id => document.getElementById(id);
+
+const SYSTEM = `You are a meeting note-taker. Read the transcript and extract only the substantive, note-worthy items. Distill each into a short, self-contained note in your own words — do NOT copy sentences verbatim, and do NOT include filler, greetings, or small talk.
+
+Categorize each note into exactly one of:
+- DECISION: a choice the group settled on
+- ACTION: a task someone will do (include the owner and any deadline if stated)
+- KEYPOINT: an important fact, metric, number, or finding
+- QUESTION: an open/unanswered question or unresolved blocker
+
+Output ONE note per line, each starting with the category tag and a pipe, like:
+DECISION| Use Postgres for the user database instead of Mongo.
+ACTION| Sarah will write the migration script by Thursday.
+KEYPOINT| Caching layer cut API response time by 40%.
+QUESTION| Would connection pooling reduce the p99 read latency?
+
+Rules:
+- Only emit notes clearly supported by the transcript. Prefer to omit rather than guess.
+- Merge duplicates. Keep each note under 18 words.
+- If there is nothing note-worthy, output exactly: NONE
+Output only the note lines, nothing else.`;
+
+const TRANSCRIPT = `Alright everyone, thanks for hopping on. Let's pick up the database question from last week.
+So I dug into Postgres versus Mongo for the user service, and honestly Postgres just makes more sense given how relational our data is.
+Yeah I'm with you, let's go with Postgres. We can always bolt on a document store later if we ever need it.
+Okay, so that's settled then, Postgres for the user DB.
+Sarah, can you own the migration script? We'll need it landed before the staging deploy.
+Sure, I'll have the migration script ready by Thursday.
+One thing that worries me is read latency under load. We saw p99 spike to 800 milliseconds last month.
+Right, that's a real concern. Does anyone know if connection pooling would actually help there?
+We should probably benchmark it before we commit to anything.
+Oh and worth flagging, the new caching layer cut our API response time by 40 percent, which is huge.
+Nice. What about the auth service, are we still blocked on the OAuth provider?
+We're still waiting on their sandbox credentials, so yeah, that's an open one.
+Mike, can you chase the vendor this week to unblock it? Yep, I'll follow up with them.
+Last thing, we agreed to push the launch to the 15th to give QA more runway.
+Great. Anything else? No? Cool, thanks everyone.`;
+
+$('system').value = SYSTEM;
+$('transcript').value = TRANSCRIPT;
+
+let generator = null, loadedKey = null;
+
+$('diag').textContent = `crossOriginIsolated=${self.crossOriginIsolated} · cores=${navigator.hardwareConcurrency} · SharedArrayBuffer=${typeof SharedArrayBuffer !== 'undefined'}`;
+
+async function getGen() {
+  const model = $('model').value, device = $('device').value, dtype = $('dtype').value;
+  const threads = parseInt($('threads').value, 10) || 0;
+  // numThreads must be set BEFORE the wasm backend initializes its thread pool (first session).
+  if (threads > 0) env.backends.onnx.wasm.numThreads = threads;
+  const key = `${model}|${device}|${dtype}|${threads}`;
+  if (generator && loadedKey === key) return generator;
+  generator = null; loadedKey = null;
+  $('status').textContent = `loading ${model} (${device}/${dtype}, ${threads||'default'}t)…`;
+  const t0 = performance.now();
+  generator = await pipeline('text-generation', model, {
+    device, dtype,
+    progress_callback: p => { if (p.status === 'downloading' && p.total > 0) $('status').textContent = `↓ ${p.file} ${Math.round(p.loaded/p.total*100)}%`; }
+  });
+  loadedKey = key;
+  $('status').textContent = `loaded in ${((performance.now()-t0)/1000).toFixed(1)}s`;
+  return generator;
+}
+
+function parse(raw) {
+  const out = [];
+  for (let line of String(raw).split('\n')) {
+    line = line.trim();
+    const m = line.match(/^(DECISION|ACTION|KEYPOINT|QUESTION)\s*\|\s*(.+)$/i);
+    if (m) out.push({ cat: m[1].toUpperCase(), text: m[2].trim() });
+  }
+  return out;
+}
+
+async function run() {
+  $('runBtn').disabled = true;
+  $('notes').innerHTML = ''; $('raw').textContent = '';
+  try {
+    const gen = await getGen();
+    const messages = [
+      { role: 'system', content: $('system').value },
+      { role: 'user', content: `Transcript:\n${$('transcript').value}` },
+    ];
+    const prompt = gen.tokenizer.apply_chat_template(messages, { tokenize:false, add_generation_prompt:true, enable_thinking:false });
+    $('status').textContent = 'generating…';
+    const t0 = performance.now();
+    const res = await gen(prompt, { max_new_tokens: 320, do_sample:false, return_full_text:false });
+    const ms = performance.now() - t0;
+    const rawText = (Array.isArray(res) ? res[0].generated_text : res.generated_text).replace(/<think>[\s\S]*?<\/think>/g,'').trim();
+    $('raw').textContent = rawText;
+    const notes = parse(rawText);
+    $('notes').innerHTML = notes.length
+      ? notes.map(n => `<div class="note ${n.cat}"><span class="tag">${n.cat}</span>${n.text.replace(/</g,'&lt;')}</div>`).join('')
+      : '<em style="color:#8b93a1">(no notes parsed)</em>';
+    $('meta').textContent = `${notes.length} notes · ${(ms/1000).toFixed(1)}s · ${env.backends?.onnx?.wasm?.numThreads||'-'}t`;
+    $('status').textContent = `done in ${(ms/1000).toFixed(1)}s`;
+  } catch (e) {
+    $('status').textContent = 'ERROR: ' + (e && e.message || e);
+    console.error(e);
+  } finally {
+    $('runBtn').disabled = false;
+  }
+}
+$('runBtn').addEventListener('click', run);
+</script>
+</body>
+</html>
