@@ -51,13 +51,13 @@ else
 fi
 
 # Start Claude Bridge
-# Auth is handled by bridge.py: Keychain OAuth → env var → saved token → interactive
+# Auth is handled by bridge.py: `claude` CLI (your subscription) → ANTHROPIC_API_KEY (billed)
 BRIDGE_PID=""
 if [ "$BRIDGE_AVAILABLE" = true ]; then
   uv run bridge.py &
   BRIDGE_PID=$!
   echo -e "  ${PURPLE}✓${NC} Claude Bridge   → ${PURPLE}ws://localhost:8765${NC}"
-  echo -e "  ${DIM}  Auth: Keychain OAuth → ANTHROPIC_API_KEY → saved token${NC}"
+  echo -e "  ${DIM}  Auth: claude CLI (your subscription, no key) → ANTHROPIC_API_KEY (billed)${NC}"
 fi
 
 echo ""

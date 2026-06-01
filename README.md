@@ -93,7 +93,8 @@ All models are pulled from Hugging Face at runtime except TitaNet, which is bund
        │  UI  +  IndexedDB (Dexie) — local only       │
        └────────────────────────────────────────────┘
 
-   (optional)  ⇄  Claude Bridge (ws://localhost:8765) → Anthropic API
+   (optional)  ⇄  Claude Bridge (ws://localhost:8765) → Claude
+               (your subscription, via the `claude` CLI)
                for richer summaries & speaker-name inference
 ```
 
@@ -123,11 +124,12 @@ If you want summaries and categorization that go beyond regex triggers, `bridge.
 uv run bridge.py        # starts ws://localhost:8765
 ```
 
-Auth is resolved at runtime, in this order, and **no key is ever stored in the repo**:
+**Connecting to Claude takes zero setup if you use [Claude Code](https://claude.com/claude-code).** The bridge drives the `claude` CLI in headless mode, so it reuses the subscription you're already logged into — no API key, no token to paste. Auth is resolved at runtime, in this order, and **no key is ever stored in the repo**:
 
-1. macOS Keychain (Claude Code OAuth credentials, if you use Claude Code)
-2. `ANTHROPIC_API_KEY` environment variable
-3. `~/.config/silent-notetaker/token`
+1. **The `claude` CLI (your Claude subscription).** If `claude` is on your `PATH` and logged in, the bridge uses it — nothing else to configure. It runs `claude -p` with `ANTHROPIC_API_KEY` scrubbed from the child env, so it authenticates with your subscription, not a pay-per-use key.
+2. **`ANTHROPIC_API_KEY`** (or a saved `~/.config/silent-notetaker/token`). Used only if the CLI isn't available. This **bills your API account**, not your subscription.
+
+> Why not just hand the keychain OAuth token to the API? Anthropic's API rejects subscription OAuth tokens used outside Claude Code, so driving the real CLI is the supported, low-friction path.
 
 `start.sh` launches the bridge automatically if [`uv`](https://docs.astral.sh/uv/) is installed.
 
@@ -143,7 +145,7 @@ Auth is resolved at runtime, in this order, and **no key is ever stored in the r
 | `mel_fb.json` | Precomputed mel filterbank matrix for TitaNet's JS front-end |
 | `server/` | Rust (axum) static server that sends the COOP/COEP isolation headers |
 | `coi-server.py` | ~20-line Python fallback server with the same headers |
-| `bridge.py` | Optional Claude bridge (local WebSocket → Anthropic API) |
+| `bridge.py` | Optional Claude bridge (local WebSocket → `claude` CLI / your subscription) |
 | `start.sh` | One-command launcher: server + (optional) bridge + opens the browser |
 | `Start Notetaker.command` | Double-click launcher for macOS |
 | `transcription-worker.js`, `sensevoice-loader.js` | Reference copies of worker logic that `index.html` inlines |
