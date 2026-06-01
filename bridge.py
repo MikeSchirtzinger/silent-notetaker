@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # /// script
 # requires-python = ">=3.11"
-# dependencies = ["websockets>=13.0"]
+# dependencies = ["websockets>=13.0", "anthropic>=0.40.0"]
 # ///
 #
 # Silent Notetaker — Claude Bridge Server
