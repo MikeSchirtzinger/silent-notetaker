@@ -10,7 +10,7 @@ The entire application is a **single HTML file**. There is no build step, no ser
 
 ## Private *by architecture*, not by policy
 
-Every mainstream AI notetaker works the same way: it joins your call, **streams your audio to someone else's servers**, runs the AI there, and sends a summary back. The good ones are careful about it — encryption, SOC 2, "we delete the audio after transcription," contractual no-training clauses. Even the privacy-marketed ones (Granola, for instance, recently valued at $1.5B) still send your meeting to cloud LLMs and store it on their infrastructure. Their privacy is a **promise**, backed by a company.
+Every mainstream AI notetaker works the same way: it joins your call, **streams your audio to someone else's servers**, runs the AI there, and sends a summary back. The good ones are careful about it — encryption, SOC 2, "we delete the audio after transcription," contractual no-training clauses. Even the privacy-marketed ones (Granola, for instance, reportedly valued around $1.5B) still send your meeting to cloud LLMs and store it on their infrastructure. Their privacy is a **promise**, backed by a company.
 
 Silent Notetaker makes the promise structurally unnecessary. The audio is captured, fed to the models, and consumed **in-process**. It is never serialized into a network request. And you don't have to take that on faith — here is the *complete* list of servers the app ever talks to:
 
@@ -38,7 +38,7 @@ cd silent-notetaker
 
 `start.sh` launches a local web server with the right headers and opens the app at **http://localhost:8080**. Pick an engine from the dropdown, click **Start**, allow the mic, and talk.
 
-> **Why a server and not just opening the file?** The on-device models use multithreaded WebAssembly, which the browser only enables when the page is "cross-origin isolated" (it needs `SharedArrayBuffer`). That requires two HTTP headers (`COOP` + `COEP`) that you can't set from a `file://` URL. `start.sh` runs a tiny server that sends them — a Rust one if you have `cargo`, otherwise a 20-line Python fallback (`coi-server.py`). A plain `python -m http.server` will *load* but run single-threaded and ~3–4× slower.
+> **Why a server and not just opening the file?** The on-device models use multithreaded WebAssembly, which the browser only enables when the page is "cross-origin isolated" (it needs `SharedArrayBuffer`). That requires two HTTP headers (`COOP` + `COEP`) that you can't set from a `file://` URL. `start.sh` runs a tiny server that sends them — a Rust one if you have `cargo`, otherwise a small, dependency-free Python fallback (`coi-server.py`). A plain `python -m http.server` will *load* but run single-threaded and ~3–4× slower.
 
 First load downloads the selected model from Hugging Face and caches it in the browser. After that it works offline.
 
@@ -73,7 +73,7 @@ Everything below runs **client-side**. The transcription engine is selectable in
 
 | Role | Model | Runs on | Size (approx) | Notes |
 |------|-------|---------|---------------|-------|
-| Streaming ASR (default) | **Voxtral Realtime 4B** (Mistral) | WebGPU | ~2.7 GB | Highest accuracy, true streaming |
+| Streaming ASR (default) | **Voxtral Realtime 4B** (Mistral) | WebGPU | ~2.7 GB | Best accuracy of these options, true streaming |
 | Fast + accurate combo | **Moonshine** + **SenseVoice** | WebGPU + WASM | ~400 MB | Moonshine for instant drafts, SenseVoice refines |
 | Lightweight | **SenseVoice** (FunAudioLLM) | WASM | ~250 MB | Good accuracy, no 30s window |
 | Whisper family | **Whisper large-v3-turbo / small / base** (OpenAI) | WebGPU | ~200–560 MB | Familiar baseline options |
@@ -154,7 +154,7 @@ uv run bridge.py        # starts ws://localhost:8765
 | `titanet.onnx` | Bundled NVIDIA NeMo TitaNet-small speaker-embedding model (loaded at runtime) |
 | `mel_fb.json` | Precomputed mel filterbank matrix for TitaNet's JS front-end |
 | `server/` | Rust (axum) static server that sends the COOP/COEP isolation headers |
-| `coi-server.py` | ~20-line Python fallback server with the same headers |
+| `coi-server.py` | Small, dependency-free Python fallback server with the same headers |
 | `bridge.py` | Optional Claude bridge (local WebSocket → `claude` CLI / your subscription) |
 | `start.sh` | One-command launcher: server + (optional) bridge + opens the browser |
 | `Start Notetaker.command` | Double-click launcher for macOS |

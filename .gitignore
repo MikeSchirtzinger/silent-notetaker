@@ -30,3 +30,6 @@ token
 
 # Presenter notes — on-stage cheat card, not for the public repo
 DEMO.md
+
+# Orchestrator planning specs — internal, not part of the app
+specs/

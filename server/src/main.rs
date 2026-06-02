@@ -41,6 +41,33 @@ async fn main() {
     let coop = HeaderName::from_static("cross-origin-opener-policy");
     let coep = HeaderName::from_static("cross-origin-embedder-policy");
 
+    // CSP REPORT-ONLY — for tuning, NOT enforcement.
+    // Purpose: observe the real egress surface before locking it down.
+    // How to read violations: open DevTools → Console; violations appear as
+    //   "[Report Only] Refused to connect to ..." messages.  Note any origins
+    //   not in connect-src (especially HF redirect CDN hosts) and add them
+    //   before promoting.
+    // How to promote to enforcing: once a browser test (with mic + real model
+    //   download) shows ZERO violations, rename the header name below from
+    //   "content-security-policy-report-only" to "content-security-policy".
+    //   Never enforce without that test — blob: worker and HF CDN redirects
+    //   can vary and a wrong enforce would block transcription.
+    // ws://localhost:8765 is included here (local dev server — Claude bridge
+    //   is available locally; it is intentionally absent from the hosted
+    //   _headers where the bridge is not available).
+    let csp_ro = HeaderName::from_static("content-security-policy-report-only");
+    let csp_ro_value = HeaderValue::from_static(
+        "default-src 'self'; \
+         script-src 'self' 'unsafe-inline' blob: https://cdn.jsdelivr.net https://unpkg.com; \
+         worker-src 'self' blob:; \
+         connect-src 'self' blob: data: https://cdn.jsdelivr.net https://unpkg.com \
+             https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co \
+             https://cdn-lfs-us-1.huggingface.co ws://localhost:8765; \
+         img-src 'self' data: blob:; \
+         media-src 'self' blob:; \
+         style-src 'self' 'unsafe-inline'",
+    );
+
     let app = Router::new()
         .fallback_service(serve)
         // Cross-origin isolation → multithreaded WASM.
@@ -52,6 +79,9 @@ async fn main() {
             coep,
             HeaderValue::from_static("credentialless"),
         ))
+        // Report-only CSP — observe egress violations without blocking anything.
+        // See comment block above for tuning and promotion instructions.
+        .layer(SetResponseHeaderLayer::overriding(csp_ro, csp_ro_value))
         // Dev: always reflect local edits. The browser's MODEL cache is separate
         // (IndexedDB / Cache API, keyed by origin) and is unaffected by this.
         .layer(SetResponseHeaderLayer::overriding(

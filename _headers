@@ -5,3 +5,16 @@
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: credentialless
+  # CSP REPORT-ONLY — for tuning, NOT enforcement.
+  # Purpose: observe the real egress surface before locking it down.
+  # How to read violations: open DevTools → Console; violations appear as
+  #   "[Report Only] Refused to connect to ..." messages.  Note any origins
+  #   not in connect-src (especially HF redirect CDN hosts like cdn-lfs-us-1
+  #   or regional variants) and add them before promoting.
+  # How to promote to enforcing: once a browser test (with mic + real model
+  #   download) shows ZERO violations, rename this header to
+  #   Content-Security-Policy.  Never enforce without that test — blob: worker
+  #   and HF CDN redirects can vary and a wrong enforce blocks transcription.
+  # ws://localhost:8765 (Claude bridge) is intentionally OMITTED here (hosted
+  #   build; bridge is a local-only feature).
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' blob: https://cdn.jsdelivr.net https://unpkg.com; worker-src 'self' blob:; connect-src 'self' blob: data: https://cdn.jsdelivr.net https://unpkg.com https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'
