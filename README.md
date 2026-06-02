@@ -8,13 +8,21 @@ The entire application is a **single HTML file**. There is no build step, no ser
 
 ---
 
-## Why this exists
+## Private *by architecture*, not by policy
 
-Meetings are some of the most sensitive audio you produce — strategy, hiring, finances, half-formed ideas. The mainstream AI notetakers all work the same way: they join your call, **stream your audio to someone else's servers**, and send you a summary later. That's a hard no for a lot of conversations.
+Every mainstream AI notetaker works the same way: it joins your call, **streams your audio to someone else's servers**, runs the AI there, and sends a summary back. The good ones are careful about it — encryption, SOC 2, "we delete the audio after transcription," contractual no-training clauses. Even the privacy-marketed ones (Granola, for instance, recently valued at $1.5B) still send your meeting to cloud LLMs and store it on their infrastructure. Their privacy is a **promise**, backed by a company.
 
-The bet behind Silent Notetaker is simple: **the browser is now a capable ML runtime.** Between WebGPU (for the heavy transcription model) and WebAssembly (for everything else), a 2024+ laptop can run a real streaming speech model, a speaker-identification model, and a small language model *at the same time*, locally, with no network round-trips. So why send the audio anywhere at all?
+Silent Notetaker makes the promise structurally unnecessary. The audio is captured, fed to the models, and consumed **in-process**. It is never serialized into a network request. And you don't have to take that on faith — here is the *complete* list of servers the app ever talks to:
 
-Everything here is a demonstration of that thesis: real models, real on-device inference, zero data exfiltration.
+| Destination | Why it's contacted | Receives your audio? |
+|---|---|---|
+| `cdn.jsdelivr.net`, `unpkg.com` | JavaScript libraries | **No** |
+| `huggingface.co` (+ model CDN) | Model **weights**, downloaded once, then cached | **No** |
+| `ws://localhost:8765` | *Optional* Claude bridge — a server **you** run, off by default | Only transcript text, only if you enable it, only to your own machine |
+
+That's it. Open your browser's network panel and watch: your audio goes **nowhere**. (See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how this is enforced and where it's headed.)
+
+There are whole categories of conversation — legal, medical, hiring, finance, M&A, journalism with sources — where "the audio left the building" is simply a non-starter. This is built for those.
 
 ---
 
@@ -49,6 +57,16 @@ First load downloads the selected model from Hugging Face and caches it in the b
 
 ---
 
+## The hard parts (why this is more than "a model runs in a browser")
+
+The interesting engineering is in making **three models run at once, on different silicon, without choking** — and in keeping a streaming model alive for an hour without the tab freezing. Three highlights, all documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md):
+
+- **The invisible WebGPU runaway.** Inside one `generate()` call, a streaming model's KV cache grows with every token — and that memory lives in **GPU/native space, invisible to the JS heap profiler**. At ~0.52 MB/token the old 4096-token cap ballooned to ~2 GB and froze the tab around the 5-minute mark. The fix is two caps (a 320-token budget and a 45-second audio window) feeding one recycle loop that re-anchors a fresh context at "now" — flat memory across an arbitrarily long meeting, no audio dropped at the seam.
+- **GPU for speech, WASM for everything else.** The GPU is the scarce resource, so the heaviest model (Voxtral) gets it alone. Speaker-ID (TitaNet) and the question LLM (Qwen) run on WASM/CPU so they can **never contend** with the streaming loop. Different jobs, different silicon.
+- **Speaker ID from scratch.** No browser library does diarization, so it's hand-built: TitaNet via onnxruntime-web, with its mel-spectrogram front-end reimplemented in pure JS and **byte-validated against the reference Python — cosine similarity 1.000000**. Speakers are tracked by online "leader clustering" on a tuned cosine threshold.
+
+---
+
 ## The models
 
 Everything below runs **client-side**. The transcription engine is selectable in the UI:
@@ -68,6 +86,8 @@ All models are pulled from Hugging Face at runtime except TitaNet, which is bund
 
 ## Architecture
 
+The whole app — markup, styles, all logic, the inlined transcription worker — is in `index.html`. It's a single file on purpose: trivial to share, trivial to audit, impossible to hide a phone-home in. Internally it's a clean set of classes (`TranscriptionManager`, `SpeakerEmbedder`, `SpeakerTracker`, `QuestionGenerator`, `NoteEngine`, `App`, …).
+
 ```
                           ┌─────────────────────────────┐
    🎤 Microphone  ───────▶│  AudioWorklet @ 16 kHz mono │
@@ -78,15 +98,11 @@ All models are pulled from Hugging Face at runtime except TitaNet, which is bund
        ┌──────────────────┐   ┌──────────────────────┐   ┌──────────────────┐
        │  ASR engine      │   │  Speaker embedder    │   │  Smart-questions │
        │  (WebGPU)        │   │  TitaNet (WASM)      │   │  Qwen3 (WASM)    │
-       │  Voxtral /       │   │  per-utterance       │   │  "ask now"       │
-       │  Whisper /       │   │  192-d voice vector  │   │  teleprompter    │
-       │  Moonshine+SV    │   │  → leader clustering │   │                  │
        └────────┬─────────┘   └──────────┬───────────┘   └──────────────────┘
                 │ text                    │ speaker id
                 ▼                         ▼
        ┌────────────────────────────────────────────┐
        │  NoteEngine (regex trigger detection)        │
-       │  decisions · actions · key points · questions│
        └───────────────────┬──────────────────────────┘
                            ▼
        ┌────────────────────────────────────────────┐
@@ -94,25 +110,19 @@ All models are pulled from Hugging Face at runtime except TitaNet, which is bund
        └────────────────────────────────────────────┘
 
    (optional)  ⇄  Claude Bridge (ws://localhost:8765) → Claude
-               (your subscription, via the `claude` CLI)
-               for richer summaries & speaker-name inference
 ```
 
-### Why it's built this way
+**Full design notes, the network trust boundary, and the roadmap are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)** — including how the single-file core becomes a modular, lazy-loaded app with a sandboxed extension system, and a Tauri native shell for system-audio capture.
 
-A few decisions are worth calling out, because they're the difference between "a model runs in a browser" and "three models run at once without choking":
+---
 
-**One HTML file, no build.** The whole app — markup, styles, every bit of logic, even the inlined Web Workers — is in `index.html`. That makes it trivial to share, trivial to audit ("show me where the audio goes"), and impossible to hide a phone-home. The cost is a big file; the payoff is total transparency.
+## Free core, open extensions
 
-**WebGPU for the ASR, WASM for everything else.** The GPU is the scarce resource. The streaming speech model is by far the heaviest thing running, so it gets the GPU to itself. Speaker embedding (TitaNet) and the question LLM are deliberately run on **CPU via WebAssembly** so they can never contend with the transcription loop for GPU memory or scheduling. Different jobs, different silicon.
+The notetaker — capture, transcription, speaker ID, note extraction, smart questions — is **free and will stay free**, and the core stays auditable. The plan from here is to open up an **extension layer** so the community can build on top of it (custom panels, summarizers, exports to Notion/Linear/CRM, domain-specific templates).
 
-**Cross-origin isolation for multithreaded WASM.** With the right `COOP`/`COEP` headers the browser exposes `SharedArrayBuffer`, which unlocks multi-threaded WebAssembly — roughly 3–4× faster for the WASM models. That's why this repo ships its own header-setting server instead of telling you to use `python -m http.server`.
+The one rule that makes a *privacy-first* extension ecosystem possible: extensions are **sandboxed and network-denied by default**. An extension sees only the data it declares, runs isolated from the page, and gets no network access unless you grant it explicitly. That's how the marketplace can grow without ever undermining the "your audio never leaves" guarantee. Design details are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#5-extensions--the-marketplace-the-part-that-can-kill-the-product).
 
-**Bounded memory on long meetings.** Streaming speech models have a subtle trap: inside a single `generate()` call the KV cache grows with every token, and that growth lives in GPU/native memory — *invisible* to the JS heap, so it doesn't show up in the obvious profiler. Left unchecked, an hour-long meeting balloons to multiple gigabytes and the tab freezes. The fix is to cap the per-context token budget and recycle the audio window periodically, so memory stays flat across an arbitrarily long session.
-
-**On-device speaker ID from scratch.** There's no off-the-shelf browser pipeline for speaker diarization, so it's assembled by hand: TitaNet runs via `onnxruntime-web`, and its mel-spectrogram front-end is reimplemented in pure JavaScript and **byte-validated against the reference Python** (cosine similarity 1.000000) so the embeddings are identical. Speakers are then tracked by online "leader clustering" against a cosine threshold.
-
-**Local-first by default.** Meetings persist in IndexedDB (via Dexie). The optional Claude bridge is the *only* path by which any data can leave the machine, it's off unless you turn it on, and it talks to a server *you* run.
+*Built by [Brevity Ventures](#) — we build private, on-device AI.*
 
 ---
 
@@ -139,7 +149,7 @@ uv run bridge.py        # starts ws://localhost:8765
 
 | Path | What it is |
 |------|------------|
-| `index.html` | The entire application — UI, all logic, and the inlined transcription/audio Web Workers |
+| `index.html` | The entire application — UI, all logic, and the inlined transcription/audio Web Worker |
 | `question-worker.js` | External Web Worker for the on-device smart-questions LLM |
 | `titanet.onnx` | Bundled NVIDIA NeMo TitaNet-small speaker-embedding model (loaded at runtime) |
 | `mel_fb.json` | Precomputed mel filterbank matrix for TitaNet's JS front-end |
@@ -148,7 +158,9 @@ uv run bridge.py        # starts ws://localhost:8765
 | `bridge.py` | Optional Claude bridge (local WebSocket → `claude` CLI / your subscription) |
 | `start.sh` | One-command launcher: server + (optional) bridge + opens the browser |
 | `Start Notetaker.command` | Double-click launcher for macOS |
-| `transcription-worker.js`, `sensevoice-loader.js` | Reference copies of worker logic that `index.html` inlines |
+| `overview.html` | A scrollytelling "six build decisions" walkthrough of the engineering |
+| `docs/ARCHITECTURE.md` | Full architecture, the network trust boundary, and the roadmap |
+| `dev/` | Development scratch / test harnesses (not part of the app) |
 
 ---
 
@@ -157,6 +169,7 @@ uv run bridge.py        # starts ws://localhost:8765
 - **Browser support:** needs WebGPU — Chrome or Edge today. Firefox/Safari support is still maturing.
 - **First-load cost:** the first run downloads a multi-hundred-MB to ~2.7 GB model. After caching it's instant and offline.
 - **Speaker diarization is the rough edge.** Online clustering can over-split (one person showing up as several speakers) or drift on long meetings, because the per-utterance segments aren't always clean single-speaker windows. Click-to-rename helps in practice, and improving this (better segmentation + global re-clustering) is the active area of work. The embeddings themselves are solid; the live clustering is where the difficulty is.
+- **Browser mic, not system audio (yet).** Today it captures your microphone, so it hears the room and your side of a remote call well, but not the far side of a Zoom/Meet stream cleanly. Native **system-audio capture** is the main item on the roadmap (see the Tauri shell in `docs/ARCHITECTURE.md`).
 - **Hardware:** running a 4B speech model in a browser tab wants a reasonably modern GPU. The lighter engines (SenseVoice, Whisper base/small) are there for weaker machines.
 
 ---

@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Silent Notetaker — Build Decisions</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#0d1117; --panel2:#11161f; --line:#1e2733;
+    --ink:#e6edf3; --dim:#8b98a9; --faint:#5b6675;
+    --teal:#00d4aa; --red:#ff6b6b; --violet:#7b68ee; --gold:#ffd700; --orange:#ff8c42; --cyan:#4ecdc4;
+    --c-comment:#5f7e6b; --c-string:#e3b341; --c-key:#00d4aa; --c-num:#a98bff;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--ink); font-family:var(--sans);
+    -webkit-font-smoothing:antialiased; line-height:1.5;
+    scroll-snap-type:y mandatory; overflow-x:hidden;
+  }
+  /* radial glow backdrop */
+  body::before{
+    content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    background:
+      radial-gradient(60vmax 60vmax at 80% -10%, rgba(0,212,170,.10), transparent 60%),
+      radial-gradient(50vmax 50vmax at 0% 110%, rgba(123,104,238,.10), transparent 60%);
+  }
+
+  section{
+    position:relative; z-index:1;
+    min-height:100vh; scroll-snap-align:start;
+    display:flex; flex-direction:column; justify-content:center;
+    padding:clamp(28px,6vw,90px) clamp(20px,7vw,120px);
+    max-width:1180px; margin:0 auto;
+  }
+
+  /* ---------- HERO ---------- */
+  .hero .badge{
+    display:inline-flex; align-items:center; gap:9px; align-self:flex-start;
+    font-family:var(--mono); font-size:13px; letter-spacing:.12em; text-transform:uppercase;
+    color:var(--teal); border:1px solid var(--line); border-radius:999px;
+    padding:7px 14px; background:rgba(0,212,170,.06);
+  }
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--teal);box-shadow:0 0 12px var(--teal)}
+  .hero h1{
+    font-size:clamp(40px,8vw,86px); line-height:1.02; margin:22px 0 0;
+    font-weight:800; letter-spacing:-.02em;
+  }
+  .hero h1 .g{background:linear-gradient(90deg,var(--teal),var(--cyan));-webkit-background-clip:text;background-clip:text;color:transparent}
+  .hero .tag{font-size:clamp(18px,2.4vw,27px); color:var(--dim); margin-top:20px; max-width:60ch}
+  .hero .tag b{color:var(--ink); font-weight:600}
+  .pills{display:flex; flex-wrap:wrap; gap:10px; margin-top:30px}
+  .pill{
+    font-family:var(--mono); font-size:14px; color:var(--dim);
+    border:1px solid var(--line); border-radius:8px; padding:8px 13px; background:var(--panel);
+  }
+  .pill b{color:var(--ink)}
+  .scrollhint{margin-top:48px; color:var(--faint); font-family:var(--mono); font-size:13px; letter-spacing:.05em}
+  .scrollhint kbd{
+    font-family:var(--mono); background:var(--panel2); border:1px solid var(--line);
+    border-bottom-width:2px; border-radius:5px; padding:2px 7px; color:var(--dim); margin:0 2px;
+  }
+
+  /* ---------- DECISION SLIDE ---------- */
+  .kicker{display:flex; align-items:center; gap:14px; margin-bottom:18px}
+  .num{font-family:var(--mono); font-size:15px; color:var(--teal); letter-spacing:.1em}
+  .kbar{flex:1; height:1px; background:linear-gradient(90deg,var(--line),transparent)}
+  .ktag{font-family:var(--mono); font-size:13px; color:var(--faint); text-transform:uppercase; letter-spacing:.14em}
+  h2{font-size:clamp(28px,4.4vw,50px); line-height:1.06; margin:0 0 16px; font-weight:750; letter-spacing:-.015em}
+  .why{font-size:clamp(17px,2vw,23px); color:var(--dim); max-width:74ch; margin:0 0 26px}
+  .why b{color:var(--ink); font-weight:600}
+  .why .hl{color:var(--teal); font-weight:600}
+
+  /* accent per slide */
+  section[data-accent="teal"]   h2 .lead{color:var(--teal)}
+  section[data-accent="violet"] h2 .lead{color:var(--violet)}
+  section[data-accent="red"]    h2 .lead{color:var(--red)}
+  section[data-accent="gold"]   h2 .lead{color:var(--gold)}
+  section[data-accent="cyan"]   h2 .lead{color:var(--cyan)}
+  section[data-accent="orange"] h2 .lead{color:var(--orange)}
+
+  /* ---------- CODE ---------- */
+  figure.code{margin:0; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:var(--panel); box-shadow:0 20px 50px -30px rgba(0,0,0,.9)}
+  figcaption{
+    display:flex; align-items:center; gap:8px;
+    padding:11px 16px; background:var(--panel2); border-bottom:1px solid var(--line);
+    font-family:var(--mono); font-size:13.5px;
+  }
+  figcaption .dots{display:flex; gap:6px; margin-right:6px}
+  figcaption .dots i{width:11px;height:11px;border-radius:50%;display:block}
+  figcaption .dots i:nth-child(1){background:#ff5f57}
+  figcaption .dots i:nth-child(2){background:#febc2e}
+  figcaption .dots i:nth-child(3){background:#28c840}
+  figcaption .file{color:var(--ink)}
+  figcaption .lines{color:var(--faint)}
+  pre{margin:0; padding:18px 20px; overflow-x:auto}
+  code{font-family:var(--mono); font-size:clamp(13px,1.45vw,16.5px); line-height:1.65; color:#cdd6e3; white-space:pre; tab-size:2}
+  code .c{color:var(--c-comment); font-style:italic}
+  code .s{color:var(--c-string)}
+  code .k{color:var(--c-key)}
+  code .n{color:var(--c-num)}
+
+  /* ---------- QR SLIDE ---------- */
+  .qr-slide{align-items:center; text-align:center}
+  .qr-slide h2{margin-bottom:8px}
+  .qr-card{
+    background:#fff; border-radius:24px; padding:30px; margin:22px auto 0;
+    width:min(72vmin,420px); box-shadow:0 0 0 1px rgba(255,255,255,.08), 0 30px 80px -30px rgba(0,212,170,.5);
+  }
+  .qr-card svg{display:block; width:100%; height:auto}
+  .qr-card svg path{stroke-width:1; shape-rendering:crispEdges}
+  .url{
+    display:inline-flex; align-items:center; gap:10px; margin-top:26px;
+    font-family:var(--mono); font-size:clamp(16px,2.4vw,24px); color:var(--ink);
+    border:1px solid var(--line); background:var(--panel); border-radius:10px; padding:11px 18px;
+  }
+  .url .lock{color:var(--teal)}
+  .qr-note{color:var(--dim); margin-top:20px; font-size:clamp(15px,1.8vw,19px); max-width:54ch}
+  .qr-note b{color:var(--ink)}
+
+  /* ---------- progress dots ---------- */
+  nav.dots{position:fixed; right:clamp(12px,2vw,26px); top:50%; transform:translateY(-50%); z-index:5; display:flex; flex-direction:column; gap:12px}
+  nav.dots a{width:10px;height:10px;border-radius:50%;background:var(--line); transition:all .25s; display:block}
+  nav.dots a:hover{background:var(--dim)}
+  nav.dots a.on{background:var(--teal); box-shadow:0 0 10px var(--teal); transform:scale(1.25)}
+  @media (max-width:760px){ nav.dots{display:none} }
+</style>
+</head>
+<body>
+
+<nav class="dots" id="dots"></nav>
+
+<!-- ───────────── HERO ───────────── -->
+<section class="hero" id="s0">
+  <span class="badge"><span class="dot"></span> Six build decisions · on-device AI</span>
+  <h1>Silent&nbsp;Notetaker<br><span class="g">six build decisions</span></h1>
+  <p class="tag">A private AI meeting notetaker that runs <b>entirely in your browser</b>. Three models at once — speech, speaker-ID, an LLM — and <b>the audio never leaves your machine</b>.</p>
+  <div class="pills">
+    <span class="pill"><b>Voxtral 4B</b> · WebGPU</span>
+    <span class="pill"><b>TitaNet</b> · WASM</span>
+    <span class="pill"><b>Qwen3-0.6B</b> · WASM</span>
+    <span class="pill"><b>1</b> HTML file · no backend</span>
+  </div>
+  <div class="scrollhint">scroll, or <kbd>→</kbd> / <kbd>Space</kbd> to advance · <kbd>Q</kbd> jumps to the link</div>
+</section>
+
+<!-- ───────────── 1 ───────────── -->
+<section data-accent="teal" id="s1">
+  <div class="kicker"><span class="num">01 / 06</span><span class="kbar"></span><span class="ktag">Transparency</span></div>
+  <h2><span class="lead">One HTML file.</span> No build, nothing to hide.</h2>
+  <p class="why">The whole app — markup, styles, logic, even the Web Workers — lives in <b>one file</b>. Trivial to share, trivial to audit (<i>"show me where the audio goes"</i>), and <span class="hl">impossible to slip in a phone-home</span>. Workers are inlined as text and spun up from a Blob URL.</p>
+  <figure class="code">
+    <figcaption><span class="dots"><i></i><i></i><i></i></span><span class="file">index.html</span><span class="lines">:1958</span></figcaption>
+    <pre><code data-lang="js">// The transcription Web Worker is inlined as text and turned into a Blob URL —
+// no separate .js fetch, so the whole app stays a single auditable file.
+const __WORKER_BLOB = new Blob(
+  [document.getElementById('transcription-worker-src').textContent],
+  { type: 'application/javascript' }
+);
+const __WORKER_URL = URL.createObjectURL(__WORKER_BLOB);</code></pre>
+  </figure>
+</section>
+
+<!-- ───────────── 2 ───────────── -->
+<section data-accent="violet" id="s2">
+  <div class="kicker"><span class="num">02 / 06</span><span class="kbar"></span><span class="ktag">Resource isolation</span></div>
+  <h2><span class="lead">WebGPU for speech.</span> WASM for everything else.</h2>
+  <p class="why">The GPU is the scarce resource, so the heaviest model — <b>Voxtral</b> — gets it to itself. Speaker-ID (TitaNet) and the question LLM (Qwen) run on <b>WASM/CPU</b> so they <span class="hl">can never contend</span> with the streaming loop for GPU memory or scheduling. Different jobs, different silicon.</p>
+  <figure class="code">
+    <figcaption><span class="dots"><i></i><i></i><i></i></span><span class="file">index.html</span><span class="lines">:2061</span></figcaption>
+    <pre><code data-lang="js">/* SpeakerEmbedder — NeMo TitaNet-small via onnxruntime-web (WASM)
+   In-browser mel front-end + ONNX session. WASM only (never WebGPU) so it
+   can never contend with the Voxtral streaming loop for the GPU. */</code></pre>
+  </figure>
+</section>
+
+<!-- ───────────── 3 ───────────── -->
+<section data-accent="red" id="s3">
+  <div class="kicker"><span class="num">03 / 06</span><span class="kbar"></span><span class="ktag">Bounded memory</span></div>
+  <h2><span class="lead">The invisible runaway.</span> KV cache that the profiler can't see.</h2>
+  <p class="why">Inside one <code style="color:var(--ink)">generate()</code> the KV cache grows every token — and it lives in <b>GPU/native memory, invisible to the JS heap profiler</b>. At ~0.52&nbsp;MB/token the old 4096-token cap peaked near <b>2&nbsp;GB</b> → frozen tab around 5&nbsp;min. Fix: <span class="hl">two caps + context recycling</span>, re-anchored at "now" so no audio is dropped at the seam.</p>
+  <figure class="code">
+    <figcaption><span class="dots"><i></i><i></i><i></i></span><span class="file">index.html</span><span class="lines">:3258</span></figcaption>
+    <pre><code data-lang="js">// KV cache grows per-token in GPU/native memory — invisible to JS profiling.
+// Old max_new_tokens:4096 peaked ~2 GB → tab freeze. Two caps fix it:
+const MAX_CTX_SAMPLES = 16000 * 45;        // audio cap: recycle every ~45 s
+while (!isStop()) {
+  const baseAbs = ring.writeAbs;           // anchor fresh context at "now" — no gap
+  await model.generate({
+    input_ids: firstChunkInputs.input_ids,
+    input_features: inputFeaturesGenerator(),
+    max_new_tokens: 320,                   // token cap: ~166 MB peak, reclaimed on recycle
+    streamer,
+  });
+}</code></pre>
+  </figure>
+</section>
+
+<!-- ───────────── 4 ───────────── -->
+<section data-accent="gold" id="s4">
+  <div class="kicker"><span class="num">04 / 06</span><span class="kbar"></span><span class="ktag">Throughput</span></div>
+  <h2><span class="lead">Multithreaded WASM</span> via cross-origin isolation.</h2>
+  <p class="why">The WASM models only go <b>multithreaded (~3–4× faster)</b> when the page is <i>cross-origin isolated</i> — which unlocks <code style="color:var(--ink)">SharedArrayBuffer</code>. That needs two response headers a <code style="color:var(--ink)">file://</code> URL can't set. <span class="hl">credentialless</span> keeps the cross-origin CDN + Hugging&nbsp;Face model imports working.</p>
+  <figure class="code">
+    <figcaption><span class="dots"><i></i><i></i><i></i></span><span class="file">_headers</span><span class="lines"> · Cloudflare Pages</span></figcaption>
+    <pre><code data-lang="conf"># Cross-origin isolation → crossOriginIsolated → SharedArrayBuffer → MT WASM
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: credentialless</code></pre>
+  </figure>
+</section>
+
+<!-- ───────────── 5 ───────────── -->
+<section data-accent="cyan" id="s5">
+  <div class="kicker"><span class="num">05 / 06</span><span class="kbar"></span><span class="ktag">From scratch</span></div>
+  <h2><span class="lead">Speaker ID</span> with no off-the-shelf pipeline.</h2>
+  <p class="why">No browser library does diarization, so it's hand-built. TitaNet won a <b>6-model bake-off (0% EER)</b>; its mel front-end was reimplemented in JS and <span class="hl">byte-validated against Python — cosine 1.000000</span>. Speakers are then tracked by online <b>leader clustering</b> on a tuned cosine threshold.</p>
+  <figure class="code">
+    <figcaption><span class="dots"><i></i><i></i><i></i></span><span class="file">index.html</span><span class="lines">:2021</span></figcaption>
+    <pre><code data-lang="js">this.threshold = 0.45;  // tuned live: 0.35-0.45 → exact 6/6 speakers; 0.5+ over-splits
+
+// Leader clustering: nearest centroid above threshold, else a new speaker.
+let best = -1, bestSim = -1;
+for (let i = 0; i &lt; this.speakers.length; i++) {
+  const sim = this.cosine(emb, this.speakers[i].centroid);
+  if (sim &gt; bestSim) { bestSim = sim; best = i; }
+}
+if (best &gt;= 0 &amp;&amp; bestSim &gt;= this.threshold) { /* merge into this speaker */ }
+else { /* spin up a new speaker: S{nextId++} */ }</code></pre>
+  </figure>
+</section>
+
+<!-- ───────────── 6 ───────────── -->
+<section data-accent="orange" id="s6">
+  <div class="kicker"><span class="num">06 / 06</span><span class="kbar"></span><span class="ktag">Local-first</span></div>
+  <h2><span class="lead">The only way out</span> is one you run yourself.</h2>
+  <p class="why">Meetings persist in IndexedDB. The <b>optional</b> Claude bridge is the single off-device path — off by default, talking to a server <i>you</i> run. It drives the <code style="color:var(--ink)">claude</code> CLI with <span class="hl">ANTHROPIC_API_KEY scrubbed</span>, so it uses your subscription's OAuth — never a billed key, never one stored in the repo.</p>
+  <figure class="code">
+    <figcaption><span class="dots"><i></i><i></i><i></i></span><span class="file">bridge.py</span><span class="lines">:90</span></figcaption>
+    <pre><code data-lang="py"># Drive the `claude` CLI in headless mode → reuse your Claude subscription.
+# Scrub ANTHROPIC_API_KEY so the CLI falls back to subscription OAuth
+# instead of a (possibly billed) pay-per-use API key. No key ever stored.
+self.env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+cmd = [self.bin, "-p", prompt, "--output-format", "json"]</code></pre>
+  </figure>
+</section>
+
+<!-- ───────────── QR ───────────── -->
+<section class="qr-slide" id="s7" data-accent="teal">
+  <div class="kicker" style="width:min(72vmin,420px)"><span class="num">RUN IT</span><span class="kbar"></span><span class="ktag">in your browser</span></div>
+  <h2 style="font-size:clamp(30px,5vw,56px)">Scan it. Talk to it.</h2>
+  <div class="qr-card">
+    <svg viewBox="0 0 33 33" shape-rendering="crispEdges" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="QR code to silent-notetaker.pages.dev"><path class="qrline" stroke="#0a0e14" d="M0 0.5h7m2 0h2m3 0h2m1 0h4m2 0h2m1 0h7m-33 1h1m5 0h1m3 0h1m1 0h6m2 0h1m1 0h2m2 0h1m5 0h1m-33 1h1m1 0h3m1 0h1m2 0h3m3 0h1m1 0h3m3 0h1m2 0h1m1 0h3m1 0h1m-33 1h1m1 0h3m1 0h1m2 0h2m1 0h2m2 0h1m1 0h1m3 0h3m1 0h1m1 0h3m1 0h1m-33 1h1m1 0h3m1 0h1m1 0h3m1 0h1m1 0h1m1 0h5m3 0h1m1 0h1m1 0h3m1 0h1m-33 1h1m5 0h1m3 0h1m1 0h2m1 0h2m3 0h3m3 0h1m5 0h1m-33 1h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7m-25 1h1m1 0h1m3 0h4m5 0h2m-23 1h2m2 0h5m3 0h1m1 0h1m1 0h1m1 0h3m1 0h3m1 0h1m-29 1h4m3 0h4m1 0h3m1 0h1m1 0h4m1 0h1m1 0h2m2 0h2m1 0h1m-32 1h2m1 0h6m1 0h1m3 0h3m1 0h1m2 0h5m2 0h1m1 0h2m-31 1h3m3 0h2m1 0h2m3 0h2m2 0h1m3 0h1m2 0h3m2 0h1m-31 1h3m1 0h1m2 0h4m1 0h1m2 0h1m1 0h1m2 0h1m1 0h2m2 0h1m-29 1h2m1 0h1m5 0h3m3 0h3m3 0h2m4 0h1m1 0h1m-30 1h2m1 0h5m1 0h1m2 0h2m1 0h1m2 0h4m3 0h1m1 0h3m-30 1h5m5 0h4m1 0h1m2 0h2m1 0h2m2 0h1m3 0h2m1 0h1m-31 1h1m3 0h1m3 0h1m2 0h4m2 0h3m1 0h4m1 0h3m1 0h1m-33 1h1m2 0h1m1 0h1m4 0h4m1 0h3m3 0h3m1 0h4m1 0h3m-29 1h1m1 0h1m3 0h2m1 0h2m1 0h1m2 0h2m1 0h1m4 0h1m2 0h2m-32 1h4m3 0h3m1 0h1m1 0h1m3 0h2m1 0h1m4 0h1m1 0h1m4 0h1m-32 1h3m1 0h2m1 0h3m1 0h1m2 0h2m4 0h1m3 0h1m3 0h3m-32 1h6m1 0h1m1 0h2m2 0h4m6 0h1m2 0h1m4 0h2m-31 1h1m2 0h2m1 0h1m3 0h2m1 0h3m1 0h1m1 0h3m2 0h1m4 0h2m-32 1h5m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m3 0h2m1 0h4m1 0h1m1 0h1m2 0h1m-33 1h1m1 0h1m3 0h4m4 0h2m6 0h7m2 0h2m-25 1h2m2 0h5m1 0h1m1 0h1m1 0h3m3 0h1m2 0h1m-32 1h7m1 0h1m1 0h1m2 0h2m1 0h1m2 0h3m1 0h2m1 0h1m1 0h2m-30 1h1m5 0h1m2 0h2m2 0h1m1 0h1m3 0h1m1 0h1m1 0h2m3 0h5m-33 1h1m1 0h3m1 0h1m3 0h4m3 0h4m2 0h6m1 0h2m-32 1h1m1 0h3m1 0h1m1 0h3m2 0h2m1 0h1m1 0h1m1 0h1m1 0h3m2 0h1m1 0h1m1 0h2m-33 1h1m1 0h3m1 0h1m1 0h1m1 0h1m4 0h3m4 0h1m2 0h2m2 0h1m-30 1h1m5 0h1m2 0h1m2 0h2m3 0h1m2 0h1m3 0h2m6 0h1m-33 1h7m2 0h2m1 0h1m1 0h1m1 0h1m4 0h1m1 0h1m1 0h4m1 0h1"/></svg>
+  </div>
+  <div class="url"><span class="lock">🔒</span> silent-notetaker.pages.dev</div>
+  <p class="qr-note"><b>Chrome or Edge.</b> First load caches the model, then it runs offline — no backend, no account, and your <b>audio never leaves your device</b>.</p>
+</section>
+
+<script>
+/* ---- dependency-free syntax highlight (comments / strings / keywords / numbers) ---- */
+(function(){
+  var esc = function(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var re = /(\/\*[\s\S]*?\*\/|\/\/[^\n]*|#[^\n]*)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|\b(const|let|var|while|for|if|else|return|new|function|await|async|this|true|false|null|import|from|def)\b|\b(\d[\w.]*)\b/g;
+  document.querySelectorAll('code[data-lang]').forEach(function(el){
+    var raw = el.textContent;                 // entities already decoded by the parser
+    el.innerHTML = esc(raw).replace(re, function(m, c, s, k, n){
+      if (c) return '<span class="c">'+c+'</span>';
+      if (s) return '<span class="s">'+s+'</span>';
+      if (k) return '<span class="k">'+k+'</span>';
+      if (n) return '<span class="n">'+n+'</span>';
+      return m;
+    });
+  });
+
+  /* ---- progress dots ---- */
+  var secs = Array.prototype.slice.call(document.querySelectorAll('section'));
+  var nav = document.getElementById('dots');
+  secs.forEach(function(sec, i){
+    var a = document.createElement('a');
+    a.href = '#' + sec.id; a.setAttribute('aria-label', 'Go to slide ' + (i+1));
+    nav.appendChild(a);
+  });
+  var links = Array.prototype.slice.call(nav.children);
+  var io = new IntersectionObserver(function(entries){
+    entries.forEach(function(e){
+      if (e.isIntersecting){
+        var i = secs.indexOf(e.target);
+        links.forEach(function(l,j){ l.classList.toggle('on', j===i); });
+      }
+    });
+  }, { threshold:0.55 });
+  secs.forEach(function(s){ io.observe(s); });
+
+  /* ---- keyboard nav ---- */
+  function current(){
+    var mid = window.scrollY + innerHeight/2, idx = 0;
+    secs.forEach(function(s,i){ if (s.offsetTop <= mid) idx = i; });
+    return idx;
+  }
+  function go(i){ i = Math.max(0, Math.min(secs.length-1, i)); secs[i].scrollIntoView({behavior:'smooth'}); }
+  addEventListener('keydown', function(e){
+    if (e.key==='ArrowRight'||e.key==='ArrowDown'||e.key===' '||e.key==='PageDown'){ e.preventDefault(); go(current()+1); }
+    else if (e.key==='ArrowLeft'||e.key==='ArrowUp'||e.key==='PageUp'){ e.preventDefault(); go(current()-1); }
+    else if (e.key==='Home'){ e.preventDefault(); go(0); }
+    else if (e.key==='End'){ e.preventDefault(); go(secs.length-1); }
+    else if (e.key==='q'||e.key==='Q'){ e.preventDefault(); go(secs.length-1); }
+  });
+})();
+</script>
+</body>
+</html>

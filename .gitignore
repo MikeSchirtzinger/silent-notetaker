@@ -27,3 +27,6 @@ token
 
 # Cloudflare Pages deploy bundle (assembled by deploy-cloudflare.sh)
 /dist/
+
+# Presenter notes — on-stage cheat card, not for the public repo
+DEMO.md
