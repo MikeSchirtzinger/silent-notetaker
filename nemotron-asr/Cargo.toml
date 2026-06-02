@@ -1,0 +1,32 @@
+[package]
+name = "nemotron-asr"
+version = "0.1.0"
+edition = "2021"
+description = "Native streaming ASR engine for NVIDIA nemotron-speech-streaming-en-0.6b (ONNX, cache-aware RNN-T)."
+license = "MIT OR Apache-2.0"
+keywords = ["speech-recognition", "asr", "nemotron", "onnx", "streaming"]
+categories = ["multimedia::audio", "science"]
+
+# Standalone crate: intentionally NOT part of any workspace. The sibling
+# `server/` crate is independent and must not be coupled to this one.
+
+[lib]
+name = "nemotron_asr"
+path = "src/lib.rs"
+
+[[example]]
+name = "transcribe"
+path = "examples/transcribe.rs"
+
+[dependencies]
+# ort rc.12: pinned to match the porting reference's ONNX API surface exactly.
+# Default features give us `download-binaries` (auto-fetches the native ONNX
+# Runtime dylib), `ndarray`, `std`, and `api-24` — everything needed to build
+# and run natively on macOS arm64 with zero external setup.
+ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
+ndarray = "0.17"
+realfft = "3"
+hound = "3.5"
+thiserror = "2"
+
+[dev-dependencies]
