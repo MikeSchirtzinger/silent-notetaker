@@ -4225,12 +4225,13 @@ class App {
       isFinal: true
     });
 
-    // Voxtral already promoted the live element to final in onSentenceComplete — skip re-render
-    const isVoxtral = this.tm && this.tm.engine === 'voxtral';
-    if (!isVoxtral) {
+    // Voxtral and Nemotron promote their own live element to final — skip re-render
+    // (rendering here too would duplicate every sentence in the transcript).
+    const selfRendered = this.tm && (this.tm.engine === 'voxtral' || this.tm.engine === 'nemotron');
+    if (!selfRendered) {
       this.renderTranscriptItem(timestamp, text.trim(), false, speakerInfo);
     } else {
-      // Still count words for Voxtral
+      // Still count words for self-rendering engines
       this.totalWords += text.trim().split(/\s+/).filter(Boolean).length;
       document.getElementById('wordCount').textContent = `${this.totalWords.toLocaleString()} words`;
     }

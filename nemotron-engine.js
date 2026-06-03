@@ -33,11 +33,14 @@
 const DEFAULT_MODEL_BASE = new URL('./nemotron-asr/models/', import.meta.url).href;
 const DEFAULT_PKG_URL    = new URL('./nemotron-asr/pkg/nemotron_asr.js', import.meta.url).href;
 // How much audio to buffer before each transcribe_chunk call. This is the dominant lever
-// on *perceived* latency: the model's native chunk is ~560 ms, RTF is ~0.40 regardless, and
-// accuracy stays word-for-word correct down to 250 ms feeds (measured). So perceived latency
-// ≈ feedMs + ~0.4·feedMs. 500 ms keeps it snappy (~0.7 s) without over-fragmenting; bump to
-// 250 ms for minimum lag, or 1000 ms to minimise call overhead. Override via opts.feedSamples.
-const FEED_SAMPLES       = 8000;    // 500 ms @ 16 kHz
+// on *perceived* latency (≈ feedMs + ~0.45·feedMs), but ALSO on accuracy with REALTIME
+// worklet-fed audio: in-app tests (2026-06-03, headless Chrome, golden clip via synthetic
+// mic) showed 500 ms feeds merge word boundaries ("intelligence is" → "intelligences",
+// reproduced 3×) and in one run stalled the decoder permanently after ~25 s of leading
+// silence. At 1000 ms feeds the same clip transcribes word-perfectly, and 30 s of leading
+// or mid-stream silence causes no stall (minor punctuation artifacts only). Do not lower
+// this below 16000 without re-running those tests. Override via opts.feedSamples.
+const FEED_SAMPLES       = 16000;   // 1000 ms @ 16 kHz
 
 export class NemotronEngine {
   constructor(opts = {}) {
