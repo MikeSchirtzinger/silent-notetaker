@@ -119,8 +119,10 @@ Keep it to roughly this length. Resist adding a feature list — link the README
   on-device but sends audio to cloud LLMs (GPT-4o/Claude) and stores data on AWS.
   This never sends the audio anywhere. Don't dunk — Granola's UX is excellent; the
   distinction is purely the trust model.
-- **"Diarization is bad."** Yes — said so up front. Embeddings are solid (0% EER in a
-  6-model bake-off); live clustering over-splits; global re-clustering is in progress.
+- **"Diarization is bad."** Yes — said so up front. Embeddings are solid (0% EER on
+  clean speech in a 6-model bake-off — LibriSpeech test-clean; harness + results in
+  `/eval`); live clustering on messy meeting audio over-splits, and that — not the
+  embeddings — is the real weak link. Global re-clustering is in progress.
 
 Tone for all replies: factual, generous to competitors, quick to concede real
 limitations. HN punishes defensiveness and rewards a builder who knows exactly where
@@ -130,7 +132,7 @@ the bodies are buried.
 
 ## Pre-launch checklist
 
-- [ ] Fill in the real **Brevity link / email capture** (README has a `[Brevity Ventures](#)` placeholder) — this is how the launch converts into a following.
+- [x] Fill in the real **Brevity link / email capture** (README footer → https://brevity.ventures) — this is how the launch converts into a following.
 - [ ] **CSP added and browser-validated** (the `connect-src` allowlist — turns "audio never leaves" from asserted to enforced; see `docs/ARCHITECTURE.md` §3). Highest-value pre-HN hardening.
 - [ ] Hosted Cloudflare link tested cold on a fresh profile (first-load model download works on real wifi).
 - [ ] README renders correctly on GitHub (tables, the egress-surface table especially).

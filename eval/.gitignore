@@ -1,0 +1,12 @@
+# Heavy / downloadable / generated — see README "Reproduce". Not committed.
+.venv/
+audio/
+models/
+artifacts/
+js/node_modules/
+js/ref/
+js/titanet.onnx
+*.onnx
+*.flac
+*.wav
+.DS_Store

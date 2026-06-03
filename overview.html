@@ -216,7 +216,7 @@ while (!isStop()) {
 <section data-accent="cyan" id="s5">
   <div class="kicker"><span class="num">05 / 06</span><span class="kbar"></span><span class="ktag">From scratch</span></div>
   <h2><span class="lead">Speaker ID</span> with no off-the-shelf pipeline.</h2>
-  <p class="why">No browser library does diarization, so it's hand-built. TitaNet won a <b>6-model bake-off (0% EER)</b>; its mel front-end was reimplemented in JS and <span class="hl">byte-validated against Python — cosine 1.000000</span>. Speakers are then tracked by online <b>leader clustering</b> on a tuned cosine threshold.</p>
+  <p class="why">No browser library does diarization, so it's hand-built. TitaNet won a <b>6-model bake-off (0% EER on LibriSpeech test-clean)</b>; its mel front-end was reimplemented in JS and <span class="hl">byte-validated against Python — cosine 1.000000</span>. Speakers are then tracked by online <b>leader clustering</b> on a tuned cosine threshold.</p>
   <figure class="code">
     <figcaption><span class="dots"><i></i><i></i><i></i></span><span class="file">index.html</span><span class="lines">:2021</span></figcaption>
     <pre><code data-lang="js">this.threshold = 0.45;  // tuned live: 0.35-0.45 → exact 6/6 speakers; 0.5+ over-splits

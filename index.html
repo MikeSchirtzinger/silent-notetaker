@@ -1980,7 +1980,11 @@ class SpeakerTracker {
      which a 6-model bake-off showed were near-random: EER 36.7%, 6 speakers
      shattered into 17). Winner = NeMo TitaNet-small (EER 0%, gap 0.784),
      run in-browser via onnxruntime-web (WASM) on the per-segment PCM we already
-     have. JS mel front-end is byte-validated against Python (cosine 1.000000). */
+     have. JS mel front-end is byte-validated against Python (cosine 1.000000).
+     Numbers are on LibriSpeech test-clean (6 speakers x 10 utts) = clean speech,
+     so 0% EER is "embeddings separate clean voices perfectly", NOT a meeting-
+     accuracy claim; live clustering on messy audio is the real weak link. Full
+     harness + results: /eval (bench.py, bench_results.json). */
   constructor() {
     this.speakers = []; // [{ id, name, color, centroid:Float32Array(192,L2), count }]
     this.colors = ['#00d4aa', '#ff6b6b', '#7b68ee', '#ffd700', '#ff8c42', '#4ecdc4', '#c678dd', '#61afef'];

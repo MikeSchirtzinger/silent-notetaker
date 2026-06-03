@@ -1,0 +1,6 @@
+venv/
+models/
+*.wav
+*.aiff
+__pycache__/
+parakeet_ref_dump.txt

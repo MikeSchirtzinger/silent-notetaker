@@ -1,0 +1,6 @@
+# Speaker-embedder bake-off harness (bench.py, featurize_match.py, refine.py, dump_for_js.py)
+numpy
+soundfile
+librosa
+onnxruntime
+sherpa-onnx

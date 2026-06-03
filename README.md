@@ -63,7 +63,7 @@ The interesting engineering is in making **three models run at once, on differen
 
 - **The invisible WebGPU runaway.** Inside one `generate()` call, a streaming model's KV cache grows with every token — and that memory lives in **GPU/native space, invisible to the JS heap profiler**. At ~0.52 MB/token the old 4096-token cap ballooned to ~2 GB and froze the tab around the 5-minute mark. The fix is two caps (a 320-token budget and a 45-second audio window) feeding one recycle loop that re-anchors a fresh context at "now" — flat memory across an arbitrarily long meeting, no audio dropped at the seam.
 - **GPU for speech, WASM for everything else.** The GPU is the scarce resource, so the heaviest model (Voxtral) gets it alone. Speaker-ID (TitaNet) and the question LLM (Qwen) run on WASM/CPU so they can **never contend** with the streaming loop. Different jobs, different silicon.
-- **Speaker ID from scratch.** No browser library does diarization, so it's hand-built: TitaNet via onnxruntime-web, with its mel-spectrogram front-end reimplemented in pure JS and **byte-validated against the reference Python — cosine similarity 1.000000**. Speakers are tracked by online "leader clustering" on a tuned cosine threshold.
+- **Speaker ID from scratch.** No browser library does diarization, so it's hand-built: TitaNet via onnxruntime-web, with its mel-spectrogram front-end reimplemented in pure JS and **byte-validated against the reference Python — cosine similarity 1.000000**. TitaNet-small was picked in a [6-model bake-off](eval/) (it beat the app's old 20 hand-features, which were near-random — EER 36.7%, 6 speakers shattered into 17) — though that 0% EER is on *clean* speech (LibriSpeech test-clean); live clustering on messy meeting audio is the real weak link. Speakers are tracked by online "leader clustering" on a tuned cosine threshold.
 
 ---
 
@@ -122,7 +122,7 @@ The notetaker — capture, transcription, speaker ID, note extraction, smart que
 
 The one rule that makes a *privacy-first* extension ecosystem possible: extensions are **sandboxed and network-denied by default**. An extension sees only the data it declares, runs isolated from the page, and gets no network access unless you grant it explicitly. That's how the marketplace can grow without ever undermining the "your audio never leaves" guarantee. Design details are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#5-extensions--the-marketplace-the-part-that-can-kill-the-product).
 
-*Built by [Brevity Ventures](#) — we build private, on-device AI.*
+*Built by [Brevity Ventures](https://brevity.ventures) — we build private, on-device AI.*
 
 ---
 
