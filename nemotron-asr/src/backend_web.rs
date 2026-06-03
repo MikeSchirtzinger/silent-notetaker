@@ -27,8 +27,9 @@ use wasm_bindgen::prelude::*;
 
 use crate::audio::MelFrontend;
 use crate::constants::{
-    BLANK_ID, CHUNK_SIZE, CONV_CONTEXT, DECODER_LSTM_DIM, HIDDEN_DIM, LEFT_CONTEXT, LSTM_LAYERS,
-    MAX_SYMBOLS_PER_STEP, NUM_ENCODER_LAYERS, N_MELS, PRE_ENCODE_CACHE, VOCAB_SIZE,
+    BLANK_ID, CHUNK_SIZE, CONV_CONTEXT, DECODER_LSTM_DIM, HIDDEN_DIM, HOP_LENGTH, LEFT_CONTEXT,
+    LSTM_LAYERS, MAX_SYMBOLS_PER_STEP, NUM_ENCODER_LAYERS, N_MELS, PRE_ENCODE_CACHE, VOCAB_SIZE,
+    WIN_LENGTH,
 };
 use crate::vocab::SentencePieceVocab;
 
@@ -51,14 +52,28 @@ async fn init_ort_web() -> Result<(), JsError> {
     Ok(())
 }
 
-/// Mutable per-utterance decoder state, mirroring `streaming::DecodeState`.
+/// Mutable per-utterance decoder state, mirroring `streaming::DecodeState`,
+/// plus the raw-audio buffering state needed for seam-free live streaming
+/// (mirrors `parakeet-rs` `Nemotron`'s `audio_buffer` / `audio_processed` /
+/// `chunk_idx`).
 struct WebState {
+    // --- encoder / decoder state (carried across chunks) ---
     cache_last_channel: Array4<f32>,
     cache_last_time: Array4<f32>,
     cache_last_channel_len: Array1<i64>,
     state_1: Array3<f32>,
     state_2: Array3<f32>,
     last_token: i32,
+
+    // --- live-streaming raw-audio buffer state ---
+    /// Raw 16 kHz mono samples retained for mel recomputation. Trimmed from the
+    /// front as audio is processed to keep memory bounded.
+    audio_buffer: Vec<f32>,
+    /// How many raw samples have been consumed into encoder chunks so far.
+    /// `audio_processed / HOP_LENGTH` is the next unprocessed mel frame.
+    audio_processed: usize,
+    /// Number of streaming chunks emitted so far (drives first-chunk lookback).
+    chunk_idx: usize,
 }
 
 impl WebState {
@@ -70,6 +85,9 @@ impl WebState {
             state_1: Array3::zeros((LSTM_LAYERS, 1, DECODER_LSTM_DIM)),
             state_2: Array3::zeros((LSTM_LAYERS, 1, DECODER_LSTM_DIM)),
             last_token: BLANK_ID as i32,
+            audio_buffer: Vec::new(),
+            audio_processed: 0,
+            chunk_idx: 0,
         }
     }
 }
@@ -149,14 +167,44 @@ impl WasmAsr {
         Ok(self.vocab.decode(&valid))
     }
 
-    /// Transcribe an audio chunk incrementally, carrying state across calls.
+    /// Transcribe an audio chunk incrementally for real-time use — call
+    /// repeatedly with successive slices of mic audio.
     ///
-    /// Note: like the native `decode_chunk`, this treats `samples` as a fresh
-    /// mel computation feeding the carried encoder/decoder state. For the
-    /// cleanest results, feed reasonably sized chunks (e.g. 560 ms+). Returns
-    /// the text emitted for this chunk only.
+    /// Unlike a naive per-call mel, this **buffers raw audio and recomputes the
+    /// mel over the whole retained buffer**, so each encoder chunk gets its real
+    /// 9-frame pre-encode lookback and there is no `n_fft/2` zero-padding seam
+    /// at chunk boundaries. This fixes the boundary degradation seen when
+    /// feeding fixed chunks (e.g. "lazy" -> "laser" at 1 s seams). Mirrors the
+    /// validated `parakeet-rs` `Nemotron::transcribe_chunk`.
+    ///
+    /// The incoming `samples` need not align to encoder-chunk boundaries; this
+    /// consumes as many whole 56-frame chunks as the buffer now allows (the
+    /// reference processes at most one per call — we drain all available so a
+    /// large incoming chunk, e.g. 1 s = ~100 frames, doesn't lag behind).
+    /// Returns the text decoded during this call (may be empty if not enough
+    /// new audio has accumulated yet).
     pub async fn transcribe_chunk(&mut self, samples: &[f32]) -> Result<String, JsError> {
-        let tokens = self.run_over_audio(samples).await?;
+        let tokens = self.stream_step(samples).await?;
+        let mut out = String::new();
+        for &t in &tokens {
+            if t < VOCAB_SIZE {
+                out.push_str(&self.vocab.decode_single(t));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Flush the trailing partial chunk at end of stream.
+    ///
+    /// `transcribe_chunk` only consumes whole 56-frame chunks, so up to the last
+    /// `< CHUNK_SIZE` mel frames (< 560 ms of audio) are left unprocessed. Call
+    /// this once after the final `transcribe_chunk` to decode that remainder as
+    /// one final partial chunk — mirroring the offline `transcribe_audio`'s last
+    /// iteration where `main_len < CHUNK_SIZE`. The carried decode state (encoder
+    /// cache, LSTM state, `last_token`) is used as-is; this does **not** reset.
+    /// Returns the text decoded from the tail (empty if nothing remained).
+    pub async fn finalize(&mut self) -> Result<String, JsError> {
+        let tokens = self.flush_tail().await?;
         let mut out = String::new();
         for &t in &tokens {
             if t < VOCAB_SIZE {
@@ -168,7 +216,167 @@ impl WasmAsr {
 }
 
 impl WasmAsr {
-    /// Core loop shared by `transcribe` / `transcribe_chunk`: compute the
+    /// Live-streaming driver: append `samples` to the raw-audio buffer, then
+    /// consume every whole 56-frame chunk now available, recomputing the mel
+    /// over the entire retained buffer each pass so chunk boundaries keep real
+    /// lookback and no zero-padding seam. Mirrors the reference
+    /// `Nemotron::transcribe_chunk` math (buffer / processed / chunk_idx /
+    /// trim), but loops over all newly-available chunks instead of one per call.
+    async fn stream_step(&mut self, samples: &[f32]) -> Result<Vec<usize>, JsError> {
+        self.state.audio_buffer.extend_from_slice(samples);
+
+        // Need at least one analysis window before any mel frame exists.
+        if self.state.audio_buffer.len() < WIN_LENGTH {
+            return Ok(Vec::new());
+        }
+
+        let expected_size = PRE_ENCODE_CACHE + CHUNK_SIZE;
+        let mut emitted: Vec<usize> = Vec::new();
+
+        loop {
+            // Recompute the mel over the WHOLE retained buffer (this is the fix:
+            // the lookback frames and the seam come from real, continuous audio
+            // rather than a freshly zero-padded per-call mel).
+            let full_mel = self
+                .frontend
+                .log_mel(&self.state.audio_buffer)
+                .map_err(to_js)?;
+            let total_mel_frames = full_mel.shape()[1];
+
+            // Next unprocessed mel frame.
+            let processed_mel_frames = self.state.audio_processed / HOP_LENGTH;
+
+            // Stop once fewer than a full main chunk of new frames remains.
+            let available_new_frames = total_mel_frames.saturating_sub(processed_mel_frames);
+            if available_new_frames < CHUNK_SIZE {
+                break;
+            }
+
+            // Build the [1, 128, 65] encoder input: pre-encode lookback + 56
+            // main frames.
+            let mut chunk_data = vec![0.0f32; N_MELS * expected_size];
+            let is_first_chunk = self.state.chunk_idx == 0;
+            let main_start = processed_mel_frames;
+
+            if is_first_chunk {
+                // First chunk: no prior frames, so the 9 lookback slots stay
+                // zero; fill the 56 main frames.
+                for f in 0..CHUNK_SIZE.min(total_mel_frames) {
+                    for m in 0..N_MELS {
+                        chunk_data[m * expected_size + PRE_ENCODE_CACHE + f] = full_mel[[m, f]];
+                    }
+                }
+            } else {
+                // Real pre-encode lookback: the up-to-9 frames immediately
+                // before `main_start` (right-aligned into the lookback slots).
+                let cache_start = main_start.saturating_sub(PRE_ENCODE_CACHE);
+                let cache_frames = main_start - cache_start;
+                let cache_offset = PRE_ENCODE_CACHE - cache_frames;
+                for f in 0..cache_frames {
+                    for m in 0..N_MELS {
+                        chunk_data[m * expected_size + cache_offset + f] =
+                            full_mel[[m, cache_start + f]];
+                    }
+                }
+                // 56 main frames.
+                for f in 0..CHUNK_SIZE.min(total_mel_frames - main_start) {
+                    for m in 0..N_MELS {
+                        chunk_data[m * expected_size + PRE_ENCODE_CACHE + f] =
+                            full_mel[[m, main_start + f]];
+                    }
+                }
+            }
+
+            // A streaming chunk always carries a full 56 main frames, so the
+            // encoder length is the full window (matches the reference, which
+            // passes `expected_size`).
+            let (encoded, enc_len) = self
+                .run_encoder(&chunk_data, expected_size, expected_size as i64)
+                .await?;
+            let tokens = self.decode_chunk(&encoded, enc_len).await?;
+            emitted.extend(tokens);
+
+            // Advance by exactly one main chunk of audio.
+            self.state.audio_processed += CHUNK_SIZE * HOP_LENGTH;
+            self.state.chunk_idx += 1;
+
+            // Trim the front of the buffer to bound memory, keeping enough tail
+            // for the next chunk's lookback + window. Decrement `audio_processed`
+            // by the same sample count so frame indices stay consistent against
+            // the recomputed mel. (Mirrors the reference trim exactly.)
+            let keep_samples = (PRE_ENCODE_CACHE + CHUNK_SIZE) * HOP_LENGTH + WIN_LENGTH;
+            if self.state.audio_buffer.len() > keep_samples * 2 {
+                let remove = self.state.audio_buffer.len() - keep_samples;
+                let actual_remove = remove.min(self.state.audio_processed);
+                self.state.audio_buffer.drain(0..actual_remove);
+                self.state.audio_processed -= actual_remove;
+            }
+        }
+
+        Ok(emitted)
+    }
+
+    /// Decode the leftover `< CHUNK_SIZE` mel frames that `stream_step` left
+    /// unconsumed, as one final partial chunk. Mirrors the final iteration of
+    /// the offline `transcribe_audio` (`main_len < CHUNK_SIZE`) and the
+    /// streaming path's real pre-encode lookback. Carries decode state forward.
+    async fn flush_tail(&mut self) -> Result<Vec<usize>, JsError> {
+        // Without at least one analysis window there are no mel frames to flush.
+        if self.state.audio_buffer.len() < WIN_LENGTH {
+            return Ok(Vec::new());
+        }
+
+        let full_mel = self
+            .frontend
+            .log_mel(&self.state.audio_buffer)
+            .map_err(to_js)?;
+        let total_mel_frames = full_mel.shape()[1];
+
+        let main_start = self.state.audio_processed / HOP_LENGTH;
+        let available = total_mel_frames.saturating_sub(main_start);
+        if available == 0 {
+            return Ok(Vec::new());
+        }
+
+        // Build the [1, 128, 65] input: real pre-encode lookback + `available`
+        // (< CHUNK_SIZE) main frames; the unused main slots stay zero.
+        let expected_size = PRE_ENCODE_CACHE + CHUNK_SIZE;
+        let mut chunk_data = vec![0.0f32; N_MELS * expected_size];
+
+        // Lookback: up to 9 frames before `main_start`, right-aligned. When no
+        // streaming chunk was ever consumed (`main_start == 0`, e.g. a sub-560ms
+        // utterance), there is no prior audio and the lookback slots stay zero,
+        // matching the offline first/only chunk.
+        let cache_start = main_start.saturating_sub(PRE_ENCODE_CACHE);
+        let cache_frames = main_start - cache_start;
+        let cache_offset = PRE_ENCODE_CACHE - cache_frames;
+        for f in 0..cache_frames {
+            for m in 0..N_MELS {
+                chunk_data[m * expected_size + cache_offset + f] = full_mel[[m, cache_start + f]];
+            }
+        }
+        // Main frames (fewer than CHUNK_SIZE).
+        for f in 0..available {
+            for m in 0..N_MELS {
+                chunk_data[m * expected_size + PRE_ENCODE_CACHE + f] =
+                    full_mel[[m, main_start + f]];
+            }
+        }
+
+        let chunk_length = (PRE_ENCODE_CACHE + available) as i64;
+        let (encoded, enc_len) = self
+            .run_encoder(&chunk_data, expected_size, chunk_length)
+            .await?;
+        let tokens = self.decode_chunk(&encoded, enc_len).await?;
+
+        // Advance so a redundant second finalize is a no-op.
+        self.state.audio_processed += available * HOP_LENGTH;
+        self.state.chunk_idx += 1;
+
+        Ok(tokens)
+    }
+
+    /// Core loop shared by `transcribe` (offline): compute the
     /// log-mel of `audio`, slide 56-frame chunks, run the encoder, and greedily
     /// decode. Mirrors `streaming::StreamingAsr::transcribe_audio` exactly,
     /// minus the leading `reset()` (callers decide).
