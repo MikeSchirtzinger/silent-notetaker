@@ -32,8 +32,17 @@ impl SentencePieceVocab {
         let mut data = Vec::new();
         file.read_to_end(&mut data)
             .map_err(|e| Error::Tokenizer(format!("failed to read tokenizer.model: {e}")))?;
+        Self::from_bytes(&data)
+    }
 
-        let pieces = parse_model_proto(&data)?;
+    /// Parse a SentencePiece `ModelProto` from raw bytes.
+    ///
+    /// Useful on wasm32, where the `tokenizer.model` bytes are fetched by JS
+    /// and handed in directly (there is no filesystem). [`Self::from_file`]
+    /// simply reads the file and delegates here, so both paths share identical
+    /// parsing.
+    pub fn from_bytes(data: &[u8]) -> Result<Self> {
+        let pieces = parse_model_proto(data)?;
         if pieces.is_empty() {
             return Err(Error::Tokenizer(
                 "no pieces found in tokenizer.model".into(),

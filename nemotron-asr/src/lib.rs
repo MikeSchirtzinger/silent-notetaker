@@ -46,8 +46,22 @@ pub use vocab::SentencePieceVocab;
 #[cfg(not(target_arch = "wasm32"))]
 pub use model::OrtBackend;
 
+/// wasm32 / browser backend over `ort-web` (onnxruntime-web).
+///
+/// This is Phase 2: the crate compiles to `wasm32-unknown-unknown` and exposes
+/// [`backend_web::WasmAsr`] via `wasm-bindgen`. It reuses the unchanged
+/// [`audio`] mel front-end and [`vocab`] detokenizer; inference runs through
+/// `ort-web`, which bridges to onnxruntime-web.
+#[cfg(target_arch = "wasm32")]
+pub mod backend_web;
+
+#[cfg(target_arch = "wasm32")]
+pub use backend_web::WasmAsr;
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::path::Path;
 
+#[cfg(not(target_arch = "wasm32"))]
 use crate::audio::MelFrontend;
 
 /// Convenience alias for the native ([`OrtBackend`]-backed) streaming engine.

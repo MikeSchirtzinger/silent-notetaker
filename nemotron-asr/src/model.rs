@@ -9,7 +9,10 @@
 use ndarray::{Array1, Array3, Array4};
 
 use crate::constants::{CONV_CONTEXT, HIDDEN_DIM, LEFT_CONTEXT, NUM_ENCODER_LAYERS};
-use crate::error::{Error, Result};
+use crate::error::Result;
+// `Error` is only constructed inside the native `OrtBackend` impl.
+#[cfg(not(target_arch = "wasm32"))]
+use crate::error::Error;
 
 /// Cache-aware encoder state carried between streaming chunks.
 ///
@@ -96,7 +99,7 @@ pub use native::OrtBackend;
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
-    use ndarray::{s, Array2};
+    use ndarray::Array2;
     use ort::session::Session;
     use ort::value::Value;
     use std::path::Path;
@@ -240,15 +243,17 @@ mod native {
             })
         }
     }
-
-    /// Slice a single encoder frame `t` out of `[1, HIDDEN_DIM, T]` into the
-    /// `[1, HIDDEN_DIM, 1]` shape the decoder expects.
-    pub(crate) fn encoder_frame(encoded: &Array3<f32>, t: usize) -> Result<Array3<f32>> {
-        let hidden = encoded.shape()[1];
-        let frame = encoded.slice(s![0, .., t]).to_owned();
-        Ok(frame.to_shape((1, hidden, 1))?.to_owned())
-    }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-pub(crate) use native::encoder_frame;
+/// Slice a single encoder frame `t` out of `[1, HIDDEN_DIM, T]` into the
+/// `[1, HIDDEN_DIM, 1]` shape the decoder expects.
+///
+/// Pure `ndarray` (no backend dependency), so it is available on both native
+/// and wasm targets — `streaming.rs` uses it on native, and the wasm decode
+/// loop slices frames the same way.
+pub(crate) fn encoder_frame(encoded: &Array3<f32>, t: usize) -> Result<Array3<f32>> {
+    use ndarray::s;
+    let hidden = encoded.shape()[1];
+    let frame = encoded.slice(s![0, .., t]).to_owned();
+    Ok(frame.to_shape((1, hidden, 1))?.to_owned())
+}

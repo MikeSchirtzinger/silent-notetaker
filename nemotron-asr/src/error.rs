@@ -30,6 +30,9 @@ pub enum Error {
     Model(String),
 }
 
+// `hound` (WAV reading) is present on both targets: natively for the WAV
+// loader/examples, and on wasm only so the unchanged `audio.rs::load_wav_mono`
+// still compiles (it is dead code in the wasm binary — JS supplies samples).
 impl From<hound::Error> for Error {
     fn from(e: hound::Error) -> Self {
         Error::Audio(e.to_string())
