@@ -2367,6 +2367,28 @@ function rerollSmartQ() {
    Falls back to WASM inside the worker if there's no WebGPU adapter. */
 const recapQuestionGenerator = new QuestionGenerator({ device: 'webgpu', dtype: 'q4', maxTokens: 160 });
 
+/* Pick the device for the LIVE smart-questions generator based on the chosen ASR engine.
+   The live path is normally WASM-only so it can't contend with a WebGPU ASR engine
+   (Voxtral owns the GPU). But CPU/WASM ASR engines (Nemotron, SenseVoice) leave the GPU
+   idle during the meeting — so we run the live Qwen on WebGPU for much faster questions.
+   Must run BEFORE sharedQuestionGenerator's worker warms (prewarm). The worker already
+   falls back to WASM if there's no WebGPU adapter, so this is safe everywhere. */
+const CPU_ASR_ENGINES = new Set(['nemotron', 'sensevoice']); // ASR runs on CPU → GPU free for Qwen
+function configureLiveQuestionsDevice() {
+  const model = (typeof loadSettings === 'function' ? loadSettings() : {}).model;
+  const gpuFree = CPU_ASR_ENGINES.has(model);
+  const device = gpuFree ? 'webgpu' : 'wasm';
+  const dtype  = gpuFree ? 'q4f16' : 'q4';     // q4f16 is the WebGPU-oriented Qwen dtype
+  const cfg = sharedQuestionGenerator.config;
+  if (cfg.device === device && cfg.dtype === dtype) return;   // already set — nothing to do
+  cfg.device = device; cfg.dtype = dtype;
+  // A worker warmed for the old device must be recycled so it reloads on the new one.
+  if (sharedQuestionGenerator.worker || sharedQuestionGenerator.ready || sharedQuestionGenerator._loadPromise) {
+    sharedQuestionGenerator.terminate();
+  }
+  console.log(`[questions] live Qwen device → ${device} (${dtype}) for ASR engine "${model || 'default'}"`);
+}
+
 /* ════════════════════════════════════════════
    Final Meeting Notes — Qwen note EXTRACTION (additive, at Stop, WebGPU).
    Generates a clean, distilled note set from the full transcript when recording
@@ -2715,6 +2737,10 @@ class TranscriptionManager {
     this.voxtralStopRequested = false;
     this._voxtralRunId = 0;
     this._voxtralTranscriptionPromise = null;
+    // Nemotron streaming engine (swappable ES module; CPU/WASM, frees the GPU for Qwen).
+    this.nemotron = null;
+    this.nemoRing = null;
+    this._nemotronStopPromise = null;
   }
 
   startScreenshotCapture(videoTrack) {
@@ -3024,6 +3050,140 @@ class TranscriptionManager {
         this.worker.postMessage({ type: 'transcribe', audio: chunk }, [chunk.buffer]);
       }
     });
+  }
+
+  /**
+   * Nemotron Streaming 0.6B — in-browser RNN-T ASR via the swappable `nemotron-engine.js`
+   * module (Rust→WASM, ort-web / onnxruntime-web). Runs entirely on CPU/WASM, so the GPU
+   * stays free for the live Qwen "smart questions" (see configureLiveQuestionsDevice). It
+   * streams incrementally like Voxtral: text builds in a live element and is promoted to
+   * final segments on sentence boundaries.
+   */
+  async startNemotron() {
+    this.engine = 'nemotron';
+    this.onStatus('Requesting microphone...', 0);
+    try {
+      this.mediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+      });
+    } catch (err) {
+      throw new Error(`Microphone access denied: ${err.message}`);
+    }
+
+    // Load the swappable engine module — keeps this file's merge surface tiny (no WASM glue inlined).
+    this.onStatus('Loading Nemotron engine…', 2);
+    const { NemotronEngine } = await import('./nemotron-engine.js');
+    this.nemotron = new NemotronEngine();
+    this.nemotron.onStatus = (msg, pct) => this.onStatus(msg, pct);
+    await this.nemotron.load();
+    this.nemotron.reset();
+
+    await this._startNemotronCapture();
+  }
+
+  /** Wire mic audio → Nemotron engine → streaming transcript. Shared by start and resume. */
+  async _startNemotronCapture() {
+    const eng = this.nemotron;
+    // streaming-render state
+    this._nemoLiveEl = null;
+    this._nemoLiveText = '';
+    this._nemoLastFinalAbs = 0;
+    if (!this.nemoRing) this.nemoRing = new Float32RingBuffer(16000 * 60);
+    this.nemoRing.reset();
+    if (this.speakerTracker) this.speakerTracker.embedder.load().catch(() => {}); // prewarm speaker model
+
+    eng.onText = (frag) => this._nemotronAppend(frag);
+
+    await this._startAudioCapture((samples) => {
+      this.nemoRing.append(samples);
+      eng.feed(samples);
+    });
+    this.onStatus('Nemotron ready — streaming transcription active', 100);
+  }
+
+  /** Append an incremental text fragment: build the live element, promote completed sentences. */
+  _nemotronAppend(frag) {
+    if (!frag) return;
+    this._nemoLiveText += frag;
+    // Promote any complete sentence(s) to their own final transcript segment.
+    let mm;
+    while ((mm = this._nemoLiveText.match(/[.?!]+(\s|$)/)) !== null) {
+      const cut = mm.index + mm[0].length;
+      const sentence = this._nemoLiveText.slice(0, cut).trim();
+      this._nemoLiveText = this._nemoLiveText.slice(cut);
+      if (sentence) this._nemotronPromote(sentence);
+    }
+    this._nemotronRenderLive(this._nemoLiveText.trim());
+  }
+
+  /** Update (or create) the in-place live element showing the current partial sentence. */
+  _nemotronRenderLive(text) {
+    const container = document.getElementById('transcriptContent');
+    if (!container) return;
+    if (!text) {
+      if (this._nemoLiveEl && !this._nemoLiveEl.querySelector('.transcript-text').textContent) {
+        this._nemoLiveEl.remove(); this._nemoLiveEl = null;
+      }
+      return;
+    }
+    if (!this._nemoLiveEl) {
+      const ts = Date.now();
+      const item = document.createElement('div');
+      item.className = 'transcript-item fade-in transcript-live';
+      item.innerHTML = `<span class="transcript-time" data-ts="${ts}">${app.formatStamp(ts)}</span><span class="transcript-text"></span>`;
+      container.appendChild(item);
+      this._nemoLiveEl = item;
+    }
+    this._nemoLiveEl.querySelector('.transcript-text').textContent = text;
+    container.scrollTop = container.scrollHeight;
+  }
+
+  /** Finalize one completed sentence: promote the live el → final, attach speaker, fire onFinal. */
+  _nemotronPromote(sentence) {
+    const container = document.getElementById('transcriptContent');
+    let el = this._nemoLiveEl;
+    if (el) {
+      this._nemoLiveEl = null;
+    } else if (container) {
+      const ts = Date.now();
+      el = document.createElement('div');
+      el.className = 'transcript-item fade-in';
+      el.innerHTML = `<span class="transcript-time" data-ts="${ts}">${app.formatStamp(ts)}</span><span class="transcript-text"></span>`;
+      container.appendChild(el);
+    }
+    if (el) {
+      el.classList.remove('transcript-live');
+      const words = sentence.split(/(\s+)/);
+      const wordSpans = words.map(w =>
+        w.trim() ? `<span class="transcript-word" onclick="pickWordForCorrection(this)">${w}</span>` : w
+      ).join('');
+      el.querySelector('.transcript-text').innerHTML = wordSpans;
+      if (container) container.scrollTop = container.scrollHeight;
+    }
+    // Speaker label from this turn's ring audio (async, off the decode path).
+    const startAbs = Math.max(this.nemoRing.earliest, this._nemoLastFinalAbs || 0);
+    const endAbs = this.nemoRing.writeAbs;
+    this._nemoLastFinalAbs = endAbs;
+    if (this.speakerTracker && el && endAbs > startAbs) {
+      let turn = null;
+      try { turn = this.nemoRing.read(startAbs, endAbs); } catch (_) {}
+      const CAP = 16000 * 20; // cap very long turns for embed efficiency
+      if (turn && turn.length > CAP) turn = turn.subarray(turn.length - CAP);
+      if (turn) {
+        this.speakerTracker.identify(turn)
+          .then(info => { if (info) attachSpeakerToEl(el, info); })
+          .catch(() => {});
+      }
+    }
+    // Fire onFinal for storage, notes, SmartQ, Claude bridge.
+    this.onFinal(sentence, null);
+  }
+
+  /** At stop: promote whatever partial remains as a final segment. */
+  _nemotronFlushLive() {
+    const rem = (this._nemoLiveText || '').trim();
+    this._nemoLiveText = '';
+    if (rem) this._nemotronPromote(rem);
   }
 
   /**
@@ -3500,6 +3660,14 @@ class TranscriptionManager {
     } else {
       this.voxtralStopRequested = false;
     }
+    // Nemotron: drain the buffer + decode the trailing < 560ms tail, then promote the last
+    // partial sentence. app.stop() awaits this (_nemotronStopPromise) before it summarizes.
+    if (this.engine === 'nemotron' && this.nemotron) {
+      this._nemotronStopPromise = (async () => {
+        try { await this.nemotron.finalize(); this._nemotronFlushLive(); }
+        catch (e) { console.warn('[nemotron] finalize', e && e.message || e); }
+      })();
+    }
     // Worker and SenseVoice stay loaded for quick resume
   }
 
@@ -3725,10 +3893,11 @@ class App {
 
       SmartQ.reset();    // fresh teleprompter for this meeting
       OpenQs.reset();    // fresh open-question tracking
+      configureLiveQuestionsDevice();  // CPU ASR (Nemotron) → GPU is free → run live Qwen on WebGPU
       SmartQ.prewarm();  // warm Qwen off-thread so the first question is ready fast
 
       // Reuse existing TranscriptionManager if models already loaded (e.g. New Meeting → Start)
-      const canResume = this.tm && !this.tm.isRecording && (this.tm.worker || this.tm.senseVoice || this.tm.voxtralModel);
+      const canResume = this.tm && !this.tm.isRecording && (this.tm.worker || this.tm.senseVoice || this.tm.voxtralModel || this.tm.nemotron);
 
       if (!canResume) {
         this.tm = new TranscriptionManager(
@@ -3763,6 +3932,11 @@ class App {
           const { BaseStreamer } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.0.0-next.7/dist/transformers.min.js');
           await this.tm._startVoxtralLoop(BaseStreamer);
           this.handleStatus('Voxtral resumed — streaming transcription active', 100);
+        } else if (this.tm.engine === 'nemotron' && this.tm.nemotron) {
+          // Nemotron resume: fresh streaming state, re-wire mic → engine → transcript.
+          this.tm.nemotron.reset();
+          await this.tm._startNemotronCapture();
+          this.handleStatus('Nemotron resumed — streaming transcription active', 100);
         } else {
           // Moonshine / SenseVoice / Dual resume path (AudioWorklet)
           const isDual = this.tm.engine === 'dual';
@@ -3788,6 +3962,8 @@ class App {
         const settings = loadSettings();
         if (settings.model === 'voxtral') {
           await this.tm.startVoxtral();
+        } else if (settings.model === 'nemotron') {
+          await this.tm.startNemotron();
         } else if (settings.model === 'dual') {
           await this.tm.startDualModel();
         } else if (settings.model === 'sensevoice') {
@@ -3828,6 +4004,12 @@ class App {
       }
 
       this.tm.stop();
+      // Nemotron decodes its trailing tail asynchronously — wait for it so the final
+      // partial sentence is in the transcript before we summarize / send to the bridge.
+      if (this.tm._nemotronStopPromise) {
+        try { await this.tm._nemotronStopPromise; } catch (_) {}
+        this.tm._nemotronStopPromise = null;
+      }
       // Don't null tm — models stay loaded for Continue/New Meeting
     }
 
@@ -5871,6 +6053,7 @@ App.prototype.getSettings = function() { return loadSettings(); };
 
 const MODEL_OPTIONS = [
   { value: 'voxtral', label: 'Voxtral Realtime 4B (WebGPU, ~2.7GB, streaming)', accuracy: 'highest' },
+  { value: 'nemotron', label: 'Nemotron Streaming 0.6B (WASM/CPU, ~917MB, streaming · frees GPU for AI notes)', accuracy: 'high' },
   { value: 'dual', label: 'Dual: Moonshine (instant) + SenseVoice (refined)', accuracy: 'highest' },
   { value: 'sensevoice', label: 'SenseVoice only (~253MB, no 30s window)', accuracy: 'high' },
   { value: 'onnx-community/whisper-large-v3-turbo', label: 'Whisper Large v3 Turbo (~563MB, WebGPU)', accuracy: 'highest' },
