@@ -1,0 +1,479 @@
+{
+  "_meta": {
+    "source": "index.html (rust-refactor HEAD) — Qwen final-notes policy",
+    "generator": "crates/silent-notes/goldens/qwen/reference/qwen_reference.mjs",
+    "note": "Functions copied verbatim from index.html. This is the parity contract for crates/silent-notes/src/qwen.rs."
+  },
+  "parse_qwen_notes": {
+    "basic_pipe": {
+      "input": "DECISION| We will ship on Friday\nACTION| Bob will write the docs",
+      "output": [
+        {
+          "cat": "decisions",
+          "text": "We will ship on Friday",
+          "topic": null
+        },
+        {
+          "cat": "actions",
+          "text": "Bob will write the docs",
+          "topic": null
+        }
+      ]
+    },
+    "colon_sep": {
+      "input": "DECISION: Adopt Rust\nKEYPOINT: latency dropped 40%",
+      "output": [
+        {
+          "cat": "decisions",
+          "text": "Adopt Rust",
+          "topic": null
+        },
+        {
+          "cat": "keypoints",
+          "text": "latency dropped 40%",
+          "topic": null
+        }
+      ]
+    },
+    "hyphen_sep": {
+      "input": "ACTION - Alice owns the migration",
+      "output": [
+        {
+          "cat": "actions",
+          "text": "Alice owns the migration",
+          "topic": null
+        }
+      ]
+    },
+    "emdash_sep": {
+      "input": "QUESTION – who owns the rollout plan",
+      "output": [
+        {
+          "cat": "questions",
+          "text": "who owns the rollout plan",
+          "topic": null
+        }
+      ]
+    },
+    "topic_carry": {
+      "input": "TOPIC| Roadmap planning\nDECISION| Ship v2 in Q3\nACTION| draft the spec",
+      "output": [
+        {
+          "cat": "decisions",
+          "text": "Ship v2 in Q3",
+          "topic": "Roadmap planning"
+        },
+        {
+          "cat": "actions",
+          "text": "draft the spec",
+          "topic": "Roadmap planning"
+        }
+      ]
+    },
+    "topic_resets": {
+      "input": "TOPIC| First topic\nKEYPOINT| fact one\nTOPIC| Second topic\nKEYPOINT| fact two",
+      "output": [
+        {
+          "cat": "keypoints",
+          "text": "fact one",
+          "topic": "First topic"
+        },
+        {
+          "cat": "keypoints",
+          "text": "fact two",
+          "topic": "Second topic"
+        }
+      ]
+    },
+    "none_dropped": {
+      "input": "NONE",
+      "output": []
+    },
+    "none_with_period": {
+      "input": "none.",
+      "output": []
+    },
+    "none_text_dropped": {
+      "input": "DECISION| none",
+      "output": []
+    },
+    "too_short_dropped": {
+      "input": "ACTION| ok",
+      "output": []
+    },
+    "bullet_prefix": {
+      "input": "- DECISION| use the cache\n* ACTION| Carol reviews it",
+      "output": [
+        {
+          "cat": "decisions",
+          "text": "use the cache",
+          "topic": null
+        },
+        {
+          "cat": "actions",
+          "text": "Carol reviews it",
+          "topic": null
+        }
+      ]
+    },
+    "think_stripped": {
+      "input": "<think>reasoning here\nmore reasoning</think>DECISION| ship it now",
+      "output": [
+        {
+          "cat": "decisions",
+          "text": "ship it now",
+          "topic": null
+        }
+      ]
+    },
+    "quotes_stripped": {
+      "input": "KEYPOINT| \"revenue grew 3x\"",
+      "output": [
+        {
+          "cat": "keypoints",
+          "text": "revenue grew 3x",
+          "topic": null
+        }
+      ]
+    },
+    "topic_truncation": {
+      "input": "TOPIC| A very long topic heading that runs well beyond sixty characters and should be truncated\nKEYPOINT| a note that carries the truncated topic",
+      "output": [
+        {
+          "cat": "keypoints",
+          "text": "a note that carries the truncated topic",
+          "topic": "A very long topic heading that runs well beyond sixty chara…"
+        }
+      ]
+    },
+    "text_truncation": {
+      "input": "KEYPOINT| XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+      "output": [
+        {
+          "cat": "keypoints",
+          "text": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX…",
+          "topic": null
+        }
+      ]
+    },
+    "lowercase_tags": {
+      "input": "decision| accepted the plan\naction| ship the build",
+      "output": [
+        {
+          "cat": "decisions",
+          "text": "accepted the plan",
+          "topic": null
+        },
+        {
+          "cat": "actions",
+          "text": "ship the build",
+          "topic": null
+        }
+      ]
+    },
+    "unknown_tag_skipped": {
+      "input": "RANDOM| not a real tag\nDECISION| this one counts",
+      "output": [
+        {
+          "cat": "decisions",
+          "text": "this one counts",
+          "topic": null
+        }
+      ]
+    },
+    "blank_lines": {
+      "input": "\n\nDECISION| keep going\n\n\nACTION| Dan ships\n",
+      "output": [
+        {
+          "cat": "decisions",
+          "text": "keep going",
+          "topic": null
+        },
+        {
+          "cat": "actions",
+          "text": "Dan ships",
+          "topic": null
+        }
+      ]
+    },
+    "empty": {
+      "input": "",
+      "output": []
+    },
+    "whitespace_only": {
+      "input": "   \n  \t ",
+      "output": []
+    }
+  },
+  "chunk_transcript": {
+    "single_sentence": {
+      "text": "This is one sentence.",
+      "target": 1100,
+      "output": [
+        "This is one sentence."
+      ]
+    },
+    "two_short_pack": {
+      "text": "First sentence here. Second sentence here.",
+      "target": 1100,
+      "output": [
+        "First sentence here. Second sentence here."
+      ]
+    },
+    "splits_on_target": {
+      "text": "Alpha beta gamma. Delta epsilon zeta. Eta theta iota.",
+      "target": 25,
+      "output": [
+        "Alpha beta gamma.",
+        "Delta epsilon zeta.",
+        "Eta theta iota."
+      ]
+    },
+    "no_punctuation": {
+      "text": "just a run on fragment with no terminal punctuation at all",
+      "target": 1100,
+      "output": [
+        "just a run on fragment with no terminal punctuation at all"
+      ]
+    },
+    "questions_and_bangs": {
+      "text": "Are we ready? Yes we are! Then go.",
+      "target": 1100,
+      "output": [
+        "Are we ready? Yes we are! Then go."
+      ]
+    },
+    "trailing_fragment": {
+      "text": "Complete sentence. Dangling end without a period",
+      "target": 1100,
+      "output": [
+        "Complete sentence. Dangling end without a period"
+      ]
+    },
+    "multi_space": {
+      "text": "One.   Two.   Three.",
+      "target": 1100,
+      "output": [
+        "One. Two. Three."
+      ]
+    },
+    "empty": {
+      "text": "",
+      "target": 1100,
+      "output": []
+    },
+    "default_target_500": {
+      "text": "Sentence one is here. Sentence two follows.",
+      "target": 500,
+      "output": [
+        "Sentence one is here. Sentence two follows."
+      ]
+    }
+  },
+  "dedupe_notes": {
+    "drops_high_overlap": {
+      "input": [
+        {
+          "cat": "decisions",
+          "text": "we will migrate the database to postgres",
+          "topic": null
+        },
+        {
+          "cat": "decisions",
+          "text": "migrate the database to postgres soon",
+          "topic": null
+        }
+      ],
+      "output": [
+        {
+          "cat": "decisions",
+          "text": "we will migrate the database to postgres",
+          "topic": null
+        }
+      ]
+    },
+    "keeps_different_category": {
+      "input": [
+        {
+          "cat": "decisions",
+          "text": "migrate the database to postgres",
+          "topic": null
+        },
+        {
+          "cat": "actions",
+          "text": "migrate the database to postgres",
+          "topic": null
+        }
+      ],
+      "output": [
+        {
+          "cat": "decisions",
+          "text": "migrate the database to postgres",
+          "topic": null
+        },
+        {
+          "cat": "actions",
+          "text": "migrate the database to postgres",
+          "topic": null
+        }
+      ]
+    },
+    "keeps_distinct": {
+      "input": [
+        {
+          "cat": "keypoints",
+          "text": "revenue grew forty percent",
+          "topic": null
+        },
+        {
+          "cat": "keypoints",
+          "text": "churn dropped to two percent",
+          "topic": null
+        }
+      ],
+      "output": [
+        {
+          "cat": "keypoints",
+          "text": "revenue grew forty percent",
+          "topic": null
+        },
+        {
+          "cat": "keypoints",
+          "text": "churn dropped to two percent",
+          "topic": null
+        }
+      ]
+    },
+    "empty_keyword_exact_dup": {
+      "input": [
+        {
+          "cat": "questions",
+          "text": "who?",
+          "topic": null
+        },
+        {
+          "cat": "questions",
+          "text": "who?",
+          "topic": null
+        }
+      ],
+      "output": [
+        {
+          "cat": "questions",
+          "text": "who?",
+          "topic": null
+        }
+      ]
+    },
+    "empty_keyword_distinct": {
+      "input": [
+        {
+          "cat": "questions",
+          "text": "who?",
+          "topic": null
+        },
+        {
+          "cat": "questions",
+          "text": "why?",
+          "topic": null
+        }
+      ],
+      "output": [
+        {
+          "cat": "questions",
+          "text": "who?",
+          "topic": null
+        },
+        {
+          "cat": "questions",
+          "text": "why?",
+          "topic": null
+        }
+      ]
+    },
+    "order_preserved": {
+      "input": [
+        {
+          "cat": "actions",
+          "text": "alice ships the api gateway changes",
+          "topic": "t"
+        },
+        {
+          "cat": "keypoints",
+          "text": "the latency target is fifty milliseconds",
+          "topic": "t"
+        },
+        {
+          "cat": "actions",
+          "text": "alice ships the api gateway changes again",
+          "topic": "t"
+        }
+      ],
+      "output": [
+        {
+          "cat": "actions",
+          "text": "alice ships the api gateway changes",
+          "topic": "t"
+        },
+        {
+          "cat": "keypoints",
+          "text": "the latency target is fifty milliseconds",
+          "topic": "t"
+        }
+      ]
+    }
+  },
+  "final_notes_chunks": {
+    "short_uses_500_floor": {
+      "transcript_len": 37,
+      "target": 500,
+      "output": [
+        "Short transcript. Just two sentences."
+      ]
+    },
+    "long_grows_target": {
+      "transcript_len": 4730,
+      "target": 500,
+      "output": [
+        "Sentence number 1 carries a substantive point worth recording for the record. Sentence number 2 carries a substantive point worth recording for the record. Sentence number 3 carries a substantive point worth recording for the record. Sentence number 4 carries a substantive point worth recording for the record. Sentence number 5 carries a substantive point worth recording for the record. Sentence number 6 carries a substantive point worth recording for the record.",
+        "Sentence number 7 carries a substantive point worth recording for the record. Sentence number 8 carries a substantive point worth recording for the record. Sentence number 9 carries a substantive point worth recording for the record. Sentence number 10 carries a substantive point worth recording for the record. Sentence number 11 carries a substantive point worth recording for the record. Sentence number 12 carries a substantive point worth recording for the record.",
+        "Sentence number 13 carries a substantive point worth recording for the record. Sentence number 14 carries a substantive point worth recording for the record. Sentence number 15 carries a substantive point worth recording for the record. Sentence number 16 carries a substantive point worth recording for the record. Sentence number 17 carries a substantive point worth recording for the record. Sentence number 18 carries a substantive point worth recording for the record.",
+        "Sentence number 19 carries a substantive point worth recording for the record. Sentence number 20 carries a substantive point worth recording for the record. Sentence number 21 carries a substantive point worth recording for the record. Sentence number 22 carries a substantive point worth recording for the record. Sentence number 23 carries a substantive point worth recording for the record. Sentence number 24 carries a substantive point worth recording for the record.",
+        "Sentence number 25 carries a substantive point worth recording for the record. Sentence number 26 carries a substantive point worth recording for the record. Sentence number 27 carries a substantive point worth recording for the record. Sentence number 28 carries a substantive point worth recording for the record. Sentence number 29 carries a substantive point worth recording for the record. Sentence number 30 carries a substantive point worth recording for the record.",
+        "Sentence number 31 carries a substantive point worth recording for the record. Sentence number 32 carries a substantive point worth recording for the record. Sentence number 33 carries a substantive point worth recording for the record. Sentence number 34 carries a substantive point worth recording for the record. Sentence number 35 carries a substantive point worth recording for the record. Sentence number 36 carries a substantive point worth recording for the record.",
+        "Sentence number 37 carries a substantive point worth recording for the record. Sentence number 38 carries a substantive point worth recording for the record. Sentence number 39 carries a substantive point worth recording for the record. Sentence number 40 carries a substantive point worth recording for the record. Sentence number 41 carries a substantive point worth recording for the record. Sentence number 42 carries a substantive point worth recording for the record.",
+        "Sentence number 43 carries a substantive point worth recording for the record. Sentence number 44 carries a substantive point worth recording for the record. Sentence number 45 carries a substantive point worth recording for the record. Sentence number 46 carries a substantive point worth recording for the record. Sentence number 47 carries a substantive point worth recording for the record. Sentence number 48 carries a substantive point worth recording for the record.",
+        "Sentence number 49 carries a substantive point worth recording for the record. Sentence number 50 carries a substantive point worth recording for the record. Sentence number 51 carries a substantive point worth recording for the record. Sentence number 52 carries a substantive point worth recording for the record. Sentence number 53 carries a substantive point worth recording for the record. Sentence number 54 carries a substantive point worth recording for the record.",
+        "Sentence number 55 carries a substantive point worth recording for the record. Sentence number 56 carries a substantive point worth recording for the record. Sentence number 57 carries a substantive point worth recording for the record. Sentence number 58 carries a substantive point worth recording for the record. Sentence number 59 carries a substantive point worth recording for the record. Sentence number 60 carries a substantive point worth recording for the record."
+      ]
+    },
+    "caps_at_22": {
+      "transcript_len": 8570,
+      "target": 500,
+      "output": [
+        "S1 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S2 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S3 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S4 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S5 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S6 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S7 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S8 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S9 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S10 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S11 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S12 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S13 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S14 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S15 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S16 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S17 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S18 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S19 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S20 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S21 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz.",
+        "S22 zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz."
+      ]
+    }
+  }
+}

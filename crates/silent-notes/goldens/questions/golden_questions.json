@@ -1,0 +1,1024 @@
+{
+  "_meta": {
+    "source": "index.html (rust-refactor HEAD) — SmartQ scheduling + question recap",
+    "generator": "crates/silent-notes/goldens/questions/reference/questions_reference.mjs",
+    "note": "SmartQ policy re-expressed pure (clock + model output injected). Parity contract for crates/silent-notes/src/questions.rs.",
+    "constants": {
+      "MIN_INTERVAL": 60000,
+      "MIN_CHARS": 220,
+      "WINDOW_CHARS": 1200,
+      "TYPE_KEYS": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ]
+    }
+  },
+  "norm": {
+    "\"Hello, World!\"": {
+      "input": "Hello, World!",
+      "output": "hello world"
+    },
+    "\"  Spaces   and—dashes  \"": {
+      "input": "  Spaces   and—dashes  ",
+      "output": "spaces and dashes"
+    },
+    "\"MixedCase123\"": {
+      "input": "MixedCase123",
+      "output": "mixedcase123"
+    },
+    "\"???\"": {
+      "input": "???",
+      "output": ""
+    },
+    "\"\"": {
+      "input": "",
+      "output": ""
+    }
+  },
+  "scheduling": {
+    "short_window_no_gen": {
+      "enabled_types": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 50,
+          "now": 1000,
+          "result": {
+            "action": "accumulated",
+            "win_len": 50,
+            "chars_since_gen": 49
+          }
+        }
+      ]
+    },
+    "first_generation": {
+      "enabled_types": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 5000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "What is the deadline?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "What is the deadline?",
+            "recent_after": [
+              "what is the deadline"
+            ],
+            "type_idx_after": 1,
+            "badge_has_new": true,
+            "win_len": 240
+          }
+        }
+      ]
+    },
+    "type_rotation": {
+      "enabled_types": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 0,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "Q1 unique?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "Q1 unique?",
+            "recent_after": [
+              "q1 unique"
+            ],
+            "type_idx_after": 1,
+            "badge_has_new": true,
+            "win_len": 240
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 61000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "risk",
+                "question": "Q2 unique?"
+              }
+            ],
+            "chosen_type": "risk",
+            "chosen_question": "Q2 unique?",
+            "recent_after": [
+              "q1 unique",
+              "q2 unique"
+            ],
+            "type_idx_after": 2,
+            "badge_has_new": true,
+            "win_len": 480
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 122000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "followup",
+                "question": "Q3 unique?"
+              }
+            ],
+            "chosen_type": "followup",
+            "chosen_question": "Q3 unique?",
+            "recent_after": [
+              "q1 unique",
+              "q2 unique",
+              "q3 unique"
+            ],
+            "type_idx_after": 3,
+            "badge_has_new": true,
+            "win_len": 720
+          }
+        }
+      ]
+    },
+    "dedup_retry": {
+      "enabled_types": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 0,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "Repeat question?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "Repeat question?",
+            "recent_after": [
+              "repeat question"
+            ],
+            "type_idx_after": 1,
+            "badge_has_new": true,
+            "win_len": 240
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 61000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "risk",
+                "question": "Repeat question?"
+              },
+              {
+                "attempt": 1,
+                "type": "followup",
+                "question": "Fresh question?"
+              }
+            ],
+            "chosen_type": "followup",
+            "chosen_question": "Fresh question?",
+            "recent_after": [
+              "repeat question",
+              "fresh question"
+            ],
+            "type_idx_after": 3,
+            "badge_has_new": true,
+            "win_len": 480
+          }
+        }
+      ]
+    },
+    "dedup_both_dupe": {
+      "enabled_types": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 0,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "Only one?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "Only one?",
+            "recent_after": [
+              "only one"
+            ],
+            "type_idx_after": 1,
+            "badge_has_new": true,
+            "win_len": 240
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 61000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "risk",
+                "question": "Only one?"
+              },
+              {
+                "attempt": 1,
+                "type": "followup",
+                "question": "Only one?"
+              }
+            ],
+            "chosen_type": "followup",
+            "chosen_question": "Only one?",
+            "recent_after": [
+              "only one",
+              "only one"
+            ],
+            "type_idx_after": 3,
+            "badge_has_new": true,
+            "win_len": 480
+          }
+        }
+      ]
+    },
+    "time_gate_blocks": {
+      "enabled_types": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 1000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "First?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "First?",
+            "recent_after": [
+              "first"
+            ],
+            "type_idx_after": 1,
+            "badge_has_new": true,
+            "win_len": 240
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 30000,
+          "result": {
+            "action": "accumulated",
+            "win_len": 480,
+            "chars_since_gen": 239
+          }
+        }
+      ]
+    },
+    "char_gate_blocks": {
+      "enabled_types": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 0,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "First?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "First?",
+            "recent_after": [
+              "first"
+            ],
+            "type_idx_after": 1,
+            "badge_has_new": true,
+            "win_len": 240
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 100,
+          "now": 120000,
+          "result": {
+            "action": "accumulated",
+            "win_len": 340,
+            "chars_since_gen": 99
+          }
+        }
+      ]
+    },
+    "window_cap": {
+      "enabled_types": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 1500,
+          "now": 0,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "Capped?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "Capped?",
+            "recent_after": [
+              "capped"
+            ],
+            "type_idx_after": 1,
+            "badge_has_new": true,
+            "win_len": 1200
+          }
+        }
+      ]
+    },
+    "reroll_forces_gen": {
+      "enabled_types": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 0,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "First?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "First?",
+            "recent_after": [
+              "first"
+            ],
+            "type_idx_after": 1,
+            "badge_has_new": true,
+            "win_len": 240
+          }
+        },
+        {
+          "op": "reroll",
+          "now": 5000,
+          "result": {
+            "expanded": true,
+            "action": "generated",
+            "trigger": "reroll",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "risk",
+                "question": "Rerolled?"
+              }
+            ],
+            "chosen_type": "risk",
+            "chosen_question": "Rerolled?",
+            "recent_after": [
+              "first",
+              "rerolled"
+            ],
+            "type_idx_after": 2,
+            "badge_has_new": false,
+            "win_len": 240
+          }
+        }
+      ]
+    },
+    "toggle_clears_badge": {
+      "enabled_types": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 0,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "First?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "First?",
+            "recent_after": [
+              "first"
+            ],
+            "type_idx_after": 1,
+            "badge_has_new": true,
+            "win_len": 240
+          }
+        },
+        {
+          "op": "toggle",
+          "result": {
+            "minimized": false,
+            "badge_has_new": false
+          }
+        },
+        {
+          "op": "toggle",
+          "result": {
+            "minimized": true,
+            "badge_has_new": false
+          }
+        }
+      ]
+    },
+    "reset_clears": {
+      "enabled_types": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 0,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "Q?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "Q?",
+            "recent_after": [
+              "q"
+            ],
+            "type_idx_after": 1,
+            "badge_has_new": true,
+            "win_len": 240
+          }
+        },
+        {
+          "op": "reset",
+          "result": {
+            "win_len": 0,
+            "type_idx": 0
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 50,
+          "now": 1000,
+          "result": {
+            "action": "accumulated",
+            "win_len": 50,
+            "chars_since_gen": 49
+          }
+        }
+      ]
+    },
+    "subset_types": {
+      "enabled_types": [
+        "clarify",
+        "risk"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 0,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "Q1?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "Q1?",
+            "recent_after": [
+              "q1"
+            ],
+            "type_idx_after": 1,
+            "badge_has_new": true,
+            "win_len": 240
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 61000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "risk",
+                "question": "Q2?"
+              }
+            ],
+            "chosen_type": "risk",
+            "chosen_question": "Q2?",
+            "recent_after": [
+              "q1",
+              "q2"
+            ],
+            "type_idx_after": 2,
+            "badge_has_new": true,
+            "win_len": 480
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 122000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "Q3?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "Q3?",
+            "recent_after": [
+              "q1",
+              "q2",
+              "q3"
+            ],
+            "type_idx_after": 3,
+            "badge_has_new": true,
+            "win_len": 720
+          }
+        }
+      ]
+    },
+    "recent_ring_evicts": {
+      "enabled_types": [
+        "clarify",
+        "risk",
+        "followup",
+        "coverage",
+        "deepen"
+      ],
+      "trace": [
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 0,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "Unique question number 0?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "Unique question number 0?",
+            "recent_after": [
+              "unique question number 0"
+            ],
+            "type_idx_after": 1,
+            "badge_has_new": true,
+            "win_len": 240
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 61000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "risk",
+                "question": "Unique question number 1?"
+              }
+            ],
+            "chosen_type": "risk",
+            "chosen_question": "Unique question number 1?",
+            "recent_after": [
+              "unique question number 0",
+              "unique question number 1"
+            ],
+            "type_idx_after": 2,
+            "badge_has_new": true,
+            "win_len": 480
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 122000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "followup",
+                "question": "Unique question number 2?"
+              }
+            ],
+            "chosen_type": "followup",
+            "chosen_question": "Unique question number 2?",
+            "recent_after": [
+              "unique question number 0",
+              "unique question number 1",
+              "unique question number 2"
+            ],
+            "type_idx_after": 3,
+            "badge_has_new": true,
+            "win_len": 720
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 183000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "coverage",
+                "question": "Unique question number 3?"
+              }
+            ],
+            "chosen_type": "coverage",
+            "chosen_question": "Unique question number 3?",
+            "recent_after": [
+              "unique question number 0",
+              "unique question number 1",
+              "unique question number 2",
+              "unique question number 3"
+            ],
+            "type_idx_after": 4,
+            "badge_has_new": true,
+            "win_len": 960
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 244000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "deepen",
+                "question": "Unique question number 4?"
+              }
+            ],
+            "chosen_type": "deepen",
+            "chosen_question": "Unique question number 4?",
+            "recent_after": [
+              "unique question number 0",
+              "unique question number 1",
+              "unique question number 2",
+              "unique question number 3",
+              "unique question number 4"
+            ],
+            "type_idx_after": 5,
+            "badge_has_new": true,
+            "win_len": 1200
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 305000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "clarify",
+                "question": "Unique question number 5?"
+              }
+            ],
+            "chosen_type": "clarify",
+            "chosen_question": "Unique question number 5?",
+            "recent_after": [
+              "unique question number 0",
+              "unique question number 1",
+              "unique question number 2",
+              "unique question number 3",
+              "unique question number 4",
+              "unique question number 5"
+            ],
+            "type_idx_after": 6,
+            "badge_has_new": true,
+            "win_len": 1200
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 366000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "risk",
+                "question": "Unique question number 6?"
+              }
+            ],
+            "chosen_type": "risk",
+            "chosen_question": "Unique question number 6?",
+            "recent_after": [
+              "unique question number 0",
+              "unique question number 1",
+              "unique question number 2",
+              "unique question number 3",
+              "unique question number 4",
+              "unique question number 5",
+              "unique question number 6"
+            ],
+            "type_idx_after": 7,
+            "badge_has_new": true,
+            "win_len": 1200
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 427000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "followup",
+                "question": "Unique question number 7?"
+              }
+            ],
+            "chosen_type": "followup",
+            "chosen_question": "Unique question number 7?",
+            "recent_after": [
+              "unique question number 0",
+              "unique question number 1",
+              "unique question number 2",
+              "unique question number 3",
+              "unique question number 4",
+              "unique question number 5",
+              "unique question number 6",
+              "unique question number 7"
+            ],
+            "type_idx_after": 8,
+            "badge_has_new": true,
+            "win_len": 1200
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 488000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "coverage",
+                "question": "Unique question number 8?"
+              }
+            ],
+            "chosen_type": "coverage",
+            "chosen_question": "Unique question number 8?",
+            "recent_after": [
+              "unique question number 1",
+              "unique question number 2",
+              "unique question number 3",
+              "unique question number 4",
+              "unique question number 5",
+              "unique question number 6",
+              "unique question number 7",
+              "unique question number 8"
+            ],
+            "type_idx_after": 9,
+            "badge_has_new": true,
+            "win_len": 1200
+          }
+        },
+        {
+          "op": "accumulate",
+          "text_len": 240,
+          "now": 549000,
+          "result": {
+            "action": "generated",
+            "trigger": "auto",
+            "attempts": [
+              {
+                "attempt": 0,
+                "type": "deepen",
+                "question": "Unique question number 9?"
+              }
+            ],
+            "chosen_type": "deepen",
+            "chosen_question": "Unique question number 9?",
+            "recent_after": [
+              "unique question number 2",
+              "unique question number 3",
+              "unique question number 4",
+              "unique question number 5",
+              "unique question number 6",
+              "unique question number 7",
+              "unique question number 8",
+              "unique question number 9"
+            ],
+            "type_idx_after": 10,
+            "badge_has_new": true,
+            "win_len": 1200
+          }
+        }
+      ]
+    }
+  },
+  "recap_clean": {
+    "numbered_lines": {
+      "input": "1. What is the deadline?\n2. Who owns the rollout?\n3. What does done look like?",
+      "output": [
+        "What is the deadline?",
+        "Who owns the rollout?",
+        "What does done look like?"
+      ]
+    },
+    "bullets_and_quotes": {
+      "input": "- \"Is the budget approved?\"\n* Will QA sign off?\n  Are we blocked on legal?",
+      "output": [
+        "Is the budget approved?",
+        "* Will QA sign off?",
+        "Are we blocked on legal?"
+      ]
+    },
+    "dedup_within_group": {
+      "input": "Same question here?\nSame question here?\nA different one?",
+      "output": [
+        "Same question here?",
+        "A different one?"
+      ]
+    },
+    "drops_short_lines": {
+      "input": "ok?\nA real substantive question to keep?\nno",
+      "output": [
+        "A real substantive question to keep?"
+      ]
+    },
+    "caps_at_three": {
+      "input": "Q one is long enough?\nQ two is long enough?\nQ three is long enough?\nQ four is long enough?",
+      "output": [
+        "Q one is long enough?",
+        "Q two is long enough?",
+        "Q three is long enough?"
+      ]
+    },
+    "empty": {
+      "input": "",
+      "output": []
+    },
+    "whitespace": {
+      "input": "   \n   ",
+      "output": []
+    }
+  }
+}

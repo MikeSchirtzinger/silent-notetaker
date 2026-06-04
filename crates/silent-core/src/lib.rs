@@ -39,6 +39,7 @@ pub mod engine;
 pub mod error;
 pub mod events;
 pub mod ids;
+pub mod questions;
 pub mod registry;
 
 pub use error::{AsrError, ModelResolveError};
@@ -80,6 +81,7 @@ mod ts_bindings {
     use crate::error::{AsrError, ModelResolveError};
     use crate::events::{AsrCapabilities, EngineEvent, EngineStats};
     use crate::ids::{ModelId, TimeRange};
+    use crate::questions::{QuestionCommand, QuestionEvent, QuestionType, QwenNote, RecapGroup};
     use crate::registry::{
         Cache, CacheStore, DeviceTier, ExecutionProvider, Host, Model, ModelFile, PerfBudget,
         Provider, Registry, Task, Validation,
@@ -114,6 +116,11 @@ mod ts_bindings {
             DiarizationEvent,
             SpeakerDescriptor,
             RelabelEntry,
+            QuestionCommand,
+            QuestionEvent,
+            QuestionType,
+            RecapGroup,
+            QwenNote,
             Registry,
             Model,
             ModelFile,
@@ -142,6 +149,11 @@ mod ts_bindings {
             "DiarizationEvent.ts",
             "SpeakerDescriptor.ts",
             "RelabelEntry.ts",
+            "QuestionCommand.ts",
+            "QuestionEvent.ts",
+            "QuestionType.ts",
+            "RecapGroup.ts",
+            "QwenNote.ts",
             "AsrError.ts",
             "Registry.ts",
             "Model.ts",
