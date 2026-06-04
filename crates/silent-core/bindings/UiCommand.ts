@@ -12,7 +12,12 @@ export type UiCommand = { "tag": "start_recording", "payload": {
  * Meeting title (auto date/time default, up to 120 chars per
  * Appendix A row 3).
  */
-title: string, } } | { "tag": "stop_recording" } | { "tag": "resume_recording" } | { "tag": "new_meeting" } | { "tag": "select_asr_engine", "payload": { 
+title: string, } } | { "tag": "stop_recording" } | { "tag": "resume_recording" } | { "tag": "new_meeting" } | { "tag": "set_title", "payload": { 
+/**
+ * The proposed title; clamped to 120 chars, empty falls back to the
+ * default at start.
+ */
+title: string, } } | { "tag": "add_tab_audio" } | { "tag": "remove_tab_audio" } | { "tag": "select_asr_engine", "payload": { 
 /**
  * Registry id of the chosen ASR model.
  */

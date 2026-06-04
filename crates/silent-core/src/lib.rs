@@ -4,7 +4,12 @@
 //! the (unchanged) browser UI and the Rust core. It contains:
 //!
 //! - [`commands`] — `UiCommand` (UI → core) and `SessionEvent` (core → UI),
-//!   the versioned, `#[non_exhaustive]` boundary message types.
+//!   the versioned, `#[non_exhaustive]` boundary message types, plus the
+//!   `SessionState` / `TimestampMode` / `StopHooks` projections.
+//! - [`session`] — the recording-session state machine (PRD Phase 4): the
+//!   deterministic, browser-free orchestrator for start / stop /
+//!   resume-without-reload / new-meeting, source tracking, the meeting timer,
+//!   and the typed stop-time hooks.
 //! - [`events`] — [`events::EngineEvent`] and the engine telemetry types, the
 //!   streaming lifecycle the ASR engines emit.
 //! - [`error`] — the shared [`error::AsrError`] (one error type across every
@@ -40,10 +45,12 @@ pub mod error;
 pub mod events;
 pub mod ids;
 pub mod registry;
+pub mod session;
 
 pub use error::{AsrError, ModelResolveError};
 pub use events::{EngineEvent, EngineStats};
 pub use ids::{ModelId, TimeRange};
+pub use session::{SessionConfig, SessionMachine, SideEffect};
 
 /// Version of the UI↔core boundary contract.
 ///
@@ -73,7 +80,7 @@ pub const BOUNDARY_CONTRACT_VERSION: u32 = 1;
               config allows this in tests"
 )]
 mod ts_bindings {
-    use crate::commands::{SessionEvent, SessionState, UiCommand};
+    use crate::commands::{SessionEvent, SessionState, StopHooks, TimestampMode, UiCommand};
     use crate::diarization::{
         DiarizationCommand, DiarizationEvent, RelabelEntry, SpeakerDescriptor,
     };
@@ -110,6 +117,8 @@ mod ts_bindings {
             UiCommand,
             SessionEvent,
             SessionState,
+            TimestampMode,
+            StopHooks,
             DiarizationCommand,
             DiarizationEvent,
             SpeakerDescriptor,
@@ -138,6 +147,8 @@ mod ts_bindings {
             "EngineEvent.ts",
             "UiCommand.ts",
             "SessionEvent.ts",
+            "TimestampMode.ts",
+            "StopHooks.ts",
             "DiarizationCommand.ts",
             "DiarizationEvent.ts",
             "SpeakerDescriptor.ts",
