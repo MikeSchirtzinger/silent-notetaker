@@ -1,0 +1,40 @@
+{
+ "description": "executive line with decisions+actions+questions (pluralized)",
+ "input": {
+  "duration": "05:00",
+  "notes": [
+   {
+    "category": "decisions",
+    "text": "Ship v2 in June",
+    "time": "00:12"
+   },
+   {
+    "category": "decisions",
+    "text": "Drop the legacy importer",
+    "time": "01:40"
+   },
+   {
+    "category": "actions",
+    "text": "Alice writes the migration",
+    "time": "02:05"
+   },
+   {
+    "category": "keypoints",
+    "text": "Users cited the privacy wedge",
+    "time": "03:21"
+   },
+   {
+    "category": "keypoints",
+    "text": "  ",
+    "time": "03:30"
+   },
+   {
+    "category": "questions",
+    "text": "Who owns the rollout?",
+    "time": "04:10"
+   }
+  ],
+  "totalWords": 1234
+ },
+ "expected": "05:00 meeting with 2 decisions made, 1 action item assigned, 1 open question."
+}

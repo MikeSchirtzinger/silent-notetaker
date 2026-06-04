@@ -1,0 +1,22 @@
+{
+ "description": "executive line with exactly one of each (singular forms)",
+ "input": {
+  "duration": "01:00",
+  "notes": [
+   {
+    "category": "decisions",
+    "text": "x"
+   },
+   {
+    "category": "actions",
+    "text": "y"
+   },
+   {
+    "category": "questions",
+    "text": "z"
+   }
+  ],
+  "totalWords": 50
+ },
+ "expected": "01:00 meeting with 1 decision made, 1 action item assigned, 1 open question."
+}

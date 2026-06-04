@@ -1,0 +1,45 @@
+{
+ "description": "history-list duration: total=floor(ms/1000); `${floor(total/60)}m ${total%60}s`",
+ "cases": [
+  {
+   "ms": 0,
+   "expected": "0m 0s"
+  },
+  {
+   "ms": 500,
+   "expected": "0m 0s"
+  },
+  {
+   "ms": 1000,
+   "expected": "0m 1s"
+  },
+  {
+   "ms": 59000,
+   "expected": "0m 59s"
+  },
+  {
+   "ms": 60000,
+   "expected": "1m 0s"
+  },
+  {
+   "ms": 61000,
+   "expected": "1m 1s"
+  },
+  {
+   "ms": 125000,
+   "expected": "2m 5s"
+  },
+  {
+   "ms": 3600000,
+   "expected": "60m 0s"
+  },
+  {
+   "ms": 3661000,
+   "expected": "61m 1s"
+  },
+  {
+   "ms": 7325500,
+   "expected": "122m 5s"
+  }
+ ]
+}

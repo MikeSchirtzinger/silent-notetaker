@@ -1,0 +1,14 @@
+{
+ "description": "executive line with no decisions/actions/questions → words fallback",
+ "input": {
+  "duration": "00:30",
+  "notes": [
+   {
+    "category": "keypoints",
+    "text": "only a key point"
+   }
+  ],
+  "totalWords": 9
+ },
+ "expected": "00:30 meeting recorded. 9 words transcribed."
+}

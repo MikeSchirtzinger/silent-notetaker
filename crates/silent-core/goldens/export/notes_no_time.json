@@ -1,0 +1,42 @@
+{
+ "description": "notesToMarkdown with timestamps off → `- text`, no `[ts]` prefix",
+ "input": {
+  "title": "  Q3 Planning  ",
+  "date": "June 4, 2026",
+  "duration": "05:00",
+  "withTime": false,
+  "notes": [
+   {
+    "category": "decisions",
+    "text": "Ship v2 in June",
+    "time": "00:12"
+   },
+   {
+    "category": "decisions",
+    "text": "Drop the legacy importer",
+    "time": "01:40"
+   },
+   {
+    "category": "actions",
+    "text": "Alice writes the migration",
+    "time": "02:05"
+   },
+   {
+    "category": "keypoints",
+    "text": "Users cited the privacy wedge",
+    "time": "03:21"
+   },
+   {
+    "category": "keypoints",
+    "text": "  ",
+    "time": "03:30"
+   },
+   {
+    "category": "questions",
+    "text": "Who owns the rollout?",
+    "time": "04:10"
+   }
+  ]
+ },
+ "expected": "# Q3 Planning\n**Date:** June 4, 2026  **Duration:** 05:00\n\n## Decisions\n- Ship v2 in June\n- Drop the legacy importer\n\n## Action Items\n- Alice writes the migration\n\n## Key Points\n- Users cited the privacy wedge\n\n## Open Questions\n- Who owns the rollout?"
+}

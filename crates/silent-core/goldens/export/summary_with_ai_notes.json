@@ -1,0 +1,65 @@
+{
+ "description": "copySummaryMarkdown: notes markdown + appended AI Meeting Notes groups (chip → `- **chip** — text`)",
+ "input": {
+  "title": "Q3 Planning",
+  "date": "June 4, 2026",
+  "duration": "05:00",
+  "withTime": true,
+  "notes": [
+   {
+    "category": "decisions",
+    "text": "Ship v2 in June",
+    "time": "00:12"
+   },
+   {
+    "category": "decisions",
+    "text": "Drop the legacy importer",
+    "time": "01:40"
+   },
+   {
+    "category": "actions",
+    "text": "Alice writes the migration",
+    "time": "02:05"
+   },
+   {
+    "category": "keypoints",
+    "text": "Users cited the privacy wedge",
+    "time": "03:21"
+   },
+   {
+    "category": "keypoints",
+    "text": "  ",
+    "time": "03:30"
+   },
+   {
+    "category": "questions",
+    "text": "Who owns the rollout?",
+    "time": "04:10"
+   }
+  ],
+  "aiGroups": [
+   {
+    "label": "Discussion",
+    "items": [
+     {
+      "chip": "Decision",
+      "text": "Ship v2 in June"
+     },
+     {
+      "chip": "Key point",
+      "text": "Privacy is the wedge"
+     }
+    ]
+   },
+   {
+    "label": "Action Items",
+    "items": [
+     {
+      "text": "Alice writes the migration"
+     }
+    ]
+   }
+  ]
+ },
+ "expected": "# Q3 Planning\n**Date:** June 4, 2026  **Duration:** 05:00\n\n## Decisions\n- [00:12] Ship v2 in June\n- [01:40] Drop the legacy importer\n\n## Action Items\n- [02:05] Alice writes the migration\n\n## Key Points\n- [03:21] Users cited the privacy wedge\n\n## Open Questions\n- [04:10] Who owns the rollout?\n\n## AI Meeting Notes (on-device · Qwen)\n\n### Discussion\n- **Decision** — Ship v2 in June\n- **Key point** — Privacy is the wedge\n\n### Action Items\n- Alice writes the migration"
+}

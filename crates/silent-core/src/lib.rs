@@ -38,12 +38,21 @@ pub mod diarization;
 pub mod engine;
 pub mod error;
 pub mod events;
+pub mod export;
 pub mod ids;
 pub mod registry;
+pub mod timestamp;
 
 pub use error::{AsrError, ModelResolveError};
 pub use events::{EngineEvent, EngineStats};
+pub use export::{
+    AiNoteGroup, AiNoteItem, NoteCategory, NoteRecord, TranscriptLine, executive_line,
+    history_replay_markdown, notes_to_markdown, summary_markdown_with_ai, transcript_text,
+};
 pub use ids::{ModelId, TimeRange};
+pub use timestamp::{
+    TimestampMode, format_ago, format_clock, format_duration, format_elapsed, format_ms,
+};
 
 /// Version of the UI↔core boundary contract.
 ///
@@ -79,11 +88,13 @@ mod ts_bindings {
     };
     use crate::error::{AsrError, ModelResolveError};
     use crate::events::{AsrCapabilities, EngineEvent, EngineStats};
+    use crate::export::NoteCategory;
     use crate::ids::{ModelId, TimeRange};
     use crate::registry::{
         Cache, CacheStore, DeviceTier, ExecutionProvider, Host, Model, ModelFile, PerfBudget,
         Provider, Registry, Task, Validation,
     };
+    use crate::timestamp::TimestampMode;
     use std::path::Path;
     use ts_rs::TS;
 
@@ -114,6 +125,8 @@ mod ts_bindings {
             DiarizationEvent,
             SpeakerDescriptor,
             RelabelEntry,
+            TimestampMode,
+            NoteCategory,
             Registry,
             Model,
             ModelFile,
@@ -142,6 +155,8 @@ mod ts_bindings {
             "DiarizationEvent.ts",
             "SpeakerDescriptor.ts",
             "RelabelEntry.ts",
+            "TimestampMode.ts",
+            "NoteCategory.ts",
             "AsrError.ts",
             "Registry.ts",
             "Model.ts",

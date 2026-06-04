@@ -1,0 +1,17 @@
+{
+ "description": "copyTranscript with timestamps off → bare text lines",
+ "input": {
+  "withTime": false,
+  "lines": [
+   {
+    "time": "00:00",
+    "text": "Hello everyone."
+   },
+   {
+    "time": "00:03",
+    "text": "Let's begin."
+   }
+  ]
+ },
+ "expected": "Hello everyone.\nLet's begin."
+}

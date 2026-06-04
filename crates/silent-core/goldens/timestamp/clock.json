@@ -1,0 +1,56 @@
+{
+ "description": "clock mode: en-US 12-hour 'h:mm AM/PM' from local (hour-of-day, minute); via Intl in JS",
+ "mode": "clock",
+ "cases": [
+  {
+   "hour": 0,
+   "minute": 0,
+   "expected": "12:00 AM"
+  },
+  {
+   "hour": 0,
+   "minute": 5,
+   "expected": "12:05 AM"
+  },
+  {
+   "hour": 1,
+   "minute": 23,
+   "expected": "1:23 AM"
+  },
+  {
+   "hour": 9,
+   "minute": 9,
+   "expected": "9:09 AM"
+  },
+  {
+   "hour": 11,
+   "minute": 59,
+   "expected": "11:59 AM"
+  },
+  {
+   "hour": 12,
+   "minute": 0,
+   "expected": "12:00 PM"
+  },
+  {
+   "hour": 12,
+   "minute": 30,
+   "expected": "12:30 PM"
+  },
+  {
+   "hour": 13,
+   "minute": 23,
+   "expected": "1:23 PM"
+  },
+  {
+   "hour": 15,
+   "minute": 5,
+   "expected": "3:05 PM"
+  },
+  {
+   "hour": 23,
+   "minute": 59,
+   "expected": "11:59 PM"
+  }
+ ]
+}
