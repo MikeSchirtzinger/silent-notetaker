@@ -6,12 +6,26 @@
 //!
 //! `model_dir` defaults to `models`. Prints the transcript and the real-time
 //! factor (compute time / audio duration).
+//!
+//! This is a **native-only** CLI: it links `Nemotron` (the native `OrtBackend`
+//! alias, cfg-gated off wasm32 in `lib.rs`) and reads WAV files from the
+//! filesystem. It is gated off `wasm32` so `cargo test --target
+//! wasm32-unknown-unknown` (which `wasm-pack test` runs, compiling examples
+//! too) does not try to build it against the absent native symbols.
 
+// On wasm32 the example is an empty stub: nothing to run in a browser.
+#[cfg(target_arch = "wasm32")]
+fn main() {}
+
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Instant;
 
+#[cfg(not(target_arch = "wasm32"))]
 use nemotron_asr::constants::SAMPLE_RATE;
+#[cfg(not(target_arch = "wasm32"))]
 use nemotron_asr::{audio, Nemotron};
 
+#[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = std::env::args().skip(1);
     let wav_path = args.next().unwrap_or_else(|| {

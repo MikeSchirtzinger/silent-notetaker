@@ -24,6 +24,10 @@
 //! first, then the crate is built with the appropriate base URL constant.
 
 #![cfg(target_arch = "wasm32")]
+// `expect`/`unwrap` are idiomatic in tests: a failure is a test bug, not a
+// user error, and wasm-bindgen-test surfaces the panic message in the browser
+// console. Per the spec, tests may allow these locally.
+#![allow(clippy::expect_used)]
 
 use wasm_bindgen_test::*;
 
@@ -34,7 +38,7 @@ wasm_bindgen_test_configure!(run_in_browser);
 // Section 1: Pure-Rust mel front-end (zero CDN fetches, zero model weights)
 // ---------------------------------------------------------------------------
 
-/// Verify that MelFrontend::new() constructs without panicking.
+/// Verify that `MelFrontend::new()` constructs without panicking.
 ///
 /// This exercises the filterbank initialisation path that has tripped on
 /// wasm32 due to different float behaviour in the past.
@@ -48,7 +52,7 @@ fn mel_frontend_constructs() {
 /// 16 kHz × 1 s = 16 000 samples of silence. The hop length is 160 samples,
 /// so a 1-second clip produces ⌊(16000 - 400) / 160⌋ + 1 = 99 mel frames
 /// (give or take edge handling). The important thing is that the output is
-/// non-empty and has exactly N_MELS (128) bands.
+/// non-empty and has exactly `N_MELS` (128) bands.
 #[wasm_bindgen_test]
 fn mel_silence_shape_correct() {
     use nemotron_asr::audio::MelFrontend;
@@ -83,32 +87,32 @@ fn mel_non_silence_has_energy() {
     let frontend = MelFrontend::new();
     // 0.5 s of 440 Hz sine at 16 kHz.
     let n_samples = 8_000usize;
+    #[allow(clippy::cast_precision_loss)] // test signal; sample index well within f32 mantissa
     let tone: Vec<f32> = (0..n_samples)
         .map(|i| (2.0 * std::f32::consts::PI * 440.0 * i as f32 / 16_000.0).sin())
         .collect();
 
     let mel = frontend.log_mel(&tone).expect("log_mel on tone");
-    let max_val = mel.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    let max_val = mel.iter().copied().fold(f32::NEG_INFINITY, f32::max);
     assert!(
         max_val > -1e6,
         "all mel values are effectively -inf; filter bank is broken (max = {max_val})"
     );
 }
 
-/// Verify that the SentencePiece tokenizer byte-round-trips a known string.
+/// Verify the model constants are internally consistent on wasm32.
 ///
-/// This exercises the wasm-friendly pure-Rust SentencePiece path without
-/// loading the real tokenizer.model file (which is not available in CI).
-/// We test only the internal machinery (character mapping), not full decode.
+/// `BLANK_ID` is the RNN-T blank token and must equal `VOCAB_SIZE` (the
+/// id just past the real vocabulary). This is the invariant the decode loop
+/// relies on; checking it in a browser context guards against any wasm-only
+/// const evaluation surprise. The comparison reads two distinct constants, so
+/// it is a real consistency check rather than a tautology.
 #[wasm_bindgen_test]
-fn vocab_decode_single_blank_is_blank() {
-    use nemotron_asr::constants::BLANK_ID;
-    // BLANK_ID is 1024 for nemotron; decode_single of an out-of-vocab token
-    // should return an empty string without panicking.
-    // We don't have a real vocab here, so we just verify the constant is sane.
-    assert!(
-        BLANK_ID < 65_536,
-        "BLANK_ID out of expected range: {BLANK_ID}"
+fn blank_id_equals_vocab_size() {
+    use nemotron_asr::constants::{BLANK_ID, VOCAB_SIZE};
+    assert_eq!(
+        BLANK_ID, VOCAB_SIZE,
+        "BLANK_ID ({BLANK_ID}) must equal VOCAB_SIZE ({VOCAB_SIZE})"
     );
 }
 
