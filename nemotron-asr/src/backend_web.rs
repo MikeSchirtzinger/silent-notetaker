@@ -27,9 +27,9 @@ use wasm_bindgen::prelude::*;
 
 use crate::audio::MelFrontend;
 use crate::constants::{
-    BLANK_ID, CHUNK_SIZE, CONV_CONTEXT, DECODER_LSTM_DIM, HIDDEN_DIM, HOP_LENGTH, LEFT_CONTEXT,
-    LSTM_LAYERS, MAX_SYMBOLS_PER_STEP, NUM_ENCODER_LAYERS, N_MELS, PRE_ENCODE_CACHE, VOCAB_SIZE,
-    WIN_LENGTH,
+    BLANK_ID, CHUNK_SIZE, CONV_CONTEXT, DECODER_LSTM_DIM, EDGE_GUARD_FRAMES, HIDDEN_DIM,
+    HOP_LENGTH, LEFT_CONTEXT, LSTM_LAYERS, MAX_SYMBOLS_PER_STEP, NUM_ENCODER_LAYERS, N_MELS,
+    PRE_ENCODE_CACHE, VOCAB_SIZE, WIN_LENGTH,
 };
 use crate::vocab::SentencePieceVocab;
 
@@ -246,9 +246,16 @@ impl WasmAsr {
             // Next unprocessed mel frame.
             let processed_mel_frames = self.state.audio_processed / HOP_LENGTH;
 
-            // Stop once fewer than a full main chunk of new frames remains.
+            // Stop once fewer than a full main chunk of CLEAN new frames
+            // remains. The guard keeps the chunk's tail clear of the mel's
+            // right-edge zero-padding zone — frames there are computed against
+            // synthetic zeros rather than the audio that arrives next, which
+            // corrupts both the decode and the carried encoder cache (see
+            // `EDGE_GUARD_FRAMES`). Those frames are re-derived cleanly on a
+            // later call once their real audio exists; `flush_tail` consumes
+            // the genuine end-of-stream remainder without the guard.
             let available_new_frames = total_mel_frames.saturating_sub(processed_mel_frames);
-            if available_new_frames < CHUNK_SIZE {
+            if available_new_frames < CHUNK_SIZE + EDGE_GUARD_FRAMES {
                 break;
             }
 

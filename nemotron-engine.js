@@ -32,22 +32,64 @@
 
 const DEFAULT_MODEL_BASE = new URL('./nemotron-asr/models/', import.meta.url).href;
 const DEFAULT_PKG_URL    = new URL('./nemotron-asr/pkg/nemotron_asr.js', import.meta.url).href;
-// How much audio to buffer before each transcribe_chunk call. This is the dominant lever
-// on *perceived* latency (≈ feedMs + ~0.45·feedMs), but ALSO on accuracy with REALTIME
-// worklet-fed audio: in-app tests (2026-06-03, headless Chrome, golden clip via synthetic
-// mic) showed 500 ms feeds merge word boundaries ("intelligence is" → "intelligences",
-// reproduced 3×) and in one run stalled the decoder permanently after ~25 s of leading
-// silence. At 1000 ms feeds the same clip transcribes word-perfectly, and 30 s of leading
-// or mid-stream silence causes no stall (minor punctuation artifacts only). Do not lower
-// this below 16000 without re-running those tests. Override via opts.feedSamples.
-const FEED_SAMPLES       = 16000;   // 1000 ms @ 16 kHz
+
+/* onnxruntime-web defaults to min(4, ceil(hardwareConcurrency/2)) WASM threads — 4 on a
+   10-core M1 Pro, leaving half the performance cores idle under the INT8 encoder. The
+   `ort` global is created by ort-web's CDN script *inside* WasmAsr.create(), so to raise
+   the count before the wasm runtime initializes (first session build) we trap the global's
+   assignment. Threads need SharedArrayBuffer, so this no-ops without cross-origin
+   isolation — ort would fall back to 1 anyway. */
+function raiseOrtWasmThreads(desired) {
+  if (typeof window === 'undefined' || !window.crossOriginIsolated || !(desired > 1)) return;
+  // `env.wasm` may be populated after the global is assigned (bundle-dependent), and
+  // it must be set before the FIRST session build initializes the wasm runtime — so
+  // retry briefly instead of assuming the assignment carries a finished object.
+  const apply = (ort) => {
+    if (!ort) return;
+    let tries = 0;
+    const tick = () => {
+      try { if (ort.env && ort.env.wasm) { ort.env.wasm.numThreads = desired; return; } } catch (_) { return; }
+      if (++tries < 100) setTimeout(tick, 10);
+    };
+    tick();
+  };
+  if (window.ort) { apply(window.ort); return; }
+  // Seed with a benign empty object: ort-web's loader probes `window.ort[initSymbol]`
+  // whenever the property exists, and an accessor returning undefined would make that
+  // probe throw (learned the hard way — it wedges load() at "Building sessions").
+  let val = {};
+  try {
+    Object.defineProperty(window, 'ort', {
+      configurable: true,
+      enumerable: true,
+      get() { return val; },
+      set(v) { val = v; apply(v); },
+    });
+  } catch (_) { /* defineProperty refused — live with ort's default thread count */ }
+}
+// How much audio to buffer before each transcribe_chunk call — the dominant lever on
+// *perceived* latency. History: 500 ms feeds used to merge word boundaries ("intelligence
+// is" → "intelligences") and once stalled the decoder permanently after leading silence,
+// so this sat at 16000 (1 s). Root cause found 2026-06-04: the crate was consuming mel
+// frames from the buffer's right-edge zero-padding zone (synthetic zeros standing in for
+// audio that hadn't arrived yet), corrupting the decode AND the carried encoder cache.
+// Fixed in-crate by EDGE_GUARD_FRAMES (constants.rs) — the engine now only decodes whole
+// CLEAN 56-frame chunks, so the feed size merely sets how promptly chunks are noticed.
+// 250 ms feeds ⇒ a chunk decodes ~every 560 ms of speech, ~0.6-0.9 s behind live instead
+// of ~1.5 s at 1 s feeds. Re-validated against the golden clip + silence-gap tests at
+// 250 ms (2026-06-04). Override via opts.feedSamples.
+const FEED_SAMPLES       = 4000;    // 250 ms @ 16 kHz
 
 export class NemotronEngine {
   constructor(opts = {}) {
     const w = (typeof window !== 'undefined') ? window : {};
     this.modelBase   = opts.modelBase || w.__NEMOTRON_MODEL_BASE || DEFAULT_MODEL_BASE;
     this.pkgUrl      = opts.pkgUrl    || w.__NEMOTRON_PKG_URL    || DEFAULT_PKG_URL;
-    this.feedSamples = opts.feedSamples || FEED_SAMPLES;
+    this.feedSamples = opts.feedSamples || w.__NEMOTRON_FEED_SAMPLES || FEED_SAMPLES;
+    // Leave 2 cores for the page + Qwen worker; cap at 8 (threads beyond the P-cores
+    // regress on ort's spin-wait pool). Override via opts.numThreads for A/B runs.
+    this.numThreads  = opts.numThreads || w.__NEMOTRON_THREADS
+                    || Math.min(8, Math.max(1, ((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4) - 2));
 
     this.onStatus = null;   // (message: string|null, pct: number|null) => void
     this.onText   = null;   // (fragment: string) => void  — incremental text emitted this chunk
@@ -88,7 +130,23 @@ export class NemotronEngine {
     ]);
 
     this.onStatus?.('Building onnxruntime-web sessions…', 82);
+    raiseOrtWasmThreads(this.numThreads);
     this.asr = await this._WasmAsr.create(enc, dec, tok);
+    const w = (typeof window !== 'undefined') ? window : {};
+    console.log(`[nemotron] ort-web wasm threads = ${w.ort?.env?.wasm?.numThreads ?? '(default)'}`
+      + ` (requested ${this.numThreads}, crossOriginIsolated=${!!w.crossOriginIsolated})`);
+
+    // Warm-up: the first inferences pay wasm JIT tier-up + onnxruntime arena growth —
+    // previously paid on the user's first spoken words (and a big part of "it garbled
+    // the start"). One synthetic 1.2 s chunk exercises every encoder/decoder kernel;
+    // reset() then clears all decode state, so accuracy is unaffected.
+    this.onStatus?.('Warming up Nemotron…', 94);
+    const tWarm = performance.now();
+    try { await this.asr.transcribe_chunk(new Float32Array(19200)); }
+    catch (e) { console.warn('[nemotron] warm-up failed (continuing):', e?.message || e); }
+    this.asr.reset();
+    console.log(`[nemotron] warm-up ${Math.round(performance.now() - tWarm)} ms`);
+
     this._loadMs = performance.now() - tLoad;
     this.onStatus?.('Nemotron ready — streaming transcription active (CPU/WASM, GPU free)', 100);
     return this;
@@ -134,6 +192,8 @@ export class NemotronEngine {
       rtf: this._audioSecs ? +((this._totalChunkMs / 1000) / this._audioSecs).toFixed(3) : 0,
       // time from first audio to first visible text (the "lag" the user feels)
       timeToFirstTextMs: (this._firstTextAt && this._startedAt) ? Math.round(this._firstTextAt - this._startedAt) : 0,
+      // samples waiting in the feed buffer — sustained growth means decode can't keep up
+      pendingSamples: this._pending.length,
     };
   }
 

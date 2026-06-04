@@ -50,3 +50,19 @@ pub const CHUNK_SIZE: usize = 56;
 pub const PRE_ENCODE_CACHE: usize = 9;
 /// Greedy RNN-T cap on tokens emitted per encoder frame.
 pub const MAX_SYMBOLS_PER_STEP: usize = 10;
+/// Trailing mel frames that must NOT be consumed from an in-flight (still
+/// growing) live-stream buffer.
+///
+/// `stft` zero-pads `N_FFT/2 = 256` samples on the right, so when the mel is
+/// computed over a buffer whose audio hasn't fully arrived yet, the final
+/// frame's analysis window (`[f*HOP, f*HOP + WIN_LENGTH)` in padded coords,
+/// i.e. up to `f*HOP + 144` past the last real sample) can cover synthetic
+/// zeros instead of the audio that arrives next. Consuming that frame is the
+/// root cause of the word-merge artifacts seen at 500 ms feeds ("intelligence
+/// is" → "intelligences") and the occasional boundary glitch at 1 s feeds
+/// (the leftover cycle hits the dirty edge frame every ~14 chunks). By the
+/// derivation only the single final frame can be dirty (`(len mod HOP) < 144`),
+/// so 2 would suffice; 3 buys an off-by-one margin for 30 ms of extra latency.
+/// `finalize`/`flush_tail` intentionally ignore this guard — at end of stream
+/// the right-edge padding is legitimate.
+pub const EDGE_GUARD_FRAMES: usize = 3;
