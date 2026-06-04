@@ -656,11 +656,19 @@ mod tests {
             .any(|e| matches!(e, SessionEvent::StateChanged { state } if *state == want))
     }
 
-    // -------- title / formatter goldens (capture JS behavior) --------
+    // -------- title / formatter spot-checks --------
+    //
+    // These document the intended behavior inline and run fast. The *provenance*
+    // — that every expected string came out of the actual index.html JS — is
+    // proven separately and exhaustively by `tests/session_golden.rs`, which
+    // replays the JSON fixture emitted by `goldens/gen/session_ref.mjs` (a
+    // DOM-free port of `formatMs` / `formatStamp` / the title trim+clamp). Both
+    // layers must agree; the golden test is the byte-for-byte contract.
 
     #[test]
-    fn format_ms_matches_js_formatms() {
-        // Golden table from index.html `formatMs`: mm:ss, no hour rollover.
+    fn format_ms_spot_check() {
+        // Spot-check of index.html `formatMs`: mm:ss, no hour rollover. The
+        // full JS-generated table lives in tests/session_golden.rs.
         assert_eq!(format_ms(0), "00:00");
         assert_eq!(format_ms(999), "00:00"); // sub-second floors
         assert_eq!(format_ms(1_000), "00:01");
@@ -672,7 +680,9 @@ mod tests {
     }
 
     #[test]
-    fn format_ago_matches_js_formatstamp_ago_branch() {
+    fn format_ago_spot_check() {
+        // Spot-check of the index.html `formatStamp` 'ago' branch; the full
+        // JS-generated table lives in tests/session_golden.rs.
         assert_eq!(format_ago(0), "0s ago");
         assert_eq!(format_ago(30_000), "30s ago");
         assert_eq!(format_ago(59_000), "59s ago");
