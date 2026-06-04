@@ -1,0 +1,16 @@
+# Pinned toolchain for deterministic builds (PRD R8).
+#
+# Policy (PRD "Rust engineering bar" + Appendix C decision log):
+#   - Build/dev on a pinned stable. 1.95.0 is the current stable at pin time.
+#   - MSRV = latest-stable-minus-two = 1.93, recorded in
+#     [workspace.package].rust-version. MSRV bumps are semver-minor for the
+#     published crate (nemotron-asr). The pin here is the *build* toolchain;
+#     `rust-version` is the *compatibility floor* CI also checks.
+#   - wasm32-unknown-unknown is the browser target for silent-core/silent-web
+#     and nemotron-asr's wasm leg; it must be installed for the workspace to
+#     check on wasm.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy", "rust-src"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"

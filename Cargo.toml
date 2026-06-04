@@ -1,0 +1,62 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/silent-core",
+    "crates/silent-audio",
+    "crates/silent-inference",
+    "crates/silent-diarization",
+    "crates/silent-notes",
+    "crates/silent-storage",
+    "crates/silent-extension-sdk",
+    "crates/silent-web",
+    "crates/nemotron-asr",
+    "xtask",
+]
+# `server/` (notetaker-server) is a standalone crate with its own tracked
+# Cargo.lock and release profile; it is owned by a different task and is kept
+# out of this workspace so its build is byte-for-byte unchanged. `dev/` and
+# `experiments/` hold no cargo crates.
+exclude = ["server"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.93"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/brevity-ventures/silent-notetaker"
+authors = ["Brevity Ventures"]
+
+# Shared dependency versions. New crates pin these via `*.workspace = true`.
+# `nemotron-asr` keeps its own pins (edition 2021, ort/ort-web RC pins) and does
+# not consume these — it joins the workspace for unified gating, not for shared
+# deps (see crates/nemotron-asr TODO-D3).
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+thiserror = "2"
+ts-rs = { version = "10", features = ["serde-compat"] }
+
+# ---------------------------------------------------------------------------
+# Workspace lints (PRD "Rust engineering bar"). Member crates opt in with
+# `[lints] workspace = true`. nemotron-asr opts in too; any per-crate relaxation
+# carries a documented rationale at the relaxation site.
+# ---------------------------------------------------------------------------
+[workspace.lints.rust]
+unsafe_code = "forbid"        # relax per-crate only with documented invariants
+missing_docs = "warn"         # becomes deny on crates published to crates.io
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"          # production paths; tests/benches may allow locally
+expect_used = "warn"
+
+# ---------------------------------------------------------------------------
+# Release profile. In a workspace, `[profile.*]` is honored only at the root,
+# so nemotron-asr's former `[profile.release]` (opt-level "s" + LTO, which keep
+# the wasm bundle small) is reproduced here to preserve its standalone wasm
+# build behavior now that it is a member.
+# ---------------------------------------------------------------------------
+[profile.release]
+opt-level = "s"
+lto = true

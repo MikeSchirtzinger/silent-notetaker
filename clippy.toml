@@ -1,0 +1,45 @@
+# Workspace clippy configuration.
+#
+# `doc-valid-idents` extends clippy's built-in allowlist of identifiers that the
+# `clippy::doc_markdown` (pedantic) lint should NOT demand backticks around. The
+# project's docs are intentionally prose-rich and name a lot of products, models,
+# runtimes, and APIs that look like code to the lint but are proper nouns in
+# prose. Whitelisting them keeps `doc_markdown` ACTIVE for genuine code
+# identifiers (it still flags an un-backticked function/type name) while
+# silencing the false positives — preferable to a blanket
+# `#[allow(clippy::doc_markdown)]` that would hide real cases.
+#
+# The `..` entry preserves clippy's default allowlist (GitHub, OAuth, etc.).
+doc-valid-idents = [
+    "..",
+    # Models / model families
+    "TitaNet",
+    "SenseVoice",
+    "Voxtral",
+    "Moonshine",
+    "Nemotron",
+    "Qwen",
+    "Whisper",
+    "SentencePiece",
+    # Runtimes / libraries / tools
+    "transformers.js",
+    "sherpa-onnx",
+    "ort-web",
+    "onnxruntime-web",
+    "wasm-bindgen",
+    "wasm-pack",
+    "IndexedDB",
+    "Emscripten",
+    "AudioWorklet",
+    "WebAudio",
+    "WebGPU",
+    "Cloudflare",
+    "PerfMonitor",
+    # Domain types named in prose (own crate types)
+    "SpeakerTracker",
+    "NoteExtractor",
+    "NotesEngine",
+    "QuestionGenerator",
+    "AudioChunk",
+    "SilentNotetaker",
+]

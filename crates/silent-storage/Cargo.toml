@@ -1,0 +1,19 @@
+# Stub crate (Phase 1 scaffold). Implemented in Phase 4 (Task H2): IndexedDB via
+# indexed_db_futures, the zero-loss Dexie v2 migration (productionized from spike
+# a4), and the four tables (meetings, transcriptChunks, notes, screenshots) with
+# export-backup before migrate.
+[package]
+name = "silent-storage"
+version = "0.1.0"
+description = "Browser storage for Silent Notetaker: IndexedDB access and zero-loss Dexie v2 migration. Stub pending Phase 4."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+silent-core = { path = "../silent-core" }

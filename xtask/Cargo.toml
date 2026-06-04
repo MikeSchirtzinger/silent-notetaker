@@ -1,0 +1,23 @@
+# Stub crate (Phase 1 scaffold). Implemented in Phase 1 (Task D2): `model-audit`
+# (fails on committed weights outside tiny fixtures), `gen-headers` (generates
+# `_headers` + local-server CSP from the registry + extension grants, with a
+# freshness --check mode), and `deploy-gate` (weight-free bundle, 25 MB/file
+# Cloudflare limit, headers freshness) — replacing the unchecked
+# deploy-cloudflare.sh flow (PRD R6). `anyhow` is acceptable here (binary
+# boundary, PRD "Core contracts").
+[package]
+name = "xtask"
+version = "0.1.0"
+description = "Build/audit tooling for Silent Notetaker: model audit, CSP/_headers generation, deploy gates, golden harness. Stub pending Task D2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+silent-core = { path = "../crates/silent-core" }

@@ -1,0 +1,19 @@
+# Stub crate (Phase 1 scaffold). Implemented in Phase 5 (Tasks I1–I4): engine
+# traits' concrete impls, the JS host adapter (transformers.js command
+# protocol), the sherpa-onnx host, Voxtral's two-cap recycle policy, and
+# registry-driven selection + device tiers. Depends on silent-core contracts.
+[package]
+name = "silent-inference"
+version = "0.1.0"
+description = "Engine host adapters and registry-driven selection policy for Silent Notetaker. Stub pending Phase 5."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+silent-core = { path = "../silent-core" }

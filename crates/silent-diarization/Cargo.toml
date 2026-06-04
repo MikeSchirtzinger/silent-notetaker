@@ -1,0 +1,18 @@
+# Stub crate (Phase 1 scaffold). Implemented in Phase 2 (Tasks F1–F3): the
+# TitaNet embedder (productionized from spike b1), the SpeakerTracker port,
+# stop-time global recluster, and rename/merge-by-rename policy with persistence.
+[package]
+name = "silent-diarization"
+version = "0.1.0"
+description = "Speaker diarization for Silent Notetaker: TitaNet embedder, SpeakerTracker, stop-time recluster, rename/merge policy. Stub pending Phase 2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+silent-core = { path = "../silent-core" }

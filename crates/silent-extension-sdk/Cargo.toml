@@ -1,0 +1,19 @@
+# Stub crate (Phase 1 scaffold). Implemented in Phase 6 (Tasks J1–J3): the
+# manifest schema, capability enforcement (raw audio / embeddings / mel tensors
+# are NOT grantable), the sandboxed worker/iframe host, and the report-only →
+# enforced CSP transition.
+[package]
+name = "silent-extension-sdk"
+version = "0.1.0"
+description = "Capability-based, network-denied-by-default extension SDK for Silent Notetaker: manifests, capabilities, host messages. Stub pending Phase 6."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+silent-core = { path = "../silent-core" }

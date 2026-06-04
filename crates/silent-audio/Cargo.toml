@@ -1,0 +1,19 @@
+# Stub crate (Phase 1 scaffold). Implemented in Phase 2+ (Tasks F1/D3): ring
+# buffers, resampling, the consolidated chunking core, and the two parameterized
+# mel frontends (TitaNet 80-band periodic-Hann vs Nemotron 128-band symmetric —
+# NEVER unified; see docs/research/spike-titanet.md). Empty on purpose so Phase D
+# agents never edit the root Cargo.toml concurrently.
+[package]
+name = "silent-audio"
+version = "0.1.0"
+description = "Audio primitives for Silent Notetaker: ring buffers, resampling, the chunking core, and parameterized mel frontends. Stub pending Phase 2."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

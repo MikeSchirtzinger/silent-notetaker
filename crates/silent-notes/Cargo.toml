@@ -1,0 +1,19 @@
+# Stub crate (Phase 1 scaffold). Implemented in Phase 3 (Tasks G1–G4): the
+# NoteExtractor trigger policy (byte-identical goldens from the current regexes),
+# open-question tracking, word-correction application, and smart-question
+# scheduling driving the Qwen worker over the typed boundary.
+[package]
+name = "silent-notes"
+version = "0.1.0"
+description = "Notes, smart-questions, and word-correction policy for Silent Notetaker. Stub pending Phase 3."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+silent-core = { path = "../silent-core" }
