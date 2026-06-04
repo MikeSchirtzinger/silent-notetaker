@@ -34,6 +34,7 @@
 //! wherever a newtype is transparent, so ts-rs emits the correct alias.
 
 pub mod commands;
+pub mod diarization;
 pub mod engine;
 pub mod error;
 pub mod events;
@@ -73,6 +74,9 @@ pub const BOUNDARY_CONTRACT_VERSION: u32 = 1;
 )]
 mod ts_bindings {
     use crate::commands::{SessionEvent, SessionState, UiCommand};
+    use crate::diarization::{
+        DiarizationCommand, DiarizationEvent, RelabelEntry, SpeakerDescriptor,
+    };
     use crate::error::{AsrError, ModelResolveError};
     use crate::events::{AsrCapabilities, EngineEvent, EngineStats};
     use crate::ids::{ModelId, TimeRange};
@@ -106,6 +110,10 @@ mod ts_bindings {
             UiCommand,
             SessionEvent,
             SessionState,
+            DiarizationCommand,
+            DiarizationEvent,
+            SpeakerDescriptor,
+            RelabelEntry,
             Registry,
             Model,
             ModelFile,
@@ -130,6 +138,10 @@ mod ts_bindings {
             "EngineEvent.ts",
             "UiCommand.ts",
             "SessionEvent.ts",
+            "DiarizationCommand.ts",
+            "DiarizationEvent.ts",
+            "SpeakerDescriptor.ts",
+            "RelabelEntry.ts",
             "AsrError.ts",
             "Registry.ts",
             "Model.ts",
