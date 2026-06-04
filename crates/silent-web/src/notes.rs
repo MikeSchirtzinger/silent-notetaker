@@ -272,18 +272,90 @@ impl WasmNoteEngine {
 // WasmQuestionScheduler — the SmartQ teleprompter scheduler
 // ---------------------------------------------------------------------------
 
-/// The JSON shape returned by the scheduler methods that drive the worker.
-/// A tagged union the glue switches on (`{ "kind": "...", ... }`).
-///
-/// - `accumulated` — a gate blocked generation; nothing to do.
-/// - `generate` — forward `request` (a `QuestionEvent::GenerateRequest`) to the
-///   worker; route its reply back via `on_worker_result`.
+/// A flattened generate request for the glue: the worker needs `request_id`,
+/// `window`, and `kind` directly (no serde tag envelope to unwrap). `kind` is
+/// the `QuestionType` snake-case key (`"clarify"` …) the glue maps to a system
+/// prompt + chip label.
+#[derive(serde::Serialize)]
+struct RequestJson {
+    request_id: u32,
+    window: String,
+    kind: &'static str,
+}
+
+/// A flattened ready-question for the glue: the text, the type key, and the
+/// badge flag.
+#[derive(serde::Serialize)]
+struct ReadyJson {
+    text: String,
+    kind: &'static str,
+    badge: bool,
+}
+
+/// The `QuestionType` snake-case key (matches the ts-rs / serde rename and the
+/// index.html `SmartQ.TYPES` keys).
+#[allow(
+    clippy::match_same_arms,
+    reason = "the explicit Clarify arm and the #[non_exhaustive] catch-all share \
+              a body by design — an unknown future type defaults to the first \
+              rotation key; keeping Clarify explicit documents the mapping"
+)]
+fn question_type_key(t: QuestionType) -> &'static str {
+    match t {
+        QuestionType::Clarify => "clarify",
+        QuestionType::Risk => "risk",
+        QuestionType::Followup => "followup",
+        QuestionType::Coverage => "coverage",
+        QuestionType::Deepen => "deepen",
+        _ => "clarify",
+    }
+}
+
+/// Extract the flattened request fields from a `QuestionEvent::GenerateRequest`.
+/// Other variants cannot reach here (the scheduler only returns
+/// `GenerateRequest` from `accumulate`/`reroll`/`on_worker_result` retry); an
+/// unexpected variant yields an empty request the glue treats as a no-op.
+fn request_json(event: QuestionEvent) -> RequestJson {
+    match event {
+        QuestionEvent::GenerateRequest {
+            request_id,
+            window,
+            kind,
+        } => RequestJson {
+            request_id,
+            window,
+            kind: question_type_key(kind),
+        },
+        _ => RequestJson {
+            request_id: 0,
+            window: String::new(),
+            kind: "clarify",
+        },
+    }
+}
+
+/// Extract the flattened ready fields from a `QuestionEvent::QuestionReady`.
+fn ready_json(event: QuestionEvent) -> ReadyJson {
+    match event {
+        QuestionEvent::QuestionReady { text, kind, badge } => ReadyJson {
+            text,
+            kind: question_type_key(kind),
+            badge,
+        },
+        _ => ReadyJson {
+            text: String::new(),
+            kind: "clarify",
+            badge: false,
+        },
+    }
+}
+
 #[derive(serde::Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum ScheduleJson {
     Accumulated,
     Generate {
-        request: QuestionEvent,
+        request: RequestJson,
         /// `true` when a reroll expanded a minimized bar — the glue then also
         /// applies the expand (the JS `rerollSmartQ` toggles minimize first).
         expanded: bool,
@@ -295,9 +367,9 @@ enum ScheduleJson {
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum WorkerResultJson {
     /// The reply is unique (or the final attempt): render the question.
-    Ready { event: QuestionEvent },
+    Ready { event: ReadyJson },
     /// The reply duplicated a recent question: re-issue `request` to the worker.
-    Retry { request: QuestionEvent },
+    Retry { request: RequestJson },
     /// The reply was superseded (reset / newer generation) — drop it.
     Superseded,
 }
@@ -307,7 +379,7 @@ fn schedule_to_json(outcome: ScheduleOutcome) -> ScheduleJson {
     match outcome {
         ScheduleOutcome::Accumulated => ScheduleJson::Accumulated,
         ScheduleOutcome::Generate { request } => ScheduleJson::Generate {
-            request,
+            request: request_json(request),
             expanded: false,
         },
     }
@@ -380,7 +452,10 @@ impl WasmQuestionScheduler {
         let RerollOutcome { expanded, outcome } = self.scheduler.reroll(ms(now_ms));
         let json = match outcome {
             ScheduleOutcome::Accumulated => ScheduleJson::Accumulated,
-            ScheduleOutcome::Generate { request } => ScheduleJson::Generate { request, expanded },
+            ScheduleOutcome::Generate { request } => ScheduleJson::Generate {
+                request: request_json(request),
+                expanded,
+            },
         };
         to_js_value(&json)
     }
@@ -396,8 +471,12 @@ impl WasmQuestionScheduler {
     #[wasm_bindgen(js_name = onWorkerResult)]
     pub fn on_worker_result(&mut self, request_id: u32, text: &str) -> Result<JsValue, JsError> {
         let json = match self.scheduler.on_worker_result(request_id, text) {
-            WorkerOutcome::Ready(event) => WorkerResultJson::Ready { event },
-            WorkerOutcome::Retry(request) => WorkerResultJson::Retry { request },
+            WorkerOutcome::Ready(event) => WorkerResultJson::Ready {
+                event: ready_json(event),
+            },
+            WorkerOutcome::Retry(request) => WorkerResultJson::Retry {
+                request: request_json(request),
+            },
             WorkerOutcome::Superseded => WorkerResultJson::Superseded,
         };
         to_js_value(&json)

@@ -2005,6 +2005,38 @@ async function _ensureDiarzLoaded() {
   return sharedDiarzEngine;
 }
 
+/* ════════════════════════════════════════════
+   NotesEngine (Rust/WASM) — strangler-fig adapter
+   Policy: crates/silent-notes (NoteExtractor + OpenQuestions + SmartQ Scheduler
+           + Qwen parse/chunk/dedup), behind the typed silent-core boundary.
+   Glue:   notes-engine.js → crates/silent-web/pkg/ (the SAME wasm pkg the
+           diarization engine loads — one binary, two surfaces).
+   The JS NoteEngine class, the OpenQs object, the SmartQ object, and the Qwen
+   parse functions below are now thin shims that delegate to this one engine,
+   so every call site (analyze/flush, OpenQs.add/consider, SmartQ.accumulate,
+   parseQwenNotes/chunkTranscript/dedupeNotes) works unchanged. No transcript
+   text leaves the browser; the question-worker.js Qwen worker stays the
+   executor and the DOM rendering stays in this file.
+═══════════════════════════════════════════ */
+// sharedNotesEngine: the single NotesEngine instance shared across meeting
+// resets (policy state is reset per meeting via resetNotes/resetScheduler).
+// Populated on first use; null until notes-engine.js is imported + loaded.
+let sharedNotesEngine = null;
+let _notesEngineReady = false;
+
+async function _ensureNotesLoaded() {
+  if (_notesEngineReady) return sharedNotesEngine;
+  if (!sharedNotesEngine) {
+    const { NotesEngine } = await import('./notes-engine.js');
+    if (!sharedNotesEngine) sharedNotesEngine = new NotesEngine();
+  }
+  const s = (typeof loadSettings === 'function') ? loadSettings() : {};
+  const sel = (Array.isArray(s.smartqTypes) && s.smartqTypes.length) ? s.smartqTypes : null;
+  await sharedNotesEngine.load(sel);
+  _notesEngineReady = true;
+  return sharedNotesEngine;
+}
+
 class SpeakerTracker {
   /* Rust-backed diarization (Phase 2). Policy lives in crates/silent-diarization:
      centroid leader-clustering, 8-color rotation, stop-time global recluster,
@@ -2187,16 +2219,14 @@ const sharedQuestionGenerator = new QuestionGenerator();
 ═══════════════════════════════════════════ */
 const SmartQ = {
   enabled: true,
-  _win: '', _lastGenAt: 0, _charsSinceGen: 0, _recent: [], _typeIdx: 0,
-  _busy: false, _gen: 0, _warmed: false,
-  MIN_INTERVAL: 60000,   // ms between auto-generations
-  MIN_CHARS: 220,        // new transcript chars before a fresh auto-question
-  WINDOW_CHARS: 1200,    // rolling context cap (~2s prefill)
-  /* Every type speaks as an ENGAGED PARTICIPANT — someone genuinely listening who wants
-     the meeting to succeed — not an outside analyst. Shared heuristics for what makes a
-     question worth asking out loud: it references something actually said (not generic),
-     asks exactly ONE thing, is answerable by someone in the room, and moves work forward
-     (a decision, an owner, a scope change, or a surfaced risk). */
+  _warmed: false,
+  /* The timing / char / window gates, the type rotation, the two-attempt dedup
+     ring, and the reroll/minimize/badge state are now Rust POLICY
+     (crates/silent-notes Scheduler via the shared NotesEngine). The per-type
+     system prompts + the type-chip labels stay here (they shape the worker
+     prompt and the chip text). The question-worker.js Qwen worker stays the
+     executor: the scheduler emits a generate request, we run the worker on it,
+     and route the reply back via onWorkerResult — which decides ready/retry. */
   HEURISTICS: ` You are an engaged participant in this meeting and want it to succeed. The question must build on something actually said (never generic), ask exactly one thing, be answerable by someone in the room, and move the work forward. Output ONLY the question — one line, no preamble, no quotes.`,
   TYPES: [
     { key: 'clarify',  label: 'clarify',   system: `Think of ONE sharp CLARIFYING question to ask out loud right now — the ambiguity or unstated detail in what was just said that will bite later if nobody pins it down.` },
@@ -2205,9 +2235,9 @@ const SmartQ = {
     { key: 'coverage', label: 'not covered', system: `Compare what has been discussed so far against what this kind of work normally requires, and think of ONE question to ask out loud right now about something important the conversation has not touched at all.` },
     { key: 'deepen',   label: 'push further', system: `Take the most promising idea that was only briefly mentioned and think of ONE question to ask out loud right now that develops that specific idea into something concrete and more ambitious.` },
   ],
+  _typeByKey(key) { return this.TYPES.find(t => t.key === key) || this.TYPES[0]; },
   reset() {
-    this._win = ''; this._lastGenAt = 0; this._charsSinceGen = 0;
-    this._recent = []; this._typeIdx = 0; this._busy = false; this._gen++;
+    if (_notesEngineReady && sharedNotesEngine) sharedNotesEngine.resetScheduler();
     this._renderEmpty();
   },
   prewarm() {
@@ -2219,50 +2249,39 @@ const SmartQ = {
     if (!this.enabled || !text) return;
     const t = String(text).trim(); if (!t) return;
     if (!this._warmed) this.prewarm();
-    this._win = (this._win + ' ' + t).slice(-this.WINDOW_CHARS);
-    this._charsSinceGen += t.length;
-    this._maybeGenerate();
+    if (!(_notesEngineReady && sharedNotesEngine)) return;
+    const outcome = sharedNotesEngine.accumulate(t, Date.now());
+    if (outcome.kind === 'generate') this._runRequest(outcome.request);
   },
-  _enabledTypes() {
-    const s = (typeof loadSettings === 'function') ? loadSettings() : {};
-    const sel = s.smartqTypes;
-    const types = (Array.isArray(sel) && sel.length) ? this.TYPES.filter(x => sel.includes(x.key)) : this.TYPES;
-    return types.length ? types : this.TYPES;
+  // Manual reroll (rerollSmartQ): the Rust scheduler forces a generation
+  // regardless of the gates and expands the bar if minimized. The DOM expand is
+  // already handled by rerollSmartQ()/toggleSmartQ(); here we just run the gen.
+  _generate() {
+    if (!(_notesEngineReady && sharedNotesEngine)) return;
+    const outcome = sharedNotesEngine.reroll(Date.now());
+    if (outcome.kind === 'generate') this._runRequest(outcome.request);
   },
-  _maybeGenerate() {
-    if (this._busy) return;
-    const now = Date.now();
-    const enoughNew  = this._charsSinceGen >= this.MIN_CHARS;
-    const enoughTime = this._lastGenAt === 0 || (now - this._lastGenAt) >= this.MIN_INTERVAL;
-    if (this._win.length >= 120 && enoughNew && enoughTime) this._generate();
-  },
-  async _generate() {
-    if (this._busy || this._win.length < 40) return;
-    const types = this._enabledTypes();
-    this._busy = true; this._lastGenAt = Date.now(); this._charsSinceGen = 0;
-    const myGen = ++this._gen;
+  // Run one GenerateRequest on the Qwen worker, then route the reply back into
+  // the Rust scheduler. ready → render; retry → run the next request (rotated
+  // type) the scheduler issued on a duplicate; superseded → drop silently.
+  async _runRequest(request) {
     this._renderLoading();
     try {
-      let best = null;
-      for (let attempt = 0; attempt < 2 && myGen === this._gen; attempt++) {
-        const type = types[this._typeIdx++ % types.length];
-        const r = await sharedQuestionGenerator.generate(this._win, { system: type.system + this.HEURISTICS, maxTokens: 64 });
-        if (myGen !== this._gen) return;                                 // superseded by reset / newer gen
-        best = { ...r, type };
-        if (r.question && !this._recent.includes(this._norm(r.question))) break;  // unique → use it
+      const type = this._typeByKey(request.kind);
+      const r = await sharedQuestionGenerator.generate(request.window, { system: type.system + this.HEURISTICS, maxTokens: 64 });
+      const res = sharedNotesEngine.onWorkerResult(request.request_id, r.question || '');
+      if (res.kind === 'ready') {
+        const lbl = this._typeByKey(res.event.kind).label;
+        this._render(res.event.text, lbl);
+      } else if (res.kind === 'retry') {
+        this._runRequest(res.request);   // duplicate → next type, same window
       }
-      if (!best || myGen !== this._gen) return;
-      this._recent.push(this._norm(best.question));
-      if (this._recent.length > 8) this._recent.shift();
-      this._render(best.question, best.type.label);
+      // superseded → a reset / newer generation happened; drop.
     } catch (e) {
       console.warn('[smartq]', e && e.message || e);
-      if (myGen === this._gen) this._renderEmpty();
-    } finally {
-      if (myGen === this._gen) this._busy = false;
+      this._renderEmpty();
     }
   },
-  _norm(q) { return String(q || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); },
   // ── rendering ──
   _bar() { return document.getElementById('smartqBar'); },
   _renderLoading() { const b = this._bar(); if (b) b.classList.add('loading'); },
@@ -2287,6 +2306,11 @@ function toggleSmartQ() {
   const b = document.getElementById('smartqBar'); if (!b) return;
   b.classList.toggle('minimized');
   if (!b.classList.contains('minimized')) b.classList.remove('has-new');  // seen → clear dot
+  // Keep the Rust scheduler's minimize/badge state in sync (it owns the policy
+  // that decides whether a freshly-generated question raises the dot).
+  if (_notesEngineReady && sharedNotesEngine) {
+    if (sharedNotesEngine.isMinimized() !== b.classList.contains('minimized')) sharedNotesEngine.toggleMinimize();
+  }
 }
 function rerollSmartQ() {
   const b = document.getElementById('smartqBar');
@@ -2427,61 +2451,24 @@ where CATEGORY is literally one of: TOPIC, DECISION, ACTION, KEYPOINT, QUESTION.
 Extract ONLY from the transcript — never invent, never guess owners or dates. If nothing is note-worthy, output exactly: NONE
 Output only the lines.`;
 
-const NOTE_CAT_MAP = { DECISION: 'decisions', ACTION: 'actions', KEYPOINT: 'keypoints', QUESTION: 'questions' };
-
-/** Parse Qwen note output. Accepts "TAG| text", "TAG: text", or "TAG - text"; drops NONE/empties.
-    TOPIC lines set the outline heading carried by every following note from the same chunk. */
+/* Qwen note parse / chunk / dedup — POLICY moved to crates/silent-notes
+   (parse_qwen_notes / chunk_transcript / dedupe_notes / final_notes_chunks),
+   byte-identical to the former JS (pinned by goldens). These are thin shims
+   over the shared NotesEngine; the NOTES_SYSTEM prompt + the topic/Action-Items
+   HTML rendering stay in this file (DOM). The engine is loaded by stop() before
+   generateFinalNotes runs, so these are ready when called. */
 function parseQwenNotes(raw) {
-  const out = [];
-  let topic = null;
-  for (let line of String(raw || '').replace(/<think>[\s\S]*?<\/think>/g, '').split('\n')) {
-    line = line.trim();
-    if (!line || /^none\.?$/i.test(line)) continue;
-    const m = line.match(/^[-*\s]*(TOPIC|DECISION|ACTION|KEYPOINT|QUESTION)\s*[|:\-–]\s*(.+)$/i);
-    if (!m) continue;
-    let text = m[2].replace(/^["'\s]+|["'\s]+$/g, '').trim();
-    if (text.length < 4 || /^none\.?$/i.test(text)) continue;
-    if (m[1].toUpperCase() === 'TOPIC') { topic = text.length > 60 ? text.slice(0, 59).trim() + '…' : text; continue; }
-    if (text.length > 160) text = text.slice(0, 159).trim() + '…';
-    out.push({ cat: NOTE_CAT_MAP[m[1].toUpperCase()], text, topic });
-  }
-  return out;
+  return (_notesEngineReady && sharedNotesEngine) ? sharedNotesEngine.parseQwenNotes(raw) : [];
 }
 
 /** Split a transcript into ~target-char chunks on sentence boundaries (keeps context coherent). */
 function chunkTranscript(text, target = 1100) {
-  const sentences = String(text).match(/[^.!?]+[.!?]+|\S[^.!?]*$/g) || [String(text)];
-  const chunks = [];
-  let cur = '';
-  for (const s of sentences) {
-    const seg = s.trim(); if (!seg) continue;
-    if (cur && (cur.length + seg.length + 1) > target) { chunks.push(cur); cur = ''; }
-    cur += (cur ? ' ' : '') + seg;
-  }
-  if (cur) chunks.push(cur);
-  return chunks;
+  return (_notesEngineReady && sharedNotesEngine) ? sharedNotesEngine.chunkTranscript(text, target) : [];
 }
 
-/** Content-word set for dedup (reuses the open-question stopword list). */
-function _noteKw(t) {
-  return new Set((String(t).toLowerCase().match(/\b[a-z][a-z']{2,}\b/g) || []).filter(w => !OPENQ_STOP.has(w)));
-}
 /** Drop near-duplicate notes (same category, ≥60% keyword overlap) from overlapping chunks. */
 function dedupeNotes(notes) {
-  const kept = [];
-  for (const n of notes) {
-    const kw = _noteKw(n.text);
-    let dup = false;
-    for (const k of kept) {
-      if (k.cat !== n.cat) continue;
-      const kkw = _noteKw(k.text);
-      if (!kw.size || !kkw.size) { if (k.text.toLowerCase() === n.text.toLowerCase()) { dup = true; break; } continue; }
-      let inter = 0; for (const w of kw) if (kkw.has(w)) inter++;
-      if (inter / Math.min(kw.size, kkw.size) >= 0.6) { dup = true; break; }
-    }
-    if (!dup) kept.push(n);
-  }
-  return kept;
+  return (_notesEngineReady && sharedNotesEngine) ? sharedNotesEngine.dedupeNotes(notes) : notes;
 }
 
 /* ════════════════════════════════════════════
@@ -2491,40 +2478,38 @@ function dedupeNotes(notes) {
    The Open Questions count reflects only the still-open ones. Cheap heuristic
    during the live meeting; the WebGPU recap does a fuller pass at Stop.
 ═══════════════════════════════════════════ */
-const OPENQ_STOP = new Set(('the a an and or but if then of to in on at for with from by is are was were be been being this that these those we you they it i he she them us our your their will would can could should do does did not as so about into over under more most very just also out up down off than too what how why when where who which whats hows').split(' '));
+/* OpenQs — open/unanswered question tracking (Rust/WASM strangler-fig shim).
+   The keyword-overlap resolution POLICY moved to crates/silent-notes
+   (OpenQuestions, byte-identical, pinned by goldens). This object keeps the DOM
+   marking (_mark q-resolved) and the open-count display (_updateCount); add /
+   consider / reset / openTexts now delegate to the shared NotesEngine. The
+   Rust tracker owns the question text, so openTexts() no longer reads the DOM. */
 const OpenQs = {
-  items: [],   // { id, keywords:[], resolved:bool }
-  reset() { this.items = []; this._updateCount(); },
-  _kw(t) { return [...new Set((String(t).toLowerCase().match(/\b[a-z][a-z']{2,}\b/g) || []))].filter(w => !OPENQ_STOP.has(w)); },
+  reset() {
+    if (_notesEngineReady && sharedNotesEngine) sharedNotesEngine.resetNotes();
+    this._updateCount();
+  },
   add(id, text) {
-    if (id == null) return;
-    this.items.push({ id, keywords: this._kw(text), resolved: false });
+    if (id == null || !(_notesEngineReady && sharedNotesEngine)) return;
+    sharedNotesEngine.addQuestion(id, text);
     this._mark(id, false);
     this._updateCount();
   },
   consider(text) {
-    if (!this.items.length || /\?\s*$/.test(String(text).trim())) return;  // skip if the line is itself a question
-    const kws = new Set(this._kw(text));
-    if (!kws.size) return;
-    for (const q of this.items) {
-      if (q.resolved) continue;
-      let overlap = 0; for (const k of q.keywords) if (kws.has(k)) overlap++;
-      if (overlap >= 2) { q.resolved = true; this._mark(q.id, true); }
-    }
+    if (!(_notesEngineReady && sharedNotesEngine)) return;
+    const resolved = sharedNotesEngine.consider(text);  // ids newly resolved by this line
+    for (const id of resolved) this._mark(id, true);
     this._updateCount();
   },
   openTexts() {
-    return this.items.filter(q => !q.resolved).map(q => {
-      const el = document.querySelector(`.note-item[data-category="questions"][data-id="${q.id}"] .note-text`);
-      return el ? el.textContent.trim() : '';
-    }).filter(Boolean);
+    return (_notesEngineReady && sharedNotesEngine) ? sharedNotesEngine.openTexts() : [];
   },
   _mark(id, resolved) {
     const el = document.querySelector(`.note-item[data-category="questions"][data-id="${id}"]`);
     if (el) el.classList.toggle('q-resolved', resolved);
   },
   _updateCount() {
-    const open = this.items.filter(q => !q.resolved).length;
+    const open = (_notesEngineReady && sharedNotesEngine) ? sharedNotesEngine.openCount() : 0;
     const c = document.getElementById('questionsCount');
     if (c) c.textContent = String(open);   // runs after _updateSectionCount → shows OPEN count
   },
@@ -2550,131 +2535,38 @@ function attachSpeakerToEl(el, info) {
 }
 
 /* ════════════════════════════════════════════
-   NoteEngine — trigger detection & categorization
+   NoteEngine — trigger detection & categorization (Rust/WASM strangler-fig shim)
+   Policy moved to crates/silent-notes (NoteExtractor), byte-identical to the
+   former JS regexes (pinned by goldens). This class is now a thin shim over the
+   shared NotesEngine so all call sites (this.noteEngine.analyze/flush) work
+   unchanged. analyze/flush stay synchronous — the engine is prewarmed in
+   start() so it is ready before any final transcript line arrives; before that
+   (or if load failed) they return [] (no notes, never fake ones).
 ═══════════════════════════════════════════ */
 class NoteEngine {
   constructor() {
-    this.triggers = {
-      decisions: [
-        /we('ve| have) decided to/i,
-        /we('ll| will) move forward with/i,
-        /the decision is/i,
-        /we('re| are) going (with|to go with)/i,
-        /let's go with/i,
-        /\bagreed\b/i,
-        /final (answer|decision|call)/i,
-        /we('ll| will) use/i,
-        /we chose/i,
-        /going ahead with/i,
-      ],
-      actions: [
-        /(\w+) (will|is going to|needs to|should) (handle|take care of|own|do|create|build|fix|update|send|schedule|write|review|check|look into|reach out|follow up)/i,
-        /I('ll| will) (handle|take care of|own|do|create|build|fix|update|send|schedule|write|review|check|look into|reach out|follow up)/i,
-        /you('ll| will) (handle|take care of|own|do|create|build|fix|update|send|schedule|write|review|check|look into|reach out|follow up)/i,
-        /action item/i,
-        /\btodo\b/i,
-        /needs to be done/i,
-        /follow up (on|with)/i,
-        /assigned to/i,
-        /take a look at/i,
-        /by (next |this |end of )?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|month|sprint|quarter|day)/i,
-        /deadline/i,
-        /due (date|by)/i,
-      ],
-      questions: [
-        /\?$/,
-        /does anyone (know|have|think)/i,
-        /what (do|should|would|can|if|are|is) /i,
-        /how (do|should|would|can|will|are|is) /i,
-        /can we /i,
-        /should we /i,
-        /still (need|needs) to (be )?resolved/i,
-        /open question/i,
-        /wondering (if|whether|about)/i,
-        /not sure (if|whether|about|how)/i,
-        /anyone (know|have|think|seen)/i,
-      ],
-      // Key points are NOT the default — they require substantive triggers
-      keypoints: [
-        /\d+[\s]*(%|percent|x|times|minutes|hours|days|lines|files|MB|GB|ms|seconds)/i,  // numbers/metrics
-        /increased?|decreased?|improved?|reduced?|grew|dropped|rose|fell/i,               // changes
-        /the (key|main|important|critical|biggest|primary|core) (thing|point|issue|problem|takeaway|insight|finding)/i,
-        /in (summary|conclusion|short)/i,
-        /the (result|outcome|finding|data|evidence) (is|shows?|suggests?|indicates?)/i,
-        /turns out/i,
-        /the reason (is|was|for)/i,
-        /because of/i,
-        /this means/i,
-        /the (problem|issue|challenge|risk|blocker|bottleneck) is/i,
-        /\b(never|always|must|critical|essential|required|mandatory)\b/i,
-        /highest.leverage|biggest.impact|most.important/i,
-      ]
-    };
-    this.buffer = '';
+    // A fresh NoteEngine resets the shared extractor's buffer + open-question
+    // tracker (mirrors the former `new NoteEngine()` empty buffer + the
+    // OpenQs.reset() the call sites pair with it).
+    if (_notesEngineReady && sharedNotesEngine) sharedNotesEngine.resetNotes();
+    else _ensureNotesLoaded().then(e => e.resetNotes()).catch(() => {});
+  }
+
+  // The Rust extractor returns { category, text, triggerPhrase } (it does not
+  // own the clock); the orchestrator stamps each note with Date.now() so the
+  // existing db.notes + renderNote (.note-time) path is unchanged.
+  _stamp(notes) {
+    const ts = Date.now();
+    for (const n of notes) n.timestamp = ts;
+    return notes;
   }
 
   analyze(text) {
-    // Accumulate text; split on sentence boundaries
-    this.buffer += ' ' + text;
-    const sentenceRx = /[^.!?]*[.!?]+/g;
-    const sentences = [];
-    let match;
-    let lastIndex = 0;
-
-    while ((match = sentenceRx.exec(this.buffer)) !== null) {
-      sentences.push(match[0].trim());
-      lastIndex = sentenceRx.lastIndex;
-    }
-
-    // Keep remainder in buffer
-    this.buffer = this.buffer.slice(lastIndex).trimStart();
-
-    // If buffer has grown large without punctuation, flush it
-    if (this.buffer.length > 300) {
-      sentences.push(this.buffer.trim());
-      this.buffer = '';
-    }
-
-    const results = [];
-    for (const sentence of sentences) {
-      if (sentence.trim().length < 8) continue;
-
-      let category = null;  // Default: NO note. Only create notes for triggered content.
-      let matchedTrigger = null;
-
-      for (const [cat, patterns] of Object.entries(this.triggers)) {
-        for (const pattern of patterns) {
-          if (pattern.test(sentence)) {
-            category = cat;
-            matchedTrigger = pattern.source;
-            break;
-          }
-        }
-        if (matchedTrigger) break;
-      }
-
-      // Skip sentences that don't trigger any category — they're just transcript
-      if (!category) continue;
-
-      results.push({
-        category,
-        text: sentence.trim(),
-        triggerPhrase: matchedTrigger,
-        timestamp: Date.now()
-      });
-    }
-    return results;
+    return (_notesEngineReady && sharedNotesEngine) ? this._stamp(sharedNotesEngine.analyze(text)) : [];
   }
 
   flush() {
-    // Force-flush remaining buffer at stop
-    if (this.buffer.trim().length < 8) {
-      this.buffer = '';
-      return [];
-    }
-    const text = this.buffer.trim();
-    this.buffer = '';
-    return this.analyze(text + '.');
+    return (_notesEngineReady && sharedNotesEngine) ? this._stamp(sharedNotesEngine.flush()) : [];
   }
 }
 
@@ -3973,6 +3865,7 @@ class App {
         duration: 0
       });
 
+      await _ensureNotesLoaded();   // Rust notes/questions policy (NoteExtractor + OpenQs + Scheduler)
       SmartQ.reset();    // fresh teleprompter for this meeting
       OpenQs.reset();    // fresh open-question tracking
       configureLiveQuestionsDevice();  // CPU ASR (Nemotron) → GPU is free → run live Qwen on WebGPU
@@ -4826,10 +4719,10 @@ class App {
       for (const key of sel) {
         const p = PROMPTS[key]; if (!p) continue;
         const r = await recapQuestionGenerator.generate(ctx, { system: p.system, maxTokens: 160 });
-        const qs = String(r.question || '').split('\n')
-          .map(x => x.replace(/^[\s\-\d.\)]+/, '').replace(/^["']|["']$/g, '').trim())
-          .filter(x => x.length > 6);
-        if (qs.length) groups.push({ label: p.label, qs: [...new Set(qs)].slice(0, 3) });
+        // Per-type line cleaning (strip numbering/bullets + one edge quote, drop
+        // ≤6-char lines, dedup, top 3) is the Rust recap policy.
+        const qs = (_notesEngineReady && sharedNotesEngine) ? sharedNotesEngine.recapCleanGroup(r.question || '') : [];
+        if (qs.length) groups.push({ label: p.label, qs });
       }
     } catch (e) {
       console.warn('[recap]', e && e.message || e);
@@ -4863,8 +4756,8 @@ class App {
     // A 0.6B model self-limits to ~4 notes per call regardless of input length, so feed it
     // SMALL chunks (~2-3 sentences) and aggregate — validated sweet spot ≈500 chars. For long
     // meetings, grow the chunk so the count (and WebGPU latency) stays bounded (~18 chunks).
-    const target = Math.max(500, Math.ceil(transcript.length / 18));
-    const chunks = chunkTranscript(transcript, target).slice(0, 22);
+    // The target = max(500, ceil(len/18)) + 22-chunk cap is the Rust final-notes policy.
+    const chunks = (_notesEngineReady && sharedNotesEngine) ? sharedNotesEngine.finalNotesChunks(transcript) : [];
     syncRecapGeneratorToLive();   // reuse the live model's cached weights (no second download)
     let notes = [];
     try {
@@ -6414,6 +6307,12 @@ function applySettings() {
   // Apply smart-questions toggle live (stop generating / clear the bar if turned off)
   SmartQ.enabled = s.smartQuestions !== false;
   if (!SmartQ.enabled) SmartQ._renderEmpty();
+  // Honor a mid-session question-type change: rebuild the Rust scheduler's
+  // rotation (the former JS read `_enabledTypes()` fresh on each generate).
+  if (_notesEngineReady && sharedNotesEngine) {
+    const sel = (Array.isArray(s.smartqTypes) && s.smartqTypes.length) ? s.smartqTypes : null;
+    sharedNotesEngine.setEnabledQuestionTypes(sel);
+  }
 
   // Reconnect bridge if URL changed or toggled
   if (app.bridge) {
