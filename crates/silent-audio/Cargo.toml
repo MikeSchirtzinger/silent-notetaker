@@ -1,12 +1,19 @@
-# Stub crate (Phase 1 scaffold). Implemented in Phase 2+ (Tasks F1/D3): ring
-# buffers, resampling, the consolidated chunking core, and the two parameterized
-# mel frontends (TitaNet 80-band periodic-Hann vs Nemotron 128-band symmetric —
-# NEVER unified; see docs/research/spike-titanet.md). Empty on purpose so Phase D
-# agents never edit the root Cargo.toml concurrently.
+# Audio primitives for Silent Notetaker (Phase 2, Task F1 onward).
+#
+# Currently houses the **two parameterized mel frontends** (PRD "Two mel
+# frontends" table): the TitaNet 80-band slaney / periodic-Hann /
+# per-feature-normalized frontend (productionized from spike b1) and the
+# constants of the Nemotron 128-band slaney / symmetric-Hann / power-spectrum
+# frontend. They differ on nearly every axis and must NEVER be unified — a PR
+# that "deduplicates" them is a correctness bug (see docs/research/spike-titanet.md).
+#
+# Ring buffers, resampling, and the consolidated chunking core land later (Task
+# D3 / Phase 4). Pure-Rust, no ort, no browser deps: this crate compiles to
+# wasm32-unknown-unknown unchanged.
 [package]
 name = "silent-audio"
 version = "0.1.0"
-description = "Audio primitives for Silent Notetaker: ring buffers, resampling, the chunking core, and parameterized mel frontends. Stub pending Phase 2."
+description = "Audio primitives for Silent Notetaker: the two parameterized mel frontends (TitaNet 80-band periodic-Hann vs Nemotron 128-band symmetric — NEVER unified), ring buffers, resampling, chunking core."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -17,3 +24,11 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+ndarray = "0.16"
+realfft = "3"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+approx = "0.5"
