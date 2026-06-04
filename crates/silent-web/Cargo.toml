@@ -1,22 +1,44 @@
-# Stub crate (Phase 1 scaffold). Implemented in Phase 3+ (Tasks G3/I*): the
-# wasm-bindgen boundary that exposes silent-core commands/events to the UI and
-# drives the host workers. The TypeScript bindings themselves are generated from
-# silent-core's types (ts-rs) via `cargo test -p silent-core export_bindings`
-# (A3 decision) — silent-web is the runtime boundary, silent-core owns the type
-# definitions. wasm-bindgen + ort-web glue are added when the boundary lands; the
-# stub stays dependency-light so the native workspace check is fast.
+# The wasm-bindgen boundary between the Silent Notetaker UI and the Rust core
+# (PRD Phase 2, Task F2: diarization surface).
+#
+# This crate exposes the diarization subsystem (TitaNet embedder +
+# SpeakerTracker) to the UI via wasm-bindgen. It compiles with wasm-pack for the
+# browser target; the native target remains valid so `cargo check --workspace`
+# passes without wasm-pack being invoked.
+#
+# TypeScript bindings for the boundary types are generated from `silent-core`
+# (A3 decision — type generation is decoupled from the wasm build). This crate
+# is the RUNTIME boundary; `silent-core` owns the type contract.
 [package]
 name = "silent-web"
 version = "0.1.0"
-description = "The wasm-bindgen boundary between the Silent Notetaker UI and the Rust core. Stub pending Phase 3."
+description = "The wasm-bindgen boundary between the Silent Notetaker UI and the Rust core."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lib]
+# `cdylib` for wasm-pack; `rlib` for native cargo check + tests.
+# Mirrors nemotron-asr and silent-diarization.
+crate-type = ["cdylib", "rlib"]
+
 [lints]
 workspace = true
 
 [dependencies]
 silent-core = { path = "../silent-core" }
+silent-diarization = { path = "../silent-diarization" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# ---------------------------------------------------------------------------
+# wasm32 — wasm-bindgen surface. Only needed for the browser target.
+# ---------------------------------------------------------------------------
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console"] }
+console_error_panic_hook = "0.1"
