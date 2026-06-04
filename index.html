@@ -2049,6 +2049,31 @@ class SpeakerTracker {
     if (speaker) speaker.name = newName;
   }
 
+  /**
+   * Fold a mis-split speaker into an existing one (e.g. a phantom S3 that is
+   * really S2). Combines centroids weighted by their (capped) sample counts —
+   * the same bounded-influence rule identify() uses — so future chunks that
+   * matched the phantom keep matching the survivor. Returns true on success.
+   */
+  merge(fromId, toId) {
+    const from = this.speakers.find(s => s.id === fromId);
+    const to = this.speakers.find(s => s.id === toId);
+    if (!from || !to || fromId === toId) return false;
+    const wf = Math.min(from.count, 50), wt = Math.min(to.count, 50);
+    const c = to.centroid;
+    let nn = 0;
+    for (let i = 0; i < c.length; i++) {
+      c[i] = (c[i] * wt + from.centroid[i] * wf) / (wt + wf);
+      nn += c[i] * c[i];
+    }
+    nn = Math.sqrt(nn) || 1;
+    for (let i = 0; i < c.length; i++) c[i] /= nn; // keep centroid L2-normalized
+    to.count += from.count;
+    this.speakers = this.speakers.filter(s => s.id !== fromId);
+    if (this.lastSpeakerId === fromId) this.lastSpeakerId = toId;
+    return true;
+  }
+
   displayName(speakerId) {
     const speaker = this.speakers.find(s => s.id === speakerId);
     if (!speaker) return speakerId;
@@ -5941,6 +5966,8 @@ function renderSpeakerTags() {
         value="${esc(s.name || '')}"
         placeholder="${s.id}"
         oninput="renameSpeaker('${s.id}', this.value)"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}"
+        onchange="maybeMergeOnRename('${s.id}', this.value)"
         style="color:${s.color}"
       >
     </span>
@@ -5973,6 +6000,8 @@ function editSpeakerTag(event, tagEl) {
   const finish = (commit) => {
     if (done) return; done = true;
     const val = input.value.trim();
+    // Typing another speaker's ID/name means "this was really them" — merge instead.
+    if (commit && val && maybeMergeOnRename(id, val)) return;       // merge already retagged this span
     tagEl.textContent = (commit && val) ? val : current;            // restore the span's text
     if (commit && val && val !== current) renameSpeaker(id, val);   // propagate to all tags + tracker
   };
@@ -5984,6 +6013,42 @@ function editSpeakerTag(event, tagEl) {
   tagEl.textContent = '';
   tagEl.appendChild(input);
   input.focus(); input.select();
+}
+
+/* Merge a mis-split speaker into an existing one: fold tracker centroids and
+   retag every transcript line. Triggered by committing a rename that matches
+   another speaker (see maybeMergeOnRename). */
+function mergeSpeaker(fromId, toId) {
+  const tracker = app.tm && app.tm.speakerTracker;
+  if (!tracker) return false;
+  const to = tracker.speakers.find(s => s.id === toId);
+  if (!to || !tracker.merge(fromId, toId)) return false;
+  document.querySelectorAll(`.speaker-tag[data-speaker="${fromId}"]`).forEach(el => {
+    el.dataset.speaker = toId;
+    el.style.color = to.color;
+    el.textContent = to.name || to.id;
+  });
+  renderSpeakerTags();   // absorbed chip disappears from the bar
+  return true;
+}
+
+/* If a committed speaker rename exactly matches ANOTHER speaker — its ID
+   ("S2") or its current name — the user is correcting a diarization
+   over-split, not naming someone. Offer the merge; declining falls back to a
+   plain rename. Returns true when a merge happened (callers skip the rename). */
+function maybeMergeOnRename(fromId, value) {
+  const tracker = app.tm && app.tm.speakerTracker;
+  const v = (value || '').trim().toLowerCase();
+  if (!tracker || !v) return false;
+  const target = tracker.speakers.find(s =>
+    s.id !== fromId && (s.id.toLowerCase() === v || (s.name && s.name.trim().toLowerCase() === v)));
+  if (!target) return false;
+  const from = tracker.speakers.find(s => s.id === fromId);
+  if (!from) return false;
+  const fromLabel = fromId + (from.name ? ` ("${from.name}")` : '');
+  const toLabel = target.name ? `${target.id} ("${target.name}")` : target.id;
+  if (!confirm(`Merge speaker ${fromLabel} into ${toLabel}?\n\nAll its transcript lines are relabeled and future audio that matched ${fromId} will count as ${toLabel}.`)) return false;
+  return mergeSpeaker(fromId, target.id);
 }
 
 function renameSpeaker(id, name) {
