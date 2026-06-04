@@ -68,6 +68,15 @@ pub struct SessionConfig {
     /// `autoSummary` — request the on-device/bridge summary pass at Stop
     /// (Appendix A row 31). The summary *modal* always opens regardless.
     pub auto_summary: bool,
+    /// `qwenModel === 'off'` — the notes/questions model slot is **empty**
+    /// (transcript-only mode, PRD R3 / Appendix A row 20). This is a first-class
+    /// `NotesSlot=None` state, not a degraded one: when set, *no* notes-model
+    /// pass may run. It is authoritative over [`Self::ai_final_notes`] and
+    /// [`Self::smart_questions`] in [`SessionMachine::stop_hooks`], because those
+    /// passes have no model to execute against. The live regex trigger notes
+    /// (Appendix A row 16) are model-free and keep working — they are owned by
+    /// `silent-notes` `NoteExtractor`, not gated here.
+    pub notes_model_off: bool,
 }
 
 impl Default for SessionConfig {
@@ -79,6 +88,9 @@ impl Default for SessionConfig {
             smart_questions: true,
             smartq_recap: true,
             auto_summary: false,
+            // The notes model defaults to present (`qwenModel: 'auto'`); the
+            // empty-slot transcript-only mode is an explicit opt-in.
+            notes_model_off: false,
         }
     }
 }
@@ -413,11 +425,19 @@ impl SessionMachine {
     /// no-ops when there is `<= 1` speaker. Here we encode the *policy* default:
     /// request recluster, run final-notes/recap per config, always offer the
     /// summary pass per `auto_summary`.
+    ///
+    /// When [`SessionConfig::notes_model_off`] is set (transcript-only mode,
+    /// PRD R3 / Appendix A row 20) the empty notes slot is authoritative: the
+    /// two model-driven passes (`final_notes`, `question_recap`) cannot fire —
+    /// there is no model to run — regardless of their per-pass flags. `recluster`
+    /// (diarization) and `auto_summary` (bridge/on-device summary) are unrelated
+    /// to the notes model and are unaffected.
     fn stop_hooks(&self) -> StopHooks {
+        let notes_model = !self.config.notes_model_off;
         StopHooks {
             recluster: true,
-            final_notes: self.config.ai_final_notes,
-            question_recap: self.config.smart_questions && self.config.smartq_recap,
+            final_notes: notes_model && self.config.ai_final_notes,
+            question_recap: notes_model && self.config.smart_questions && self.config.smartq_recap,
             auto_summary: self.config.auto_summary,
         }
     }
@@ -1018,6 +1038,7 @@ mod tests {
             smart_questions: true,
             smartq_recap: false, // recap off
             auto_summary: true,
+            notes_model_off: false,
         };
         let mut m = SessionMachine::with_config(cfg);
         drive(&mut m, UiCommand::StartRecording { title: "x".into() }, 0);
@@ -1039,6 +1060,7 @@ mod tests {
             smart_questions: false,
             smartq_recap: true,
             auto_summary: false,
+            notes_model_off: false,
         };
         let mut m = SessionMachine::with_config(cfg);
         drive(&mut m, UiCommand::StartRecording { title: "x".into() }, 0);
@@ -1050,6 +1072,35 @@ mod tests {
             panic!("no StopHooks emitted")
         };
         assert!(!question_recap);
+    }
+
+    #[test]
+    fn notes_model_off_is_authoritative_over_pass_flags() {
+        // Transcript-only mode (Appendix A row 20): the empty notes slot forbids
+        // BOTH model-driven passes even though their per-pass flags are on. The
+        // model-free passes (recluster, auto_summary) are unaffected.
+        let cfg = SessionConfig {
+            ai_final_notes: true,
+            smart_questions: true,
+            smartq_recap: true,
+            auto_summary: true,
+            notes_model_off: true,
+        };
+        let mut m = SessionMachine::with_config(cfg);
+        drive(&mut m, UiCommand::StartRecording { title: "x".into() }, 0);
+        let out = apply(&mut m, UiCommand::StopRecording, 1_000);
+        let hooks = StopHooks {
+            recluster: true,       // diarization — unrelated to the notes model
+            final_notes: false,    // no notes model ⇒ no Qwen final notes
+            question_recap: false, // no notes model ⇒ no Qwen question recap
+            auto_summary: true,    // bridge/on-device summary — unrelated
+        };
+        assert!(
+            out.events.contains(&SessionEvent::StopHooks(hooks)),
+            "expected transcript-only StopHooks, got {:?}",
+            out.events
+        );
+        assert!(out.effects.contains(&SideEffect::RunStopHooks(hooks)));
     }
 
     // -------- timer projection --------
