@@ -2237,6 +2237,8 @@ class QuestionGenerator {
       if (m.type === 'status') this.onStatus?.(m.message);
       else if (m.type === 'ready') { this.ready = true; this.onStatus?.('Smart-questions ready'); }
       else if (m.type === 'result') {
+        // Telemetry for PerfMonitor: how long generations take on the current device.
+        this.lastGenMs = m.ms || null; this.lastGenAt = Date.now(); this.genCount = (this.genCount || 0) + 1;
         const p = this._pending.get(m.id);
         if (p) { this._pending.delete(m.id); p.resolve({ question: m.question, ms: m.ms }); }
       } else if (m.type === 'error') {
@@ -3886,6 +3888,75 @@ class ClaudeBridge {
 }
 
 /* ════════════════════════════════════════════
+   PerfMonitor — one compact [perf] console line every 5 s while recording.
+   Answers "are the models contending or leaking?" on real runs: JS heap,
+   total page memory (incl. WASM + workers, via measureUserAgentSpecificMemory
+   every 30 s — available because we serve cross-origin isolated), Nemotron
+   chunk latency + feed backlog, and Qwen device + generation time. Ring-
+   buffered on window.__perfLog (last 2 h) so a whole meeting can be inspected
+   afterwards or watched live over CDP. Keeps sampling 60 s past Stop to catch
+   the WebGPU recap/notes burst.
+═══════════════════════════════════════════ */
+const PerfMonitor = {
+  _iv: null, _stopTimer: null, _tick: 0, _totalMB: null, _buckets: null,
+  start() {
+    this.stop();
+    window.__perfLog = window.__perfLog || [];
+    this._tick = 0;
+    this._iv = setInterval(() => this.sample(), 5000);
+  },
+  /* Stop sampling after one more minute — Stop kicks off the heaviest GPU work
+     (recap + note extraction on WebGPU) and that's exactly worth observing. */
+  stopSoon() {
+    clearTimeout(this._stopTimer);
+    this._stopTimer = setTimeout(() => this.stop(), 60000);
+  },
+  stop() {
+    if (this._iv) { clearInterval(this._iv); this._iv = null; }
+    clearTimeout(this._stopTimer); this._stopTimer = null;
+  },
+  sample() {
+    try {
+      // Comprehensive memory (JS + WASM heaps + workers) is async and rate-limited:
+      // refresh it every 6th tick (30 s), report the latest reading in between.
+      if (this._tick++ % 6 === 0 && performance.measureUserAgentSpecificMemory) {
+        performance.measureUserAgentSpecificMemory().then(r => {
+          this._totalMB = Math.round(r.bytes / 1048576);
+          // Attribute the big consumers (>50 MB): window vs which worker. Chrome
+          // doesn't expose a WebAssembly type here — wasm heaps show as JavaScript.
+          this._buckets = (r.breakdown || [])
+            .filter(b => b.bytes > 50 * 1048576)
+            .map(b => ({
+              mb: Math.round(b.bytes / 1048576),
+              who: ((b.attribution && b.attribution[0] && (b.attribution[0].url || b.attribution[0].scope)) || (b.types || []).join('+') || '?')
+                .split('/').pop() || 'page',
+            }));
+        }).catch(() => {});
+      }
+      const m = performance.memory || {};
+      const n = app.tm && app.tm.nemotron;
+      const q = (typeof sharedQuestionGenerator !== 'undefined') ? sharedQuestionGenerator : null;
+      const row = {
+        t: new Date().toISOString().slice(11, 19),
+        heapMB: m.usedJSHeapSize ? Math.round(m.usedJSHeapSize / 1048576) : null,
+        // Page-ATTRIBUTABLE memory only: Chrome excludes the ort wasm Memory here
+        // because the cdn.pyke.io script created it (validated: ~2 MB while the
+        // 881 MB encoder is resident). True footprint needs process-level RSS
+        // (ps on the renderer/GPU processes) — done from outside during test runs.
+        pageMB: this._totalMB,
+        buckets: this._buckets,         // >50 MB page-attributable consumers
+        engine: app.tm ? app.tm.engine : null,
+        asr: n ? (s => ({ rtf: s.rtf, avgMs: s.avgChunkMs, lastMs: s.lastChunkMs, backlog: s.pendingSamples, chunks: s.chunks }))(n.stats()) : null,
+        qwen: q ? { device: q.config.device, dtype: q.config.dtype, ready: q.ready, lastGenMs: q.lastGenMs || null, gens: q.genCount || 0 } : null,
+      };
+      window.__perfLog.push(row);
+      if (window.__perfLog.length > 1440) window.__perfLog.shift();
+      console.log('[perf]', JSON.stringify(row));
+    } catch (_) { /* never break a meeting over telemetry */ }
+  },
+};
+
+/* ════════════════════════════════════════════
    App
 ═══════════════════════════════════════════ */
 class App {
@@ -4001,6 +4072,7 @@ class App {
       // Start timer
       document.getElementById('timer').classList.add('running');
       this.timerInterval = setInterval(() => this.tickTimer(), 1000);
+      PerfMonitor.start();   // [perf] heap/ASR/Qwen line every 5 s while recording
 
       // UI
       document.getElementById('recordingDot').classList.add('active');
@@ -4014,12 +4086,14 @@ class App {
 
     } catch (err) {
       this.handleStatus('Failed to start: ' + err.message, null);
+      PerfMonitor.stop();
       startBtn.disabled = false;
       startBtn.textContent = '&#9679; Start';
     }
   }
 
   async stop() {
+    PerfMonitor.stopSoon();   // keep sampling 60s — Stop triggers the WebGPU recap/notes burst
     if (this.tm) {
       // Flush note engine buffer
       const flushed = this.noteEngine.flush();
