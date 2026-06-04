@@ -1333,6 +1333,7 @@ version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
  "js-sys",
+ "nemotron-asr",
  "serde",
  "serde_json",
  "silent-core",

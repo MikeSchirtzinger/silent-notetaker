@@ -17,6 +17,15 @@
 //! glue (`notes-engine.js`) drives it; the `question-worker.js` Qwen worker
 //! stays the executor.
 //!
+//! The `nemotron` module (wasm32 only, Phase 3, Task w4) wraps `nemotron-asr`'s
+//! `WasmAsr` ([`nemotron::WasmNemotron`]) behind the typed `EngineEvent`
+//! boundary: model-download progress (Appendix A row 9) and PerfMonitor stats
+//! (row 35) now arrive as `silent_core::EngineEvent::{LoadProgress, Ready,
+//! Partial, Final, Stats}` JSON instead of the ad-hoc `onStatus`/`onText`
+//! callbacks `nemotron-engine.js` used to invent. The decode itself is
+//! unchanged — the wrapper only adds the event glue. The thin loader
+//! (`nemotron-engine.js`) drives it.
+//!
 //! # TypeScript types
 //!
 //! The boundary types (`DiarizationCommand`, `DiarizationEvent`, etc.) are
@@ -43,8 +52,16 @@ pub mod diarization;
 #[cfg(target_arch = "wasm32")]
 pub mod notes;
 
+/// Wasm-bindgen Nemotron ASR surface (Phase 3, Task w4). Wasm32 only. Wraps
+/// `nemotron-asr`'s `WasmAsr` behind the typed `EngineEvent` boundary.
+#[cfg(target_arch = "wasm32")]
+pub mod nemotron;
+
 #[cfg(target_arch = "wasm32")]
 pub use diarization::WasmDiarization;
+
+#[cfg(target_arch = "wasm32")]
+pub use nemotron::WasmNemotron;
 
 #[cfg(target_arch = "wasm32")]
 pub use notes::{WasmCorrections, WasmNoteEngine, WasmQuestionScheduler};

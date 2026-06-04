@@ -43,3 +43,8 @@ wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["console"] }
 console_error_panic_hook = "0.1"
+# The Nemotron ASR engine (ort-web RNN-T). Wasm32-only: the `nemotron` module
+# wraps `WasmAsr` behind the typed `EngineEvent` boundary (Task w4). nemotron-asr
+# keeps its own RC pins for `ort`/`ort-web`; depending on it here only on wasm32
+# keeps the native `cargo check` free of an ort-web link.
+nemotron-asr = { path = "../nemotron-asr" }
