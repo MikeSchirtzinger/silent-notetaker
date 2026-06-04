@@ -893,6 +893,13 @@
     .ai-badge { font-size: 10px; font-weight: 600; text-transform: none; letter-spacing: 0; color: var(--accent); opacity: 0.85; border: 1px solid var(--accent-dim); border-radius: 999px; padding: 2px 8px; background: rgba(0,0,0,0.15); }
     .ai-notes-group { margin-top: 12px; }
     .ai-notes-group-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
+    /* Per-item category chip inside the AI-notes outline (topic sections mix categories). */
+    .note-chip { display: inline-block; font-size: 9px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.05em; padding: 1px 5px; border-radius: 3px; margin-right: 6px; vertical-align: 1px; }
+    .note-chip.decisions { color: var(--decisions); background: var(--decisions-dim); }
+    .note-chip.actions   { color: var(--actions);   background: var(--actions-dim); }
+    .note-chip.keypoints { color: var(--keypoints); background: var(--keypoints-dim); }
+    .note-chip.questions { color: var(--questions); background: var(--questions-dim); }
     .ai-notes-group-label.decisions { color: var(--decisions); }
     .ai-notes-group-label.actions   { color: var(--actions); }
     .ai-notes-group-label.keypoints  { color: var(--keypoints); }
@@ -2235,7 +2242,12 @@ class QuestionGenerator {
     this.worker.onmessage = (e) => {
       const m = e.data;
       if (m.type === 'status') this.onStatus?.(m.message);
-      else if (m.type === 'ready') { this.ready = true; this.onStatus?.('Smart-questions ready'); }
+      else if (m.type === 'ready') {
+        this.ready = true; this.onStatus?.('Smart-questions ready');
+        // A big model loading successfully is fresh evidence — forget any past demotion.
+        if ((this.config.model || '').includes('1.7B')) { try { localStorage.removeItem('qwenAutoDemoted'); } catch (_) {} }
+      }
+      else if (m.type === 'loadfailed') { this._handleLoadFailed(m.message); }
       else if (m.type === 'result') {
         // Telemetry for PerfMonitor: how long generations take on the current device.
         this.lastGenMs = m.ms || null; this.lastGenAt = Date.now(); this.genCount = (this.genCount || 0) + 1;
@@ -2265,8 +2277,41 @@ class QuestionGenerator {
     return this._loadPromise;
   }
   prewarm() { this.load().catch(() => {}); }
+  /* No browser probe can predict whether onnxruntime can actually ALLOCATE a session
+     (e.g. Qwen3-1.7B q4f16 ran out of memory building its WebGPU session on a 16GB
+     M1 Pro that passed every capability check). So policy is try-then-remember:
+     a big model that fails to load demotes to the small one on the SAME device; only
+     the small model falls back to WASM. Auto mode remembers the demotion in
+     localStorage so future sessions skip the doomed attempt; an explicit user pick
+     that later succeeds clears the memory. In-flight generations are re-issued once
+     against the recycled worker, so callers just see one slower await. */
+  _handleLoadFailed(message) {
+    const small = (typeof QWEN_MODELS !== 'undefined') ? QWEN_MODELS['0.6b'].id : 'onnx-community/Qwen3-0.6B-ONNX';
+    const failed = this.config.model || small;
+    this.terminate();   // rejects in-flight generates with 'generator restarted' (retried once below)
+    if (failed !== small) {
+      console.warn(`[questions] ${failed.split('/').pop()} failed to load on ${this.config.device} (${message}) — demoting to 0.6B`);
+      if (this._autoResolved) { try { localStorage.setItem('qwenAutoDemoted', '1'); } catch (_) {} }
+      if (typeof showToast === 'function') showToast('Qwen 1.7B couldn’t initialize on this device — using 0.6B');
+      this.config.model = small;          // same device/dtype — usually it's the size that failed
+    } else if (this.config.device === 'webgpu') {
+      console.warn(`[questions] webgpu load failed (${message}) — falling back to wasm/q4`);
+      this.config.device = 'wasm'; this.config.dtype = 'q4';
+    } else {
+      console.warn(`[questions] model load failed on wasm (${message}) — giving up`);
+      return;
+    }
+    this.prewarm();
+  }
   // One insightful question from a transcript window. opts: { system?, maxTokens? }
+  // Retries once if the worker was recycled mid-flight (load-failure demotion).
   generate(transcript, opts = {}) {
+    return this._generateOnce(transcript, opts).catch((err) => {
+      if (String(err && err.message || '').includes('generator restarted')) return this._generateOnce(transcript, opts);
+      throw err;
+    });
+  }
+  _generateOnce(transcript, opts = {}) {
     this._ensureWorker();
     const id = ++this._seq;
     return new Promise((resolve, reject) => {
@@ -2276,6 +2321,7 @@ class QuestionGenerator {
   }
   terminate() {
     if (this.worker) { this.worker.postMessage({ type: 'terminate' }); this.worker = null; }
+    for (const p of this._pending.values()) p.reject(new Error('generator restarted'));
     this.ready = false; this._loadPromise = null; this._pending.clear();
   }
 }
@@ -2294,10 +2340,18 @@ const SmartQ = {
   MIN_INTERVAL: 60000,   // ms between auto-generations
   MIN_CHARS: 220,        // new transcript chars before a fresh auto-question
   WINDOW_CHARS: 1200,    // rolling context cap (~2s prefill)
+  /* Every type speaks as an ENGAGED PARTICIPANT — someone genuinely listening who wants
+     the meeting to succeed — not an outside analyst. Shared heuristics for what makes a
+     question worth asking out loud: it references something actually said (not generic),
+     asks exactly ONE thing, is answerable by someone in the room, and moves work forward
+     (a decision, an owner, a scope change, or a surfaced risk). */
+  HEURISTICS: ` You are an engaged participant in this meeting and want it to succeed. The question must build on something actually said (never generic), ask exactly one thing, be answerable by someone in the room, and move the work forward. Output ONLY the question — one line, no preamble, no quotes.`,
   TYPES: [
-    { key: 'clarify',  label: 'clarify',   system: `You help the user think of ONE sharp CLARIFYING question to ask out loud right now in this meeting. From the user's perspective, specific to what was just discussed, surfacing a gap or ambiguity. Output ONLY the question — one line, no preamble, no quotes.` },
-    { key: 'risk',     label: 'risk',      system: `You are the user's devil's advocate. Propose ONE pointed question to ask out loud right now that challenges a decision, exposes a risk, or questions a hidden assumption in what was just discussed. From the user's perspective. Output ONLY the question — one line, no preamble, no quotes.` },
-    { key: 'followup', label: 'follow-up', system: `You help the user think of ONE FOLLOW-UP question to ask out loud right now that pushes the discussion forward or pins down a concrete next step, owner, or deadline. From the user's perspective. Output ONLY the question — one line, no preamble, no quotes.` },
+    { key: 'clarify',  label: 'clarify',   system: `Think of ONE sharp CLARIFYING question to ask out loud right now — the ambiguity or unstated detail in what was just said that will bite later if nobody pins it down.` },
+    { key: 'risk',     label: 'risk',      system: `Think of ONE pointed question to ask out loud right now that respectfully challenges what was just decided or assumed — the assumption most likely to be wrong, or the risk nobody has priced in.` },
+    { key: 'followup', label: 'follow-up', system: `Think of ONE question to ask out loud right now that converts the discussion into a concrete next step — who owns it, by when, or what "done" looks like.` },
+    { key: 'coverage', label: 'not covered', system: `Compare what has been discussed so far against what this kind of work normally requires, and think of ONE question to ask out loud right now about something important the conversation has not touched at all.` },
+    { key: 'deepen',   label: 'push further', system: `Take the most promising idea that was only briefly mentioned and think of ONE question to ask out loud right now that develops that specific idea into something concrete and more ambitious.` },
   ],
   reset() {
     this._win = ''; this._lastGenAt = 0; this._charsSinceGen = 0;
@@ -2340,7 +2394,7 @@ const SmartQ = {
       let best = null;
       for (let attempt = 0; attempt < 2 && myGen === this._gen; attempt++) {
         const type = types[this._typeIdx++ % types.length];
-        const r = await sharedQuestionGenerator.generate(this._win, { system: type.system, maxTokens: 64 });
+        const r = await sharedQuestionGenerator.generate(this._win, { system: type.system + this.HEURISTICS, maxTokens: 64 });
         if (myGen !== this._gen) return;                                 // superseded by reset / newer gen
         best = { ...r, type };
         if (r.question && !this._recent.includes(this._norm(r.question))) break;  // unique → use it
@@ -2394,6 +2448,63 @@ function rerollSmartQ() {
    Falls back to WASM inside the worker if there's no WebGPU adapter. */
 const recapQuestionGenerator = new QuestionGenerator({ device: 'webgpu', dtype: 'q4', maxTokens: 160 });
 
+/* ── Qwen model registry + device-capability auto-default ──
+   This app is open source and runs on whatever hardware shows up, so the AI-model
+   default is picked from a one-time capability probe, NOT tuned to any one machine.
+   The user can always override in Settings (auto / 0.6b / 1.7b). */
+const QWEN_MODELS = {
+  '0.6b': { id: 'onnx-community/Qwen3-0.6B-ONNX', label: 'Qwen3 0.6B — fast, light (~0.4GB)' },
+  '1.7b': { id: 'onnx-community/Qwen3-1.7B-ONNX', label: 'Qwen3 1.7B — smarter notes & questions (~1.4GB, WebGPU recommended)' },
+};
+
+/* One-shot WebGPU/device probe. No direct VRAM API exists in the browser, so tier from
+   the strongest available proxies: a real (non-fallback) adapter, the adapter's max
+   buffer size (can it even hold large weight buffers), navigator.deviceMemory (RAM
+   class, Chrome caps the report at 8), and core count. Resolves in ~ms; runs at boot. */
+const GpuCaps = {
+  probed: false, tier: 'wasm', detail: 'probing…',
+  async probe() {
+    if (this.probed) return this;
+    this.probed = true;
+    const cores = navigator.hardwareConcurrency || 4;
+    const memGB = navigator.deviceMemory || null;   // capped at 8 by Chrome
+    try {
+      const a = navigator.gpu && await navigator.gpu.requestAdapter();
+      if (!a) {
+        this.tier = 'wasm'; this.detail = 'no WebGPU adapter — CPU only';
+      } else if (a.isFallbackAdapter) {
+        this.tier = 'wasm'; this.detail = 'software WebGPU only — treating as CPU';
+      } else {
+        const maxBufGB = (a.limits && a.limits.maxBufferSize || 0) / 1024 ** 3;
+        const high = maxBufGB >= 2 && cores >= 8 && (memGB === null || memGB >= 8);
+        this.tier = high ? 'high' : 'standard';
+        this.detail = `WebGPU ${this.tier} — ${cores} cores, ` +
+          `${memGB ? `≥${memGB}GB RAM, ` : ''}${maxBufGB.toFixed(1)}GB max GPU buffer`;
+      }
+    } catch (e) {
+      this.tier = 'wasm'; this.detail = `WebGPU probe failed (${e && e.message || e}) — CPU only`;
+    }
+    console.log(`[gpu-caps] tier=${this.tier} (${this.detail}) → auto Qwen = ${this.autoChoice()}`);
+    return this;
+  },
+  // The auto default per tier: 1.7B only where the probe shows real headroom.
+  autoChoice() { return this.tier === 'high' ? '1.7b' : '0.6b'; },
+};
+
+/* Resolve the Qwen model key from settings: explicit override wins; 'auto' follows the
+   probe — except on a WASM-bound live path (Voxtral owns the GPU), where auto stays at
+   0.6B because 1.7B on CPU is painfully slow. An explicit 1.7b choice is honored
+   anywhere — the user's call. */
+function resolveQwenModelKey(forDevice) {
+  const s = (typeof loadSettings === 'function') ? loadSettings() : {};
+  if (s.qwenModel && s.qwenModel !== 'auto') return QWEN_MODELS[s.qwenModel] ? s.qwenModel : '0.6b';
+  // Auto: tier pick, unless this device already proved it can't load the big model
+  // (session allocation isn't probeable — see QuestionGenerator._handleLoadFailed).
+  let demoted = false;
+  try { demoted = localStorage.getItem('qwenAutoDemoted') === '1'; } catch (_) {}
+  return (forDevice === 'webgpu' && !demoted) ? GpuCaps.autoChoice() : '0.6b';
+}
+
 /* Pick the device for the LIVE smart-questions generator based on the chosen ASR engine.
    The live path is normally WASM-only so it can't contend with a WebGPU ASR engine
    (Voxtral owns the GPU). But CPU/WASM ASR engines (Nemotron, SenseVoice) leave the GPU
@@ -2406,14 +2517,31 @@ function configureLiveQuestionsDevice() {
   const gpuFree = CPU_ASR_ENGINES.has(model);
   const device = gpuFree ? 'webgpu' : 'wasm';
   const dtype  = gpuFree ? 'q4f16' : 'q4';     // q4f16 is the WebGPU-oriented Qwen dtype
+  const qwenId = QWEN_MODELS[resolveQwenModelKey(device)].id;
+  const s = (typeof loadSettings === 'function') ? loadSettings() : {};
+  sharedQuestionGenerator._autoResolved = !s.qwenModel || s.qwenModel === 'auto';
   const cfg = sharedQuestionGenerator.config;
-  if (cfg.device === device && cfg.dtype === dtype) return;   // already set — nothing to do
-  cfg.device = device; cfg.dtype = dtype;
-  // A worker warmed for the old device must be recycled so it reloads on the new one.
+  if (cfg.device === device && cfg.dtype === dtype && cfg.model === qwenId) return;   // already set
+  cfg.device = device; cfg.dtype = dtype; cfg.model = qwenId;
+  // A worker warmed for the old device/model must be recycled so it reloads on the new one.
   if (sharedQuestionGenerator.worker || sharedQuestionGenerator.ready || sharedQuestionGenerator._loadPromise) {
     sharedQuestionGenerator.terminate();
   }
-  console.log(`[questions] live Qwen device → ${device} (${dtype}) for ASR engine "${model || 'default'}"`);
+  console.log(`[questions] live Qwen → ${qwenId.split('/').pop()} on ${device} (${dtype}) for ASR engine "${model || 'default'}"`);
+}
+
+/* The recap/notes generator (separate instance, runs at Stop) reuses whatever model the
+   live generator resolved to, so the weights are already in the browser cache — no
+   second download. Call before any recap/notes generation. */
+function syncRecapGeneratorToLive() {
+  const live = sharedQuestionGenerator.config;
+  const cfg = recapQuestionGenerator.config;
+  recapQuestionGenerator._autoResolved = sharedQuestionGenerator._autoResolved;
+  if (cfg.model === live.model && cfg.dtype === live.dtype) return;
+  cfg.model = live.model; cfg.dtype = live.dtype;   // device stays webgpu (demotes via _handleLoadFailed)
+  if (recapQuestionGenerator.worker || recapQuestionGenerator.ready || recapQuestionGenerator._loadPromise) {
+    recapQuestionGenerator.terminate();
+  }
 }
 
 /* ════════════════════════════════════════════
@@ -2427,37 +2555,43 @@ function configureLiveQuestionsDevice() {
    recall drops on long inputs — small coherent chunks + cross-chunk dedup.
 ═══════════════════════════════════════════ */
 const NOTES_SYSTEM =
-`You are a meeting note-taker. Read the transcript and write down EVERY substantive item worth remembering. Be thorough and exhaustive — a real meeting yields several decisions, tasks, facts, and open questions. Do not stop early or summarize; list each item separately.
+`You are taking meeting minutes. Read the transcript excerpt and produce an outline section for it, the way a good note-taker would — grouped under what the discussion was about, not as loose bullets.
 
-Rewrite each item as a short note in your own words, under 18 words. Skip greetings, filler, and small talk.
+FIRST output one topic line naming what this part of the meeting was about, in 2-6 words:
+TOPIC| topic name
 
-Tag each note with the ONE category that fits best:
+THEN write down EVERY substantive item worth remembering, one per line, in your own words, under 18 words each. Be thorough — a real meeting yields several decisions, tasks, facts, and open questions. Skip greetings, filler, and small talk.
+
+Tag each item with the ONE category that fits best:
 - DECISION = a choice the group settled on or agreed to
-- ACTION = a task someone will do; name the owner and any deadline
+- ACTION = a task someone will do. Shape the text as: who — what they will do — by when (owner and deadline only if stated)
 - KEYPOINT = an important fact, metric, number, or finding
 - QUESTION = an open question or an unresolved blocker
 
-Write one note per line in this exact shape:
+Each line has this exact shape:
 CATEGORY| note text
-where CATEGORY is literally one of: DECISION, ACTION, KEYPOINT, QUESTION.
+where CATEGORY is literally one of: TOPIC, DECISION, ACTION, KEYPOINT, QUESTION.
 
-Extract ONLY from the transcript — never invent. Cover every distinct item. If nothing is note-worthy, output exactly: NONE
-Output only the note lines.`;
+Extract ONLY from the transcript — never invent, never guess owners or dates. If nothing is note-worthy, output exactly: NONE
+Output only the lines.`;
 
 const NOTE_CAT_MAP = { DECISION: 'decisions', ACTION: 'actions', KEYPOINT: 'keypoints', QUESTION: 'questions' };
 
-/** Parse Qwen note output. Accepts "TAG| text", "TAG: text", or "TAG - text"; drops NONE/empties. */
+/** Parse Qwen note output. Accepts "TAG| text", "TAG: text", or "TAG - text"; drops NONE/empties.
+    TOPIC lines set the outline heading carried by every following note from the same chunk. */
 function parseQwenNotes(raw) {
   const out = [];
+  let topic = null;
   for (let line of String(raw || '').replace(/<think>[\s\S]*?<\/think>/g, '').split('\n')) {
     line = line.trim();
     if (!line || /^none\.?$/i.test(line)) continue;
-    const m = line.match(/^[-*\s]*(DECISION|ACTION|KEYPOINT|QUESTION)\s*[|:\-–]\s*(.+)$/i);
+    const m = line.match(/^[-*\s]*(TOPIC|DECISION|ACTION|KEYPOINT|QUESTION)\s*[|:\-–]\s*(.+)$/i);
     if (!m) continue;
     let text = m[2].replace(/^["'\s]+|["'\s]+$/g, '').trim();
     if (text.length < 4 || /^none\.?$/i.test(text)) continue;
+    if (m[1].toUpperCase() === 'TOPIC') { topic = text.length > 60 ? text.slice(0, 59).trim() + '…' : text; continue; }
     if (text.length > 160) text = text.slice(0, 159).trim() + '…';
-    out.push({ cat: NOTE_CAT_MAP[m[1].toUpperCase()], text });
+    out.push({ cat: NOTE_CAT_MAP[m[1].toUpperCase()], text, topic });
   }
   return out;
 }
@@ -4806,12 +4940,16 @@ class App {
     body.appendChild(section);
 
     const s = loadSettings();
-    const sel = (Array.isArray(s.smartqTypes) && s.smartqTypes.length) ? s.smartqTypes : ['clarify', 'risk', 'followup'];
+    const sel = (Array.isArray(s.smartqTypes) && s.smartqTypes.length) ? s.smartqTypes : SmartQ.TYPES.map(t => t.key);
+    const RECAP_RULES = ` Each question must reference something actually discussed, ask exactly one thing, and be answerable by someone who was in the meeting. One per line. No numbering, no preamble, no quotes.`;
     const PROMPTS = {
-      clarify:  { label: 'Clarifying',       system: `From the meeting transcript, produce up to 3 sharp CLARIFYING questions the user should still get answered — gaps or ambiguities left open. One per line. No numbering, no preamble, no quotes.` },
-      risk:     { label: "Devil's Advocate", system: `From the meeting transcript, produce up to 3 pointed questions that challenge the decisions made or expose risks and unexamined assumptions. One per line. No numbering, no preamble, no quotes.` },
-      followup: { label: 'Follow-up',        system: `From the meeting transcript, produce up to 3 FOLLOW-UP questions that pin down concrete next steps, owners, or deadlines. One per line. No numbering, no preamble, no quotes.` },
+      clarify:  { label: 'Clarifying',       system: `You were an engaged participant in this meeting. Produce up to 3 CLARIFYING questions still worth getting answered — ambiguities or gaps that will block execution if left unresolved.` + RECAP_RULES },
+      risk:     { label: "Devil's Advocate", system: `You were an engaged participant in this meeting. Produce up to 3 pointed questions that challenge the decisions made — the assumption most likely to be wrong, the risk nobody priced in, or the constraint everyone glossed over.` + RECAP_RULES },
+      followup: { label: 'Follow-up',        system: `You were an engaged participant in this meeting. Produce up to 3 FOLLOW-UP questions that turn talk into work: pin down the owner, the deadline, or what "done" looks like for things left vague.` + RECAP_RULES },
+      coverage: { label: 'Not Covered',      system: `You were an engaged participant in this meeting. Compare what was discussed against what this kind of work normally requires, and produce up to 3 questions that raise important things the meeting did not discuss at all.` + RECAP_RULES },
+      deepen:   { label: 'Push Further',     system: `You were an engaged participant in this meeting. Pick the most promising ideas that were only briefly mentioned, and produce up to 3 questions that develop those specific ideas into something concrete and more ambitious.` + RECAP_RULES },
     };
+    syncRecapGeneratorToLive();   // reuse the live model's cached weights (no second download)
     const stillOpen = OpenQs.openTexts();
     const ctx = transcript.slice(-4000);  // cap recap context
 
@@ -4859,10 +4997,11 @@ class App {
     // meetings, grow the chunk so the count (and WebGPU latency) stays bounded (~18 chunks).
     const target = Math.max(500, Math.ceil(transcript.length / 18));
     const chunks = chunkTranscript(transcript, target).slice(0, 22);
+    syncRecapGeneratorToLive();   // reuse the live model's cached weights (no second download)
     let notes = [];
     try {
       for (const chunk of chunks) {
-        const r = await recapQuestionGenerator.generate(chunk, { system: NOTES_SYSTEM, maxTokens: 256 });
+        const r = await recapQuestionGenerator.generate(chunk, { system: NOTES_SYSTEM, maxTokens: 288 });
         notes.push(...parseQwenNotes(r.question));
       }
     } catch (e) {
@@ -4872,17 +5011,25 @@ class App {
 
     const sec = mount.querySelector('.ai-notes');
     if (!sec) return;  // modal closed before generation finished
-    const groups = [
-      { cat: 'decisions', label: 'Decisions',     cls: 'decisions' },
-      { cat: 'actions',   label: 'Action Items',  cls: 'actions'   },
-      { cat: 'keypoints', label: 'Key Points',    cls: 'keypoints' },
-      { cat: 'questions', label: 'Open Questions', cls: 'questions' },
-    ];
+    // Meeting-minutes outline: chronological topic sections (notes arrive in chunk
+    // order) with per-item category chips, then a consolidated Action Items register —
+    // actions repeat there because that's where people look for them afterwards.
+    const CAT_CHIP = { decisions: 'Decision', actions: 'Action', keypoints: 'Key point', questions: 'Question' };
+    const topics = [];
+    for (const n of notes) {
+      const label = n.topic || 'Discussion';
+      const last = topics[topics.length - 1];
+      if (last && last.label.toLowerCase() === label.toLowerCase()) last.items.push(n);
+      else topics.push({ label, items: [n] });
+    }
+    const item = (n) => `<div class="summary-item"><span class="note-chip ${n.cat}">${CAT_CHIP[n.cat]}</span>${esc(n.text)}</div>`;
     let body = '';
-    for (const g of groups) {
-      const items = notes.filter(n => n.cat === g.cat);
-      if (!items.length) continue;
-      body += `<div class="ai-notes-group"><div class="ai-notes-group-label ${g.cls}">${g.label}</div>${items.map(n => `<div class="summary-item">${esc(n.text)}</div>`).join('')}</div>`;
+    for (const t of topics) {
+      body += `<div class="ai-notes-group"><div class="ai-notes-group-label keypoints">${esc(t.label)}</div>${t.items.map(item).join('')}</div>`;
+    }
+    const actions = notes.filter(n => n.cat === 'actions');
+    if (actions.length) {
+      body += `<div class="ai-notes-group"><div class="ai-notes-group-label actions">Action Items</div>${actions.map(n => `<div class="summary-item">${esc(n.text)}</div>`).join('')}</div>`;
     }
     sec.innerHTML = HEADER + (body || '<div class="modal-empty">No notes surfaced on-device.</div>');
   }
@@ -4964,7 +5111,11 @@ function copySummaryMarkdown() {
     md += '\n\n## AI Meeting Notes (on-device · Qwen)\n';
     for (const g of groups) {
       const label = g.querySelector('.ai-notes-group-label')?.textContent.trim() || '';
-      const items = [...g.querySelectorAll('.summary-item')].map(i => `- ${i.textContent.trim()}`);
+      const items = [...g.querySelectorAll('.summary-item')].map(i => {
+        const chip = i.querySelector('.note-chip');
+        const text = chip ? i.textContent.replace(chip.textContent, '').trim() : i.textContent.trim();
+        return chip ? `- **${chip.textContent.trim()}** — ${text}` : `- ${text}`;
+      });
       if (items.length) md += `\n### ${label}\n${items.join('\n')}\n`;
     }
     md = md.trim();
@@ -6171,14 +6322,22 @@ const DEFAULT_SETTINGS = {
   timeFormat: 'elapsed',     // 'elapsed' (12:34) | 'clock' (1:23 PM) | 'ago' (2m ago)
   showSpeakerLabels: true,   // per-line speaker tags visible (toggle via the "Speakers:" header)
   smartQuestions: true,                              // live "ask now" teleprompter (Qwen WASM)
-  smartqTypes: ['clarify', 'risk', 'followup'],      // which question types rotate
+  smartqTypes: ['clarify', 'risk', 'followup', 'coverage', 'deepen'],  // which question types rotate
   smartqRecap: true,                                 // WebGPU question recap when recording stops
+  qwenModel: 'auto',         // AI model for questions/notes: 'auto' (device-tier pick) | '0.6b' | '1.7b'
 };
 
 function loadSettings() {
   try {
     const saved = localStorage.getItem('silentNotetaker_settings');
-    return saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : { ...DEFAULT_SETTINGS };
+    const s = saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : { ...DEFAULT_SETTINGS };
+    // Migration: users who never customized question types (saved set == the pre-'coverage'/
+    // 'deepen' default trio) pick up the new defaults; anyone else keeps their choice.
+    const old = ['clarify', 'risk', 'followup'];
+    if (Array.isArray(s.smartqTypes) && s.smartqTypes.length === 3 && old.every(k => s.smartqTypes.includes(k))) {
+      s.smartqTypes = [...DEFAULT_SETTINGS.smartqTypes];
+    }
+    return s;
   } catch (_) {
     return { ...DEFAULT_SETTINGS };
   }
@@ -6278,6 +6437,15 @@ function openSettings() {
       <div class="settings-section">
         <div class="settings-section-title">Smart Questions</div>
 
+        <label class="settings-row">
+          <span class="settings-label">AI model<span class="settings-hint">Powers questions &amp; notes. ${esc(GpuCaps.detail)} → auto picks ${QWEN_MODELS[resolveQwenModelKey('webgpu')].label.split(' — ')[0]}${(() => { try { return localStorage.getItem('qwenAutoDemoted') === '1' ? ' (1.7B previously failed to initialize here)' : ''; } catch (_) { return ''; } })()}</span></span>
+          <select id="settingQwenModel" class="settings-select">
+            <option value="auto" ${(!s.qwenModel || s.qwenModel === 'auto') ? 'selected' : ''}>Auto — pick for this device (recommended)</option>
+            <option value="0.6b" ${s.qwenModel === '0.6b' ? 'selected' : ''}>${QWEN_MODELS['0.6b'].label}</option>
+            <option value="1.7b" ${s.qwenModel === '1.7b' ? 'selected' : ''}>${QWEN_MODELS['1.7b'].label}</option>
+          </select>
+        </label>
+
         <label class="settings-row settings-toggle-row">
           <span class="settings-label">Live "Ask Now" Teleprompter<span class="settings-hint">On-device Qwen suggests a question to ask — WASM, no GPU contention</span></span>
           <input type="checkbox" id="settingSmartQ" class="settings-toggle" ${s.smartQuestions !== false ? 'checked' : ''}>
@@ -6286,9 +6454,11 @@ function openSettings() {
         <div class="settings-row" style="flex-direction:column; align-items:stretch; gap:9px;">
           <span class="settings-label">Question types<span class="settings-hint">Which kinds rotate in the teleprompter &amp; recap</span></span>
           <div class="settings-checks">
-            <label class="settings-check"><input type="checkbox" id="settingSmartQClarify" ${(s.smartqTypes||[]).includes('clarify') ? 'checked' : ''}> Clarifying — surface a gap or ambiguity</label>
+            <label class="settings-check"><input type="checkbox" id="settingSmartQClarify" ${(s.smartqTypes||[]).includes('clarify') ? 'checked' : ''}> Clarifying — pin down the ambiguity that bites later</label>
             <label class="settings-check"><input type="checkbox" id="settingSmartQRisk" ${(s.smartqTypes||[]).includes('risk') ? 'checked' : ''}> Devil's advocate — challenge a decision / expose a risk</label>
-            <label class="settings-check"><input type="checkbox" id="settingSmartQFollowup" ${(s.smartqTypes||[]).includes('followup') ? 'checked' : ''}> Follow-up — push to a next step or owner</label>
+            <label class="settings-check"><input type="checkbox" id="settingSmartQFollowup" ${(s.smartqTypes||[]).includes('followup') ? 'checked' : ''}> Follow-up — convert talk into owner, deadline, "done"</label>
+            <label class="settings-check"><input type="checkbox" id="settingSmartQCoverage" ${(s.smartqTypes||[]).includes('coverage') ? 'checked' : ''}> Not covered — what this meeting is missing</label>
+            <label class="settings-check"><input type="checkbox" id="settingSmartQDeepen" ${(s.smartqTypes||[]).includes('deepen') ? 'checked' : ''}> Push further — develop the best idea one level up</label>
           </div>
         </div>
 
@@ -6328,9 +6498,10 @@ function applySettings() {
     autoSummary: document.getElementById('settingSummary').checked,
     aiFinalNotes: document.getElementById('settingAiNotes').checked,
     smartQuestions: document.getElementById('settingSmartQ').checked,
-    smartqTypes: ['clarify', 'risk', 'followup'].filter(k =>
+    smartqTypes: ['clarify', 'risk', 'followup', 'coverage', 'deepen'].filter(k =>
       document.getElementById('settingSmartQ' + k.charAt(0).toUpperCase() + k.slice(1)).checked),
     smartqRecap: document.getElementById('settingSmartQRecap').checked,
+    qwenModel: document.getElementById('settingQwenModel').value,
     bridgeUrl: document.getElementById('settingBridgeUrl').value.trim() || DEFAULT_SETTINGS.bridgeUrl,
   };
   saveSettings(s);
@@ -6364,6 +6535,10 @@ function resetSettings() {
    Boot
 ═══════════════════════════════════════════ */
 const app = new App();
+
+// Probe device capability once at boot (async, ~ms) so the AI-model auto-default and
+// the Settings hint are resolved before anyone records or opens Settings.
+GpuCaps.probe();
 
 // Auto-fill meeting title with current date/time
 const now = new Date();
