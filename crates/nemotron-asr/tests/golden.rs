@@ -41,10 +41,18 @@ fn transcribes_golden_clip() {
     let golden = Path::new(crate_dir).join("test-assets/golden_transcript.txt");
 
     if !model_dir.join("encoder.onnx").exists() {
+        // LOUD skip banner: a skip must never be misread as a real pass in CI
+        // logs. The test stays green (CI relies on that until a registry-keyed
+        // model cache lands), but the reason is unmistakable.
+        eprintln!("================================================================");
+        eprintln!("  GOLDEN TEST SKIPPED (NOT RUN -- this is NOT a validation pass)");
         eprintln!(
-            "skipping: model weights not found at {} -- download them to run the validation gate",
+            "  reason: model weights not found at {}",
             model_dir.display()
         );
+        eprintln!("  to run for real: symlink or place encoder.onnx +");
+        eprintln!("  decoder_joint_fp32.onnx + tokenizer.model in that dir.");
+        eprintln!("================================================================");
         return;
     }
 
