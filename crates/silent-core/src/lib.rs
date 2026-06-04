@@ -51,17 +51,26 @@ pub mod diarization;
 pub mod engine;
 pub mod error;
 pub mod events;
+pub mod export;
 pub mod ids;
 pub mod notes;
 pub mod questions;
 pub mod registry;
 pub mod session;
 pub mod storage;
+pub mod timestamp;
 
+pub use commands::TimestampMode;
 pub use error::{AsrError, ModelResolveError};
 pub use events::{EngineEvent, EngineStats};
+pub use export::{
+    AiNoteGroup, AiNoteItem, NoteRecord, TranscriptLine, executive_line, history_replay_markdown,
+    notes_to_markdown, summary_markdown_with_ai, transcript_text,
+};
 pub use ids::{ModelId, TimeRange};
+pub use notes::NoteCategory;
 pub use session::{SessionConfig, SessionMachine, SideEffect};
+pub use timestamp::{format_ago, format_clock, format_duration, format_elapsed, format_ms};
 
 /// Version of the UI↔core boundary contract.
 ///

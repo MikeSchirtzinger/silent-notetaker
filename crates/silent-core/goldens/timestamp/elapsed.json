@@ -1,0 +1,76 @@
+{
+ "description": "elapsed mode: formatMs(tsMs - (startTime || tsMs)); startTime 0/null falls back to tsMs",
+ "mode": "elapsed",
+ "cases": [
+  {
+   "tsMs": 0,
+   "startTime": 0,
+   "expected": "00:00"
+  },
+  {
+   "tsMs": 1000,
+   "startTime": 0,
+   "expected": "00:00"
+  },
+  {
+   "tsMs": 5000,
+   "startTime": 5000,
+   "expected": "00:00"
+  },
+  {
+   "tsMs": 10000,
+   "startTime": 5000,
+   "expected": "00:05"
+  },
+  {
+   "tsMs": 65000,
+   "startTime": 5000,
+   "expected": "01:00"
+  },
+  {
+   "tsMs": 125500,
+   "startTime": 5000,
+   "expected": "02:00"
+  },
+  {
+   "tsMs": 5000,
+   "startTime": 65000,
+   "expected": "-1:00"
+  },
+  {
+   "tsMs": 4000,
+   "startTime": 65000,
+   "expected": "-2:-1"
+  },
+  {
+   "tsMs": 64000,
+   "startTime": 65000,
+   "expected": "-1:-1"
+  },
+  {
+   "tsMs": 64500,
+   "startTime": 65000,
+   "expected": "-1:-1"
+  },
+  {
+   "tsMs": 3605000,
+   "startTime": 5000,
+   "expected": "60:00"
+  },
+  {
+   "tsMs": 3661000,
+   "startTime": 0,
+   "expected": "00:00"
+  },
+  {
+   "tsMs": 3661000,
+   "startTime": 1000,
+   "expected": "61:00"
+  },
+  {
+   "tsMs": 905999,
+   "startTime": 5000,
+   "expected": "15:00"
+  }
+ ]
+}

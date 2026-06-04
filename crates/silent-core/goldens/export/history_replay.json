@@ -1,0 +1,23 @@
+{
+ "description": "history replay export (openMeetingDetail): always `- text`, no per-line stamps; empty sections skipped",
+ "input": {
+  "title": "Past Standup",
+  "date": "6/3/2026, 9:00:00 AM",
+  "duration": "12m 3s",
+  "notes": [
+   {
+    "category": "decisions",
+    "text": "Use Turso for local storage"
+   },
+   {
+    "category": "actions",
+    "text": "Bob benchmarks IndexedDB"
+   },
+   {
+    "category": "questions",
+    "text": "Do we need a service worker?"
+   }
+  ]
+ },
+ "expected": "# Past Standup\n**Date:** 6/3/2026, 9:00:00 AM  **Duration:** 12m 3s\n\n## Decisions\n- Use Turso for local storage\n\n## Action Items\n- Bob benchmarks IndexedDB\n\n## Open Questions\n- Do we need a service worker?"
+}

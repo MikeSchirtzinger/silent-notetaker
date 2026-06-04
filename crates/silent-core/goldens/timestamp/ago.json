@@ -1,0 +1,66 @@
+{
+ "description": "ago mode: sec=max(0,floor((now-ts)/1000)); <60s→Ns ago; <60m→Nm ago; else Nh ago; future clamps to 0s",
+ "mode": "ago",
+ "cases": [
+  {
+   "tsMs": 1000000000000,
+   "nowMs": 1000000000000,
+   "expected": "0s ago"
+  },
+  {
+   "tsMs": 999999999999,
+   "nowMs": 1000000000000,
+   "expected": "0s ago"
+  },
+  {
+   "tsMs": 999999999001,
+   "nowMs": 1000000000000,
+   "expected": "0s ago"
+  },
+  {
+   "tsMs": 999999999000,
+   "nowMs": 1000000000000,
+   "expected": "1s ago"
+  },
+  {
+   "tsMs": 999999941000,
+   "nowMs": 1000000000000,
+   "expected": "59s ago"
+  },
+  {
+   "tsMs": 999999940000,
+   "nowMs": 1000000000000,
+   "expected": "1m ago"
+  },
+  {
+   "tsMs": 999999881000,
+   "nowMs": 1000000000000,
+   "expected": "1m ago"
+  },
+  {
+   "tsMs": 999996401000,
+   "nowMs": 1000000000000,
+   "expected": "59m ago"
+  },
+  {
+   "tsMs": 999996400000,
+   "nowMs": 1000000000000,
+   "expected": "1h ago"
+  },
+  {
+   "tsMs": 999992800000,
+   "nowMs": 1000000000000,
+   "expected": "2h ago"
+  },
+  {
+   "tsMs": 999910000000,
+   "nowMs": 1000000000000,
+   "expected": "25h ago"
+  },
+  {
+   "tsMs": 1000000005000,
+   "nowMs": 1000000000000,
+   "expected": "0s ago"
+  }
+ ]
+}

@@ -27,10 +27,15 @@
 //! exercises the pure-Rust [`backup`] logic under native unit tests. The browser
 //! read/migrate round-trip is exercised by `wasm-bindgen-test`
 //! (`tests/browser_idb.rs`), run at wiring time against a live IndexedDB.
+//!
+//! - [`search`] — the meeting-history last-50 listing and title/notes/transcript
+//!   search (Task H3): pure, browser-free policy ported byte-identically from
+//!   `index.html`.
 #![forbid(unsafe_code)]
 
 pub mod backup;
 pub mod error;
+pub mod search;
 
 pub use backup::{Backup, BackupScreenshot, base64_encode};
 pub use error::{Result, StorageError};

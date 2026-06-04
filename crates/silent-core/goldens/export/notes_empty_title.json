@@ -1,0 +1,11 @@
+{
+ "description": "empty/whitespace title falls back to 'Meeting Notes'; no notes → header only after trim",
+ "input": {
+  "title": "   ",
+  "date": "June 4, 2026",
+  "duration": "00:00",
+  "withTime": true,
+  "notes": []
+ },
+ "expected": "# Meeting Notes\n**Date:** June 4, 2026  **Duration:** 00:00"
+}

@@ -214,6 +214,11 @@ pub enum TimestampMode {
 }
 
 impl TimestampMode {
+    /// The cycle order the UI button steps through, matching the JS
+    /// `TIME_FORMATS = ['elapsed', 'clock', 'ago']` (used by `silent-core`'s
+    /// [`crate::timestamp`] history-export helpers).
+    pub const CYCLE: [TimestampMode; 3] = [Self::Elapsed, Self::Clock, Self::Ago];
+
     /// Advance to the next mode in the cycle (`elapsed → clock → ago → elapsed`),
     /// matching index.html's cycle button (Appendix A row 24).
     ///
@@ -243,6 +248,14 @@ impl TimestampMode {
             Self::Clock => "clock",
             Self::Ago => "ago",
         }
+    }
+
+    /// The lowercase string label the UI shows on the format button
+    /// (`tsFormatBtn.textContent = fmt`). Identical to [`Self::as_str`]; provided
+    /// under the H3 export module's name so its call sites read naturally.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        self.as_str()
     }
 }
 

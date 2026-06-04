@@ -1,0 +1,323 @@
+{
+ "description": "candidate set is newest 50; a matching meeting outside the top-50 window is excluded (id 5 dropped, id 55 kept)",
+ "input": {
+  "meetings": [
+   {
+    "id": 1,
+    "title": "M1",
+    "startTime": 1000
+   },
+   {
+    "id": 2,
+    "title": "M2",
+    "startTime": 2000
+   },
+   {
+    "id": 3,
+    "title": "M3",
+    "startTime": 3000
+   },
+   {
+    "id": 4,
+    "title": "M4",
+    "startTime": 4000
+   },
+   {
+    "id": 5,
+    "title": "M5",
+    "startTime": 5000
+   },
+   {
+    "id": 6,
+    "title": "M6",
+    "startTime": 6000
+   },
+   {
+    "id": 7,
+    "title": "M7",
+    "startTime": 7000
+   },
+   {
+    "id": 8,
+    "title": "M8",
+    "startTime": 8000
+   },
+   {
+    "id": 9,
+    "title": "M9",
+    "startTime": 9000
+   },
+   {
+    "id": 10,
+    "title": "M10",
+    "startTime": 10000
+   },
+   {
+    "id": 11,
+    "title": "M11",
+    "startTime": 11000
+   },
+   {
+    "id": 12,
+    "title": "M12",
+    "startTime": 12000
+   },
+   {
+    "id": 13,
+    "title": "M13",
+    "startTime": 13000
+   },
+   {
+    "id": 14,
+    "title": "M14",
+    "startTime": 14000
+   },
+   {
+    "id": 15,
+    "title": "M15",
+    "startTime": 15000
+   },
+   {
+    "id": 16,
+    "title": "M16",
+    "startTime": 16000
+   },
+   {
+    "id": 17,
+    "title": "M17",
+    "startTime": 17000
+   },
+   {
+    "id": 18,
+    "title": "M18",
+    "startTime": 18000
+   },
+   {
+    "id": 19,
+    "title": "M19",
+    "startTime": 19000
+   },
+   {
+    "id": 20,
+    "title": "M20",
+    "startTime": 20000
+   },
+   {
+    "id": 21,
+    "title": "M21",
+    "startTime": 21000
+   },
+   {
+    "id": 22,
+    "title": "M22",
+    "startTime": 22000
+   },
+   {
+    "id": 23,
+    "title": "M23",
+    "startTime": 23000
+   },
+   {
+    "id": 24,
+    "title": "M24",
+    "startTime": 24000
+   },
+   {
+    "id": 25,
+    "title": "M25",
+    "startTime": 25000
+   },
+   {
+    "id": 26,
+    "title": "M26",
+    "startTime": 26000
+   },
+   {
+    "id": 27,
+    "title": "M27",
+    "startTime": 27000
+   },
+   {
+    "id": 28,
+    "title": "M28",
+    "startTime": 28000
+   },
+   {
+    "id": 29,
+    "title": "M29",
+    "startTime": 29000
+   },
+   {
+    "id": 30,
+    "title": "M30",
+    "startTime": 30000
+   },
+   {
+    "id": 31,
+    "title": "M31",
+    "startTime": 31000
+   },
+   {
+    "id": 32,
+    "title": "M32",
+    "startTime": 32000
+   },
+   {
+    "id": 33,
+    "title": "M33",
+    "startTime": 33000
+   },
+   {
+    "id": 34,
+    "title": "M34",
+    "startTime": 34000
+   },
+   {
+    "id": 35,
+    "title": "M35",
+    "startTime": 35000
+   },
+   {
+    "id": 36,
+    "title": "M36",
+    "startTime": 36000
+   },
+   {
+    "id": 37,
+    "title": "M37",
+    "startTime": 37000
+   },
+   {
+    "id": 38,
+    "title": "M38",
+    "startTime": 38000
+   },
+   {
+    "id": 39,
+    "title": "M39",
+    "startTime": 39000
+   },
+   {
+    "id": 40,
+    "title": "M40",
+    "startTime": 40000
+   },
+   {
+    "id": 41,
+    "title": "M41",
+    "startTime": 41000
+   },
+   {
+    "id": 42,
+    "title": "M42",
+    "startTime": 42000
+   },
+   {
+    "id": 43,
+    "title": "M43",
+    "startTime": 43000
+   },
+   {
+    "id": 44,
+    "title": "M44",
+    "startTime": 44000
+   },
+   {
+    "id": 45,
+    "title": "M45",
+    "startTime": 45000
+   },
+   {
+    "id": 46,
+    "title": "M46",
+    "startTime": 46000
+   },
+   {
+    "id": 47,
+    "title": "M47",
+    "startTime": 47000
+   },
+   {
+    "id": 48,
+    "title": "M48",
+    "startTime": 48000
+   },
+   {
+    "id": 49,
+    "title": "M49",
+    "startTime": 49000
+   },
+   {
+    "id": 50,
+    "title": "M50",
+    "startTime": 50000
+   },
+   {
+    "id": 51,
+    "title": "M51",
+    "startTime": 51000
+   },
+   {
+    "id": 52,
+    "title": "M52",
+    "startTime": 52000
+   },
+   {
+    "id": 53,
+    "title": "M53",
+    "startTime": 53000
+   },
+   {
+    "id": 54,
+    "title": "M54",
+    "startTime": 54000
+   },
+   {
+    "id": 55,
+    "title": "M55",
+    "startTime": 55000
+   },
+   {
+    "id": 56,
+    "title": "M56",
+    "startTime": 56000
+   },
+   {
+    "id": 57,
+    "title": "M57",
+    "startTime": 57000
+   },
+   {
+    "id": 58,
+    "title": "M58",
+    "startTime": 58000
+   },
+   {
+    "id": 59,
+    "title": "M59",
+    "startTime": 59000
+   },
+   {
+    "id": 60,
+    "title": "M60",
+    "startTime": 60000
+   }
+  ],
+  "notes": [
+   {
+    "meetingId": 5,
+    "text": "needle"
+   },
+   {
+    "meetingId": 55,
+    "text": "needle"
+   }
+  ],
+  "chunks": [],
+  "query": "needle",
+  "limit": 50
+ },
+ "expected": [
+  55
+ ]
+}

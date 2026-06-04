@@ -47,6 +47,30 @@ pub enum NoteCategory {
     Questions,
 }
 
+impl NoteCategory {
+    /// Section render order, matching the JS `sections` array in
+    /// `notesToMarkdown` / `openMeetingDetail`. Used by the [`crate::export`]
+    /// formatters.
+    pub const ORDER: [NoteCategory; 4] = [
+        NoteCategory::Decisions,
+        NoteCategory::Actions,
+        NoteCategory::Keypoints,
+        NoteCategory::Questions,
+    ];
+
+    /// The Markdown header for this category, matching the JS section headers
+    /// (`## Decisions`, `## Action Items`, `## Key Points`, `## Open Questions`).
+    #[must_use]
+    pub fn markdown_header(self) -> &'static str {
+        match self {
+            NoteCategory::Decisions => "## Decisions",
+            NoteCategory::Actions => "## Action Items",
+            NoteCategory::Keypoints => "## Key Points",
+            NoteCategory::Questions => "## Open Questions",
+        }
+    }
+}
+
 /// A command the UI issues to the notes core (UI → core).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]

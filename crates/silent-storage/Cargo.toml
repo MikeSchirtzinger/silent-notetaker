@@ -73,7 +73,9 @@ serde-wasm-bindgen = "0.6"
 [dev-dependencies]
 # The browser IDB round-trip (`tests/browser_idb.rs`) runs via
 # `wasm-pack test --headless --chrome`. Native `cargo test` runs the pure-Rust
-# unit tests in `src/` (serde/backup/normalization logic).
+# unit tests in `src/` (serde/backup/normalization logic). The H3 search golden
+# tests (`tests/search_golden.rs`) deserialize JS-generated fixtures under
+# `goldens/search/` via the `serde`/`serde_json` already in `[dependencies]`.
 wasm-bindgen-test = "0.3"
 
 # The browser IDB test is wasm32-only and needs a live IndexedDB; declared

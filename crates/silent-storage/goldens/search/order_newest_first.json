@@ -1,0 +1,69 @@
+{
+ "description": "empty query → all candidates newest-first by startTime (ids 4,5,2,3,1)",
+ "input": {
+  "meetings": [
+   {
+    "id": 1,
+    "title": "Kickoff",
+    "startTime": 1000
+   },
+   {
+    "id": 2,
+    "title": "Design Review",
+    "startTime": 3000
+   },
+   {
+    "id": 3,
+    "title": "Budget Sync",
+    "startTime": 2000
+   },
+   {
+    "id": 4,
+    "title": "RETRO (Q2)",
+    "startTime": 5000
+   },
+   {
+    "id": 5,
+    "title": "",
+    "startTime": 4000
+   }
+  ],
+  "notes": [
+   {
+    "meetingId": 1,
+    "text": "Decided to use Rust"
+   },
+   {
+    "meetingId": 3,
+    "text": "Privacy is the wedge"
+   },
+   {
+    "meetingId": 5,
+    "text": "Action: ship the registry"
+   }
+  ],
+  "chunks": [
+   {
+    "meetingId": 2,
+    "text": "let us talk about the diarization pipeline"
+   },
+   {
+    "meetingId": 4,
+    "text": "the retrospective covered velocity"
+   },
+   {
+    "meetingId": 5,
+    "text": "we should pin every model revision"
+   }
+  ],
+  "query": "",
+  "limit": 50
+ },
+ "expected": [
+  4,
+  5,
+  2,
+  3,
+  1
+ ]
+}

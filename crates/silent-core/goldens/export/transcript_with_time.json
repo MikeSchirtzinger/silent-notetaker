@@ -1,0 +1,25 @@
+{
+ "description": "copyTranscript with timestamps on → `[ts] text`; empty lines dropped",
+ "input": {
+  "withTime": true,
+  "lines": [
+   {
+    "time": "00:00",
+    "text": "Hello everyone."
+   },
+   {
+    "time": "00:03",
+    "text": "  Let's begin.  "
+   },
+   {
+    "time": "00:05",
+    "text": "   "
+   },
+   {
+    "time": "",
+    "text": "No stamp line"
+   }
+  ]
+ },
+ "expected": "[00:00] Hello everyone.\n[00:03] Let's begin.\n[00:05] \nNo stamp line"
+}
