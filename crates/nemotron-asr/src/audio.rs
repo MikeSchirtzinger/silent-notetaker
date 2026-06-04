@@ -1,6 +1,6 @@
 //! Log-mel front-end for the Nemotron streaming encoder.
 //!
-//! This is a direct port of the NeMo / `parakeet-rs` preprocessing pipeline.
+//! This is a direct port of the `NeMo` / `parakeet-rs` preprocessing pipeline.
 //! The chain is, in order:
 //!
 //! 1. Pre-emphasis filter (`y[0] = x[0]`, `y[i] = x[i] - 0.97 * x[i-1]`).
@@ -9,7 +9,7 @@
 //!    first `WIN_LENGTH` samples, the remainder of the `N_FFT` buffer zero.
 //! 4. Real FFT, then the **power** spectrum (`|X|^2`, via `norm_sqr`).
 //! 5. Projection through a Slaney-normalised mel filterbank `[N_MELS, N_FFT/2+1]`.
-//! 6. `ln(mel + 2^-24)` — NeMo's additive `log_zero_guard`.
+//! 6. `ln(mel + 2^-24)` — `NeMo`'s additive `log_zero_guard`.
 //!
 //! Crucially the Nemotron path does **no** per-feature normalization; the raw
 //! log-mel values are fed straight to the encoder. Getting any of these steps
@@ -32,6 +32,12 @@ use crate::constants::{
 /// Accepts 16-bit PCM or 32-bit float WAV. Multi-channel audio is downmixed to
 /// mono by averaging channels. The sample rate is validated against
 /// [`SAMPLE_RATE`]; resampling is the caller's responsibility.
+///
+/// # Errors
+///
+/// Returns [`crate::error::Error::Audio`] if the file cannot be opened or read,
+/// if the format is unsupported, or if the sample rate does not match
+/// [`SAMPLE_RATE`].
 pub fn load_wav_mono<P: AsRef<Path>>(path: P) -> Result<Vec<f32>> {
     let mut reader = hound::WavReader::open(path)?;
     let spec = reader.spec();
@@ -43,21 +49,26 @@ pub fn load_wav_mono<P: AsRef<Path>>(path: P) -> Result<Vec<f32>> {
         )));
     }
 
+    let channels = spec.channels as usize;
     let samples: Vec<f32> = match spec.sample_format {
         hound::SampleFormat::Float => reader
             .samples::<f32>()
             .collect::<std::result::Result<Vec<_>, _>>()?,
         hound::SampleFormat::Int => reader
             .samples::<i16>()
-            .map(|s| s.map(|s| s as f32 / 32768.0))
+            .map(|s| s.map(|s| f32::from(s) / 32_768.0))
             .collect::<std::result::Result<Vec<_>, _>>()?,
     };
 
-    let channels = spec.channels as usize;
     if channels > 1 {
         Ok(samples
             .chunks(channels)
-            .map(|c| c.iter().sum::<f32>() / channels as f32)
+            .map(|c| {
+                // DSP downmix: channel count (≤ 8) fits exactly in f32.
+                #[allow(clippy::cast_precision_loss)]
+                let n = channels as f32;
+                c.iter().sum::<f32>() / n
+            })
             .collect())
     } else {
         Ok(samples)
@@ -65,6 +76,7 @@ pub fn load_wav_mono<P: AsRef<Path>>(path: P) -> Result<Vec<f32>> {
 }
 
 /// Apply a first-order pre-emphasis filter: `y[i] = x[i] - coef * x[i-1]`.
+#[must_use]
 pub fn apply_preemphasis(audio: &[f32], coef: f32) -> Vec<f32> {
     if audio.is_empty() {
         return Vec::new();
@@ -83,6 +95,8 @@ pub fn apply_preemphasis(audio: &[f32], coef: f32) -> Vec<f32> {
 /// window used by some STFT libraries — the symmetric form is what the model
 /// was trained on.
 fn hann_window(n: usize) -> Vec<f32> {
+    // DSP window: frame index i <= WIN_LENGTH = 400 fits within f32 mantissa.
+    #[allow(clippy::cast_precision_loss)]
     (0..n)
         .map(|i| 0.5 - 0.5 * ((2.0 * PI * i as f32) / (n as f32 - 1.0)).cos())
         .collect()
@@ -114,6 +128,16 @@ fn mel_to_hz_slaney(mel: f64) -> f64 {
 ///
 /// Equivalent to `librosa.filters.mel(sr, n_fft, n_mels, fmin=0, fmax=sr/2,
 /// htk=False, norm="slaney")`.
+///
+/// # DSP casting notes
+///
+/// Intermediate arithmetic uses `f64` (matching Python/librosa precision).
+/// The arguments `n_fft` <= 512, `n_mels` <= 128, `sample_rate` = 16 000
+/// are small constants that fit exactly in `f64`. The final filterbank is
+/// stored as `f32`, so `f64 as f32` narrowings are intentional precision
+/// reductions that match the numpy/librosa f32 output the model was trained on.
+#[must_use]
+#[allow(clippy::cast_precision_loss)] // see DSP casting notes in doc comment
 pub fn create_mel_filterbank(n_fft: usize, n_mels: usize, sample_rate: usize) -> Array2<f32> {
     let freq_bins = n_fft / 2 + 1;
     let mut filterbank = Array2::<f32>::zeros((n_mels, freq_bins));
@@ -137,7 +161,10 @@ pub fn create_mel_filterbank(n_fft: usize, n_mels: usize, sample_rate: usize) ->
         for (k, &freq) in fft_freqs.iter().enumerate() {
             let lower = (freq - mel_points[i]) / fdiff[i];
             let upper = (mel_points[i + 2] - freq) / fdiff[i + 1];
-            filterbank[[i, k]] = 0.0f64.max(lower.min(upper)) as f32;
+            #[allow(clippy::cast_possible_truncation)] // f64->f32 intentional; see doc
+            {
+                filterbank[[i, k]] = 0.0f64.max(lower.min(upper)) as f32;
+            }
         }
     }
 
@@ -145,7 +172,10 @@ pub fn create_mel_filterbank(n_fft: usize, n_mels: usize, sample_rate: usize) ->
     for i in 0..n_mels {
         let enorm = 2.0 / (mel_points[i + 2] - mel_points[i]);
         for k in 0..freq_bins {
-            filterbank[[i, k]] *= enorm as f32;
+            #[allow(clippy::cast_possible_truncation)] // f64->f32 intentional; see doc
+            {
+                filterbank[[i, k]] *= enorm as f32;
+            }
         }
     }
 
@@ -155,9 +185,13 @@ pub fn create_mel_filterbank(n_fft: usize, n_mels: usize, sample_rate: usize) ->
 /// Short-time Fourier transform producing a **power** spectrogram
 /// `[n_fft/2 + 1, num_frames]`.
 ///
-/// We use a proper real FFT (`realfft` over RustFFT) rather than a naive DFT:
+/// We use a proper real FFT (`realfft` over `RustFFT`) rather than a naive DFT:
 /// the model was trained on numerically-correct spectrograms and a naive DFT
 /// produces wrong bins, which collapses the decoder to all-blank output.
+///
+/// # Errors
+///
+/// Returns [`crate::error::Error::Feature`] if the FFT plan fails.
 fn stft(audio: &[f32], n_fft: usize, hop_length: usize, win_length: usize) -> Result<Array2<f32>> {
     let pad = n_fft / 2;
     let mut padded = vec![0.0f32; pad];
@@ -218,6 +252,7 @@ impl Default for MelFrontend {
 
 impl MelFrontend {
     /// Build the front-end with the Nemotron mel parameters.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             mel_basis: create_mel_filterbank(N_FFT, N_MELS, SAMPLE_RATE),
@@ -228,6 +263,10 @@ impl MelFrontend {
     ///
     /// Output shape is `[N_MELS, num_frames]`. Returns an empty `[N_MELS, 0]`
     /// array for empty input.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::Feature`] if the FFT computation fails.
     pub fn log_mel(&self, audio: &[f32]) -> Result<Array2<f32>> {
         if audio.is_empty() {
             return Ok(Array2::zeros((N_MELS, 0)));
@@ -241,9 +280,11 @@ impl MelFrontend {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)] // unwrap in tests is idiomatic; failures are bugs, not user errors
     use super::*;
 
     fn sine(freq_hz: f32, n: usize) -> Vec<f32> {
+        #[allow(clippy::cast_precision_loss)] // test helper; precision irrelevant
         (0..n)
             .map(|i| (2.0 * PI * freq_hz * i as f32 / SAMPLE_RATE as f32).sin())
             .collect()

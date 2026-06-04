@@ -2,14 +2,20 @@
 //!
 //! This ports `parakeet-rs`'s `transcribe_audio` + `decode_chunk` (the same
 //! logic the Python golden harness mirrors). The encoder is run over fixed
-//! 56-frame mel chunks — each prefixed with 9 lookback frames — and its cache
-//! is carried forward. A greedy RNN-T loop then emits up to 10 tokens per
-//! encoder frame, advancing the LSTM state and `last_token` only when a
+//! 56-frame mel chunks -- each prefixed with 9 lookback frames -- and its
+//! cache is carried forward. A greedy RNN-T loop then emits up to 10 tokens
+//! per encoder frame, advancing the LSTM state and `last_token` only when a
 //! non-blank token is produced.
+//!
+//! Mel-chunk construction is delegated to
+//! [`crate::chunk_core::build_offline_mel_chunk`] (shared with the wasm
+//! backend) and `argmax` to [`crate::chunk_core::argmax`] (shared with the
+//! wasm backend).
 
 use ndarray::Array3;
 
 use crate::audio::MelFrontend;
+use crate::chunk_core::{argmax, build_offline_mel_chunk};
 use crate::constants::{
     BLANK_ID, CHUNK_SIZE, DECODER_LSTM_DIM, LSTM_LAYERS, MAX_SYMBOLS_PER_STEP, N_MELS,
     PRE_ENCODE_CACHE, VOCAB_SIZE,
@@ -29,6 +35,8 @@ struct DecodeState {
 
 impl DecodeState {
     fn fresh() -> Self {
+        // BLANK_ID = 1024, which is well within i32 range (max 2^31 - 1).
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         Self {
             encoder_cache: EncoderCache::new(),
             state_1: Array3::zeros((LSTM_LAYERS, 1, DECODER_LSTM_DIM)),
@@ -70,13 +78,18 @@ impl<B: AsrBackend> StreamingAsr<B> {
     /// Transcribe a full audio buffer offline.
     ///
     /// Computes the complete log-mel spectrogram, then slides a 56-frame window
-    /// (`buffer_idx += CHUNK_SIZE`) over it. Each chunk is built as
-    /// `[1, N_MELS, PRE_ENCODE_CACHE + CHUNK_SIZE]`: the first
-    /// [`PRE_ENCODE_CACHE`] slots are lookback frames from the previous chunk
-    /// (zero for the first chunk), followed by up to [`CHUNK_SIZE`] main frames.
-    /// The encoder runs with `length = PRE_ENCODE_CACHE + main_len`, its
-    /// `*_next` caches are carried forward, and [`Self::decode_chunk`] greedily
-    /// decodes the returned encoder frames.
+    /// (`buffer_idx += CHUNK_SIZE`) over it. Each chunk is built by
+    /// [`build_offline_mel_chunk`]: the first [`PRE_ENCODE_CACHE`] slots are
+    /// lookback frames from the previous chunk (zero for the first chunk),
+    /// followed by up to [`CHUNK_SIZE`] main frames. The encoder runs with
+    /// `length = PRE_ENCODE_CACHE + main_len`, its `*_next` caches are carried
+    /// forward, and [`Self::decode_chunk`] greedily decodes the returned
+    /// encoder frames.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error`] if the mel frontend fails, if the
+    /// encoder or decoder session fails, or if a tensor shape is inconsistent.
     pub fn transcribe_audio(&mut self, audio: &[f32]) -> Result<String> {
         self.reset();
 
@@ -95,30 +108,12 @@ impl<B: AsrBackend> StreamingAsr<B> {
             let chunk_end = (buffer_idx + CHUNK_SIZE).min(total_frames);
             let main_len = chunk_end - buffer_idx;
 
-            // Layout is [N_MELS, expected_size] flattened row-major
-            // (mel-major), matching the encoder's [1, N_MELS, T] input.
-            let mut chunk_data = vec![0.0f32; N_MELS * expected_size];
-
-            // Pre-encode lookback: the 9 frames immediately preceding this
-            // chunk (only available from the second chunk onward).
-            if chunk_idx > 0 && buffer_idx >= PRE_ENCODE_CACHE {
-                let cache_start = buffer_idx - PRE_ENCODE_CACHE;
-                for f in 0..PRE_ENCODE_CACHE {
-                    for m in 0..N_MELS {
-                        chunk_data[m * expected_size + f] = mel[[m, cache_start + f]];
-                    }
-                }
-            }
-
-            // Main frames.
-            for f in 0..main_len {
-                for m in 0..N_MELS {
-                    chunk_data[m * expected_size + PRE_ENCODE_CACHE + f] = mel[[m, buffer_idx + f]];
-                }
-            }
+            let chunk_data = build_offline_mel_chunk(&mel, chunk_idx, buffer_idx, main_len);
 
             let mel_chunk = Array3::from_shape_vec((1, N_MELS, expected_size), chunk_data)
                 .map_err(|e| Error::Feature(format!("failed to build mel chunk: {e}")))?;
+            // PRE_ENCODE_CACHE + main_len <= 65, safely fits in i64.
+            #[allow(clippy::cast_possible_wrap)]
             let chunk_length = (PRE_ENCODE_CACHE + main_len) as i64;
 
             let enc =
@@ -126,7 +121,10 @@ impl<B: AsrBackend> StreamingAsr<B> {
                     .run_encoder(&mel_chunk, chunk_length, &self.state.encoder_cache)?;
             self.state.encoder_cache = enc.cache;
 
-            let tokens = self.decode_chunk(&enc.encoded, enc.encoded_len as usize)?;
+            // encoded_len is a non-negative encoder output; <= CHUNK_SIZE = 56.
+            #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+            let enc_frames = enc.encoded_len as usize;
+            let tokens = self.decode_chunk(&enc.encoded, enc_frames)?;
             all_tokens.extend(tokens);
 
             buffer_idx += CHUNK_SIZE;
@@ -144,6 +142,11 @@ impl<B: AsrBackend> StreamingAsr<B> {
     /// blank (`argmax == BLANK_ID`) ends the frame; a non-blank token is
     /// emitted and the LSTM state plus `last_token` are advanced. State is
     /// **not** updated on blanks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error`] if the decoder session fails or a
+    /// tensor extraction fails.
     pub fn decode_chunk(&mut self, encoded: &Array3<f32>, enc_frames: usize) -> Result<Vec<usize>> {
         let mut tokens = Vec::new();
 
@@ -169,7 +172,11 @@ impl<B: AsrBackend> StreamingAsr<B> {
                 }
 
                 tokens.push(max_idx);
-                self.state.last_token = max_idx as i32;
+                // max_idx <= VOCAB_SIZE = 1024, which fits safely in i32.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                {
+                    self.state.last_token = max_idx as i32;
+                }
                 self.state.state_1 = out.state_1;
                 self.state.state_2 = out.state_2;
             }
@@ -179,32 +186,9 @@ impl<B: AsrBackend> StreamingAsr<B> {
     }
 
     /// Detokenize a slice of token ids using the loaded vocabulary.
+    #[must_use]
     pub fn decode_tokens(&self, ids: &[usize]) -> String {
         let valid: Vec<usize> = ids.iter().copied().filter(|&t| t < VOCAB_SIZE).collect();
         self.vocab.decode(&valid)
-    }
-}
-
-/// Index of the maximum element (first on ties), matching `np.argmax`.
-fn argmax(values: &[f32]) -> usize {
-    let mut max_idx = 0;
-    let mut max_val = f32::NEG_INFINITY;
-    for (i, &v) in values.iter().enumerate() {
-        if v > max_val {
-            max_val = v;
-            max_idx = i;
-        }
-    }
-    max_idx
-}
-
-#[cfg(test)]
-mod tests {
-    use super::argmax;
-
-    #[test]
-    fn argmax_returns_first_max_on_ties() {
-        assert_eq!(argmax(&[0.1, 0.5, 0.5, 0.2]), 1);
-        assert_eq!(argmax(&[3.0, 1.0, 2.0]), 0);
     }
 }

@@ -1,6 +1,6 @@
 //! Model and front-end constants for `nemotron-speech-streaming-en-0.6b`.
 //!
-//! These are fixed by the exported ONNX graphs and the NeMo preprocessor; do
+//! These are fixed by the exported ONNX graphs and the `NeMo` preprocessor; do
 //! not change them without re-validating against the golden transcript.
 
 // --- Audio / mel front-end ---
@@ -17,12 +17,12 @@ pub const HOP_LENGTH: usize = 160;
 pub const N_MELS: usize = 128;
 /// Pre-emphasis coefficient.
 pub const PREEMPH: f32 = 0.97;
-/// NeMo additive `log_zero_guard` = 2^-24.
+/// `NeMo` additive `log_zero_guard` = 2^-24.
 pub const LOG_ZERO_GUARD: f32 = 5.960_464_5e-8;
 
 // --- Encoder architecture ---
 
-/// FastConformer encoder layers (cache depth).
+/// `FastConformer` encoder layers (cache depth).
 pub const NUM_ENCODER_LAYERS: usize = 24;
 /// Encoder hidden dimension.
 pub const HIDDEN_DIM: usize = 1024;

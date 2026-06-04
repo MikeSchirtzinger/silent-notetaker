@@ -10,22 +10,26 @@
 //! creation, and outputs must be `.sync(SyncDirection::Rust).await`-ed before
 //! their data is readable from Rust. The synchronous [`crate::model::AsrBackend`]
 //! trait (and the tight synchronous loops in [`crate::streaming`]) cannot drive
-//! that on the browser main thread — there is no blocking `block_on` there.
+//! that on the browser main thread -- there is no blocking `block_on` there.
 //!
-//! So the web path re-implements the *same* cache-aware chunking + greedy RNN-T
+//! So the web path implements the *same* cache-aware chunking + greedy RNN-T
 //! decode as [`crate::streaming::StreamingAsr::transcribe_audio`], in `async`
 //! form, while reusing the unchanged [`crate::audio::MelFrontend`] front-end and
-//! [`crate::vocab::SentencePieceVocab`] detokenizer. The math (mel chunk layout,
-//! encoder length, cache carry-forward, blank handling, state updates) mirrors
-//! the validated native path exactly.
+//! [`crate::vocab::SentencePieceVocab`] detokenizer. The mel-chunk construction
+//! and `argmax` are delegated to [`crate::chunk_core`] -- shared with the native
+//! path so the math (mel chunk layout, encoder length, cache carry-forward, blank
+//! handling, state updates) cannot silently diverge.
 
-use ndarray::{s, Array1, Array3, Array4};
+use ndarray::{Array1, Array3, Array4};
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorRef};
 use ort_web::{sync_outputs, FEATURE_NONE};
 use wasm_bindgen::prelude::*;
 
 use crate::audio::MelFrontend;
+use crate::chunk_core::{
+    argmax, build_offline_mel_chunk, build_streaming_mel_chunk, build_tail_mel_chunk,
+};
 use crate::constants::{
     BLANK_ID, CHUNK_SIZE, CONV_CONTEXT, DECODER_LSTM_DIM, EDGE_GUARD_FRAMES, HIDDEN_DIM,
     HOP_LENGTH, LEFT_CONTEXT, LSTM_LAYERS, MAX_SYMBOLS_PER_STEP, NUM_ENCODER_LAYERS, N_MELS,
@@ -36,7 +40,7 @@ use crate::vocab::SentencePieceVocab;
 /// Initialise the `ort-web` backend (fetches the onnxruntime-web JS + WASM).
 ///
 /// Must be called, and awaited, exactly once before constructing a
-/// [`WasmAsr`]. Uses the CPU build (`FEATURE_NONE`) — `FINDINGS.md` shows this
+/// [`WasmAsr`]. Uses the CPU build (`FEATURE_NONE`) -- `FINDINGS.md` shows this
 /// model runs comfortably in realtime on CPU and WebGPU is actively worse for
 /// this model class. By default `ort-web` fetches its assets from
 /// `cdn.pyke.io`; ensure that origin is permitted by your Content-Security-Policy
@@ -78,6 +82,8 @@ struct WebState {
 
 impl WebState {
     fn fresh() -> Self {
+        // BLANK_ID = 1024, fits safely in i32.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         Self {
             cache_last_channel: Array4::zeros((NUM_ENCODER_LAYERS, 1, LEFT_CONTEXT, HIDDEN_DIM)),
             cache_last_time: Array4::zeros((NUM_ENCODER_LAYERS, 1, HIDDEN_DIM, CONV_CONTEXT)),
@@ -118,6 +124,12 @@ impl WasmAsr {
     ///
     /// This initialises `ort-web` (fetching onnxruntime-web) on first call and
     /// commits both ONNX sessions from memory. Both steps are async.
+    ///
+    /// # Errors
+    ///
+    /// Returns `JsError` if `ort-web` initialisation fails, if either ONNX
+    /// session cannot be built from the provided bytes, or if the tokenizer
+    /// cannot be parsed.
     pub async fn create(
         encoder_onnx: &[u8],
         decoder_onnx: &[u8],
@@ -160,6 +172,10 @@ impl WasmAsr {
     /// `samples` must be 16 kHz mono `f32` in `[-1, 1]`. Returns the full
     /// detokenized transcript. This is the wasm analogue of the validated
     /// native `transcribe_audio`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `JsError` if the mel frontend, encoder, or decoder fails.
     pub async fn transcribe(&mut self, samples: &[f32]) -> Result<String, JsError> {
         self.reset();
         let tokens = self.run_over_audio(samples).await?;
@@ -167,7 +183,7 @@ impl WasmAsr {
         Ok(self.vocab.decode(&valid))
     }
 
-    /// Transcribe an audio chunk incrementally for real-time use — call
+    /// Transcribe an audio chunk incrementally for real-time use -- call
     /// repeatedly with successive slices of mic audio.
     ///
     /// Unlike a naive per-call mel, this **buffers raw audio and recomputes the
@@ -179,10 +195,14 @@ impl WasmAsr {
     ///
     /// The incoming `samples` need not align to encoder-chunk boundaries; this
     /// consumes as many whole 56-frame chunks as the buffer now allows (the
-    /// reference processes at most one per call — we drain all available so a
+    /// reference processes at most one per call -- we drain all available so a
     /// large incoming chunk, e.g. 1 s = ~100 frames, doesn't lag behind).
     /// Returns the text decoded during this call (may be empty if not enough
     /// new audio has accumulated yet).
+    ///
+    /// # Errors
+    ///
+    /// Returns `JsError` if the mel frontend, encoder, or decoder fails.
     pub async fn transcribe_chunk(&mut self, samples: &[f32]) -> Result<String, JsError> {
         let tokens = self.stream_step(samples).await?;
         let mut out = String::new();
@@ -199,10 +219,14 @@ impl WasmAsr {
     /// `transcribe_chunk` only consumes whole 56-frame chunks, so up to the last
     /// `< CHUNK_SIZE` mel frames (< 560 ms of audio) are left unprocessed. Call
     /// this once after the final `transcribe_chunk` to decode that remainder as
-    /// one final partial chunk — mirroring the offline `transcribe_audio`'s last
+    /// one final partial chunk -- mirroring the offline `transcribe_audio`'s last
     /// iteration where `main_len < CHUNK_SIZE`. The carried decode state (encoder
     /// cache, LSTM state, `last_token`) is used as-is; this does **not** reset.
     /// Returns the text decoded from the tail (empty if nothing remained).
+    ///
+    /// # Errors
+    ///
+    /// Returns `JsError` if the mel frontend, encoder, or decoder fails.
     pub async fn finalize(&mut self) -> Result<String, JsError> {
         let tokens = self.flush_tail().await?;
         let mut out = String::new();
@@ -220,8 +244,11 @@ impl WasmAsr {
     /// consume every whole 56-frame chunk now available, recomputing the mel
     /// over the entire retained buffer each pass so chunk boundaries keep real
     /// lookback and no zero-padding seam. Mirrors the reference
-    /// `Nemotron::transcribe_chunk` math (buffer / processed / chunk_idx /
+    /// `Nemotron::transcribe_chunk` math (buffer / processed / `chunk_idx` /
     /// trim), but loops over all newly-available chunks instead of one per call.
+    ///
+    /// Mel-chunk construction is delegated to [`build_streaming_mel_chunk`]
+    /// from [`crate::chunk_core`].
     async fn stream_step(&mut self, samples: &[f32]) -> Result<Vec<usize>, JsError> {
         self.state.audio_buffer.extend_from_slice(samples);
 
@@ -230,7 +257,6 @@ impl WasmAsr {
             return Ok(Vec::new());
         }
 
-        let expected_size = PRE_ENCODE_CACHE + CHUNK_SIZE;
         let mut emitted: Vec<usize> = Vec::new();
 
         loop {
@@ -248,7 +274,7 @@ impl WasmAsr {
 
             // Stop once fewer than a full main chunk of CLEAN new frames
             // remains. The guard keeps the chunk's tail clear of the mel's
-            // right-edge zero-padding zone — frames there are computed against
+            // right-edge zero-padding zone -- frames there are computed against
             // synthetic zeros rather than the audio that arrives next, which
             // corrupts both the decode and the carried encoder cache (see
             // `EDGE_GUARD_FRAMES`). Those frames are re-derived cleanly on a
@@ -259,46 +285,19 @@ impl WasmAsr {
                 break;
             }
 
-            // Build the [1, 128, 65] encoder input: pre-encode lookback + 56
-            // main frames.
-            let mut chunk_data = vec![0.0f32; N_MELS * expected_size];
-            let is_first_chunk = self.state.chunk_idx == 0;
             let main_start = processed_mel_frames;
+            let (chunk_data, chunk_size) = build_streaming_mel_chunk(
+                &full_mel,
+                self.state.chunk_idx,
+                main_start,
+                total_mel_frames,
+            );
 
-            if is_first_chunk {
-                // First chunk: no prior frames, so the 9 lookback slots stay
-                // zero; fill the 56 main frames.
-                for f in 0..CHUNK_SIZE.min(total_mel_frames) {
-                    for m in 0..N_MELS {
-                        chunk_data[m * expected_size + PRE_ENCODE_CACHE + f] = full_mel[[m, f]];
-                    }
-                }
-            } else {
-                // Real pre-encode lookback: the up-to-9 frames immediately
-                // before `main_start` (right-aligned into the lookback slots).
-                let cache_start = main_start.saturating_sub(PRE_ENCODE_CACHE);
-                let cache_frames = main_start - cache_start;
-                let cache_offset = PRE_ENCODE_CACHE - cache_frames;
-                for f in 0..cache_frames {
-                    for m in 0..N_MELS {
-                        chunk_data[m * expected_size + cache_offset + f] =
-                            full_mel[[m, cache_start + f]];
-                    }
-                }
-                // 56 main frames.
-                for f in 0..CHUNK_SIZE.min(total_mel_frames - main_start) {
-                    for m in 0..N_MELS {
-                        chunk_data[m * expected_size + PRE_ENCODE_CACHE + f] =
-                            full_mel[[m, main_start + f]];
-                    }
-                }
-            }
-
-            // A streaming chunk always carries a full 56 main frames, so the
-            // encoder length is the full window (matches the reference, which
-            // passes `expected_size`).
+            // A streaming chunk always carries a full 56 main frames; encoder
+            // length is the full expected window. chunk_size <= 65, fits in i64.
+            #[allow(clippy::cast_possible_wrap)]
             let (encoded, enc_len) = self
-                .run_encoder(&chunk_data, expected_size, expected_size as i64)
+                .run_encoder(&chunk_data, chunk_size, chunk_size as i64)
                 .await?;
             let tokens = self.decode_chunk(&encoded, enc_len).await?;
             emitted.extend(tokens);
@@ -327,6 +326,9 @@ impl WasmAsr {
     /// unconsumed, as one final partial chunk. Mirrors the final iteration of
     /// the offline `transcribe_audio` (`main_len < CHUNK_SIZE`) and the
     /// streaming path's real pre-encode lookback. Carries decode state forward.
+    ///
+    /// Mel-chunk construction is delegated to [`build_tail_mel_chunk`]
+    /// from [`crate::chunk_core`].
     async fn flush_tail(&mut self) -> Result<Vec<usize>, JsError> {
         // Without at least one analysis window there are no mel frames to flush.
         if self.state.audio_buffer.len() < WIN_LENGTH {
@@ -345,32 +347,9 @@ impl WasmAsr {
             return Ok(Vec::new());
         }
 
-        // Build the [1, 128, 65] input: real pre-encode lookback + `available`
-        // (< CHUNK_SIZE) main frames; the unused main slots stay zero.
+        let (chunk_data, chunk_length) = build_tail_mel_chunk(&full_mel, main_start, available);
+
         let expected_size = PRE_ENCODE_CACHE + CHUNK_SIZE;
-        let mut chunk_data = vec![0.0f32; N_MELS * expected_size];
-
-        // Lookback: up to 9 frames before `main_start`, right-aligned. When no
-        // streaming chunk was ever consumed (`main_start == 0`, e.g. a sub-560ms
-        // utterance), there is no prior audio and the lookback slots stay zero,
-        // matching the offline first/only chunk.
-        let cache_start = main_start.saturating_sub(PRE_ENCODE_CACHE);
-        let cache_frames = main_start - cache_start;
-        let cache_offset = PRE_ENCODE_CACHE - cache_frames;
-        for f in 0..cache_frames {
-            for m in 0..N_MELS {
-                chunk_data[m * expected_size + cache_offset + f] = full_mel[[m, cache_start + f]];
-            }
-        }
-        // Main frames (fewer than CHUNK_SIZE).
-        for f in 0..available {
-            for m in 0..N_MELS {
-                chunk_data[m * expected_size + PRE_ENCODE_CACHE + f] =
-                    full_mel[[m, main_start + f]];
-            }
-        }
-
-        let chunk_length = (PRE_ENCODE_CACHE + available) as i64;
         let (encoded, enc_len) = self
             .run_encoder(&chunk_data, expected_size, chunk_length)
             .await?;
@@ -387,6 +366,9 @@ impl WasmAsr {
     /// log-mel of `audio`, slide 56-frame chunks, run the encoder, and greedily
     /// decode. Mirrors `streaming::StreamingAsr::transcribe_audio` exactly,
     /// minus the leading `reset()` (callers decide).
+    ///
+    /// Mel-chunk construction is delegated to [`build_offline_mel_chunk`]
+    /// from [`crate::chunk_core`] -- shared with the native offline path.
     async fn run_over_audio(&mut self, audio: &[f32]) -> Result<Vec<usize>, JsError> {
         let mel = self.frontend.log_mel(audio).map_err(to_js)?;
         let total_frames = mel.shape()[1];
@@ -403,23 +385,10 @@ impl WasmAsr {
             let chunk_end = (buffer_idx + CHUNK_SIZE).min(total_frames);
             let main_len = chunk_end - buffer_idx;
 
-            // [N_MELS, expected_size] flattened mel-major == encoder [1,128,T].
-            let mut chunk_data = vec![0.0f32; N_MELS * expected_size];
+            let chunk_data = build_offline_mel_chunk(&mel, chunk_idx, buffer_idx, main_len);
 
-            if chunk_idx > 0 && buffer_idx >= PRE_ENCODE_CACHE {
-                let cache_start = buffer_idx - PRE_ENCODE_CACHE;
-                for f in 0..PRE_ENCODE_CACHE {
-                    for m in 0..N_MELS {
-                        chunk_data[m * expected_size + f] = mel[[m, cache_start + f]];
-                    }
-                }
-            }
-            for f in 0..main_len {
-                for m in 0..N_MELS {
-                    chunk_data[m * expected_size + PRE_ENCODE_CACHE + f] = mel[[m, buffer_idx + f]];
-                }
-            }
-
+            // PRE_ENCODE_CACHE + main_len <= 65, fits in i64.
+            #[allow(clippy::cast_possible_wrap)]
             let chunk_length = (PRE_ENCODE_CACHE + main_len) as i64;
             let (encoded, enc_len) = self
                 .run_encoder(&chunk_data, expected_size, chunk_length)
@@ -442,6 +411,8 @@ impl WasmAsr {
         expected_size: usize,
         length: i64,
     ) -> Result<(Array3<f32>, usize), JsError> {
+        // N_MELS = 128, expected_size <= 65 -- both fit safely in i64.
+        #[allow(clippy::cast_possible_wrap)]
         let processed_signal =
             TensorRef::from_array_view(([1i64, N_MELS as i64, expected_size as i64], chunk_data))
                 .map_err(to_js)?;
@@ -471,7 +442,7 @@ impl WasmAsr {
             .map_err(|e| JsError::new(&format!("encoder output sync failed: {e}")))?;
 
         let encoded = extract3(&outputs, "encoded")?;
-        let enc_len = extract_i64_scalar(&outputs, "encoded_len")? as usize;
+        let enc_len = extract_i64_scalar(&outputs, "encoded_len")?;
 
         self.state.cache_last_channel = extract4(&outputs, "cache_last_channel_next")?;
         self.state.cache_last_time = extract4(&outputs, "cache_last_time_next")?;
@@ -480,12 +451,19 @@ impl WasmAsr {
             "cache_last_channel_len_next",
         )?]);
 
-        Ok((encoded, enc_len))
+        // enc_len is the encoder's reported frame count -- always non-negative
+        // and <= CHUNK_SIZE (56); safe to cast from i64 to usize.
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let enc_frames = enc_len as usize;
+        Ok((encoded, enc_frames))
     }
 
     /// Greedy RNN-T decode of `enc_frames` encoder frames. Mirrors
     /// `streaming::StreamingAsr::decode_chunk` (up to 10 symbols/frame, blank
     /// breaks the frame, state advances only on non-blank tokens).
+    ///
+    /// `argmax` is delegated to [`crate::chunk_core::argmax`] -- shared with
+    /// the native path.
     async fn decode_chunk(
         &mut self,
         encoded: &Array3<f32>,
@@ -496,10 +474,18 @@ impl WasmAsr {
 
         for t in 0..enc_frames {
             // Encoder frame [1, HIDDEN_DIM, 1].
-            let frame_owned = encoded.slice(s![0, .., t]).to_owned();
+            // `index_axis` avoids the `s![]` macro whose expansion contains
+            // `#[allow(unsafe_code)]` (ndarray internal), incompatible with
+            // `workspace.lints.rust.unsafe_code = "forbid"` (E0453).
+            let frame_owned = encoded
+                .index_axis(ndarray::Axis(0), 0)
+                .index_axis(ndarray::Axis(1), t)
+                .to_owned();
             let frame_vec = frame_owned.to_vec();
 
             for _ in 0..MAX_SYMBOLS_PER_STEP {
+                // HIDDEN_DIM = 1024, fits safely in i64.
+                #[allow(clippy::cast_possible_wrap)]
                 let enc_frame =
                     TensorRef::from_array_view(([1i64, hidden as i64, 1i64], frame_vec.as_slice()))
                         .map_err(to_js)?;
@@ -536,7 +522,11 @@ impl WasmAsr {
                 }
 
                 tokens.push(max_idx);
-                self.state.last_token = max_idx as i32;
+                // max_idx <= VOCAB_SIZE = 1024, fits in i32.
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                {
+                    self.state.last_token = max_idx as i32;
+                }
                 self.state.state_1 = extract3(&outputs, "output_states_1")?;
                 self.state.state_2 = extract3(&outputs, "output_states_2")?;
             }
@@ -553,6 +543,10 @@ fn to_js<E: std::fmt::Display>(e: E) -> JsError {
 }
 
 /// Build an owned `Tensor<f32>` from a 3-D ndarray (states).
+///
+/// LSTM state dimensions are architecture constants (O(hundreds)); they
+/// always fit in i64 -- `usize as i64` wrapping is physically impossible.
+#[allow(clippy::cast_possible_wrap)] // state dims are O(100), fit safely in i64
 fn tensor3(a: &Array3<f32>) -> Result<Tensor<f32>, JsError> {
     let dims = a.shape();
     let shape = [dims[0] as i64, dims[1] as i64, dims[2] as i64];
@@ -561,6 +555,10 @@ fn tensor3(a: &Array3<f32>) -> Result<Tensor<f32>, JsError> {
 }
 
 /// Build an owned `Tensor<f32>` from a 4-D ndarray (encoder caches).
+///
+/// Cache dimensions are architecture constants (O(thousands)); they always
+/// fit in i64 -- `usize as i64` wrapping is physically impossible.
+#[allow(clippy::cast_possible_wrap)] // cache dims are O(1000), fit safely in i64
 fn tensor4(a: &Array4<f32>) -> Result<Tensor<f32>, JsError> {
     let dims = a.shape();
     let shape = [
@@ -580,6 +578,10 @@ fn extract1(outputs: &ort::session::SessionOutputs, name: &str) -> Result<Vec<f3
     Ok(data.to_vec())
 }
 
+/// ONNX tensor shapes are `i64`; we cast to `usize`. The model's architecture
+/// constants (`HIDDEN_DIM`, `LEFT_CONTEXT`, etc.) are always non-negative and
+/// fit in a `usize` -- a shape dim of >= 2^63 is physically impossible.
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 fn extract3(outputs: &ort::session::SessionOutputs, name: &str) -> Result<Array3<f32>, JsError> {
     let (shape, data) = outputs[name]
         .try_extract_tensor::<f32>()
@@ -589,6 +591,8 @@ fn extract3(outputs: &ort::session::SessionOutputs, name: &str) -> Result<Array3
         .map_err(|e| JsError::new(&format!("reshape `{name}`: {e}")))
 }
 
+/// Same cast rationale as `extract3`.
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
 fn extract4(outputs: &ort::session::SessionOutputs, name: &str) -> Result<Array4<f32>, JsError> {
     let (shape, data) = outputs[name]
         .try_extract_tensor::<f32>()
@@ -605,17 +609,4 @@ fn extract_i64_scalar(outputs: &ort::session::SessionOutputs, name: &str) -> Res
     data.first()
         .copied()
         .ok_or_else(|| JsError::new(&format!("`{name}` was empty")))
-}
-
-/// `np.argmax` (first max on ties), matching the native path.
-fn argmax(values: &[f32]) -> usize {
-    let mut max_idx = 0;
-    let mut max_val = f32::NEG_INFINITY;
-    for (i, &v) in values.iter().enumerate() {
-        if v > max_val {
-            max_val = v;
-            max_idx = i;
-        }
-    }
-    max_idx
 }

@@ -86,16 +86,11 @@ console_error_panic_hook = "0.1"
 # calls it, so it is dead code in the wasm binary.
 hound = "3.5"
 
-# TODO-D3: this crate is intended to opt into [workspace.lints] once the D3
-# chunking-loop consolidation is complete and the unsafe_code conflict is
-# resolved. Until then it uses the default lint posture rather than the strict
-# workspace config (pedantic, unwrap_used=deny, unsafe_code=forbid).
-#
-# Reason workspace=true is NOT set here: ndarray's `s!` macro expands with
-# `#[allow(unsafe_code)]` internally, which is incompatible with the workspace
-# `unsafe_code = "forbid"` (Rust forbid cannot be overridden by allow at any
-# lower scope — E0453). D3 will audit unsafe usage, add a documented per-site
-# allow, and flip to workspace lints as part of its deliverables.
+# D3 deliverable: `s![]` macro usage replaced with `index_axis` calls, so
+# the ndarray `unsafe_code` conflict is resolved. The workspace lint bar is
+# now active for this crate; any per-site #[allow] carries a documented reason.
+[lints]
+workspace = true
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"

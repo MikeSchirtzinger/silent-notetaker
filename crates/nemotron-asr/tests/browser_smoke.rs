@@ -7,7 +7,7 @@
 //! - No network fetch to cdn.pyke.io during this test suite.
 //! - No model weights required.
 //!
-//! The vendored-ORT integration test (WasmAsr round-trip) lives in a
+//! The vendored-ORT integration test ([`WasmAsr`] round-trip) lives in a
 //! separate module gated by the `ORT_WEB_VENDOR_BASE_URL` env var at build
 //! time; that part requires a local HTTP server to serve the ORT-web assets
 //! (see docs/research/spike-ci-wasm.md for the full vendoring procedure).

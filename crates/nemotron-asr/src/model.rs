@@ -10,9 +10,6 @@ use ndarray::{Array1, Array3, Array4};
 
 use crate::constants::{CONV_CONTEXT, HIDDEN_DIM, LEFT_CONTEXT, NUM_ENCODER_LAYERS};
 use crate::error::Result;
-// `Error` is only constructed inside the native `OrtBackend` impl.
-#[cfg(not(target_arch = "wasm32"))]
-use crate::error::Error;
 
 /// Cache-aware encoder state carried between streaming chunks.
 ///
@@ -24,7 +21,7 @@ pub struct EncoderCache {
     pub last_channel: Array4<f32>,
     /// `[NUM_ENCODER_LAYERS, 1, HIDDEN_DIM, CONV_CONTEXT]`.
     pub last_time: Array4<f32>,
-    /// `[1]` — number of valid cached frames so far.
+    /// `[1]` -- number of valid cached frames so far.
     pub last_channel_len: Array1<i64>,
 }
 
@@ -37,6 +34,7 @@ impl Default for EncoderCache {
 impl EncoderCache {
     /// A zeroed cache with `last_channel_len = 0`, i.e. the start of an
     /// utterance.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             last_channel: Array4::zeros((NUM_ENCODER_LAYERS, 1, LEFT_CONTEXT, HIDDEN_DIM)),
@@ -74,6 +72,11 @@ pub struct DecoderOutput {
 pub trait AsrBackend {
     /// Run the encoder over one mel chunk `[1, N_MELS, T]` with `length` valid
     /// frames and the given cache state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::Model`] if the ONNX session run fails or
+    /// the output tensors cannot be extracted.
     fn run_encoder(
         &mut self,
         features: &Array3<f32>,
@@ -83,6 +86,11 @@ pub trait AsrBackend {
 
     /// Run one decoder/joint step for a single encoder frame
     /// `[1, HIDDEN_DIM, 1]` and the current `(target_token, state_1, state_2)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::Error::Model`] if the ONNX session run fails or
+    /// the output tensors cannot be extracted.
     fn run_decoder(
         &mut self,
         encoder_frame: &Array3<f32>,
@@ -98,11 +106,13 @@ pub use native::OrtBackend;
 /// Native ONNX Runtime backend (the only module that links `ort`).
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use super::*;
-    use ndarray::Array2;
+    use ndarray::{Array1, Array2, Array3, Array4};
     use ort::session::Session;
     use ort::value::Value;
     use std::path::Path;
+
+    use crate::error::{Error, Result};
+    use crate::model::{AsrBackend, DecoderOutput, EncoderCache, EncoderOutput};
 
     /// Native backend holding the encoder and decoder/joint ONNX sessions.
     pub struct OrtBackend {
@@ -117,6 +127,11 @@ mod native {
         /// `LSTM`) rather than the INT8 `decoder_joint.onnx`, which relies on
         /// the `com.microsoft.DynamicQuantizeLSTM` contrib op that is not
         /// guaranteed to exist in the future `ort-web` WASM build.
+        ///
+        /// # Errors
+        ///
+        /// Returns [`Error::MissingFile`] if either ONNX file is absent, or
+        /// [`Error::Model`] if the ONNX Runtime session cannot be built.
         pub fn from_dir<P: AsRef<Path>>(model_dir: P) -> Result<Self> {
             let dir = model_dir.as_ref();
             let encoder_path = dir.join("encoder.onnx");
@@ -141,6 +156,10 @@ mod native {
 
     /// Extract a tensor output by name into an owned `Vec` plus its `usize`
     /// dimensions.
+    ///
+    /// ONNX tensor shapes are `i64`; we cast to `usize` here. The values are
+    /// always non-negative model architecture constants (`HIDDEN_DIM`,
+    /// `LSTM_LAYERS`, etc.) -- a shape dim of >= 2^63 is physically impossible.
     fn extract_f32(
         outputs: &ort::session::SessionOutputs,
         name: &str,
@@ -148,6 +167,8 @@ mod native {
         let (shape, data) = outputs[name]
             .try_extract_tensor::<f32>()
             .map_err(|e| Error::Model(format!("failed to extract `{name}`: {e}")))?;
+        // Tensor shape dims are always non-negative model constants (see doc).
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let dims = shape.as_ref().iter().map(|&d| d as usize).collect();
         Ok((dims, data.to_vec()))
     }
@@ -159,6 +180,8 @@ mod native {
         let (shape, data) = outputs[name]
             .try_extract_tensor::<i64>()
             .map_err(|e| Error::Model(format!("failed to extract `{name}`: {e}")))?;
+        // Same rationale as extract_f32.
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let dims = shape.as_ref().iter().map(|&d| d as usize).collect();
         Ok((dims, data.to_vec()))
     }
@@ -195,8 +218,9 @@ mod native {
             let last_time =
                 Array4::from_shape_vec((tm_dims[0], tm_dims[1], tm_dims[2], tm_dims[3]), tm_data)?;
 
-            let (cl_dims, cl_data) = extract_i64(&outputs, "cache_last_channel_len_next")?;
-            let last_channel_len = Array1::from_shape_vec(cl_dims[0], cl_data)?;
+            let (chan_len_dims, chan_len_data) =
+                extract_i64(&outputs, "cache_last_channel_len_next")?;
+            let last_channel_len = Array1::from_shape_vec(chan_len_dims[0], chan_len_data)?;
 
             Ok(EncoderOutput {
                 encoded,
@@ -249,11 +273,22 @@ mod native {
 /// `[1, HIDDEN_DIM, 1]` shape the decoder expects.
 ///
 /// Pure `ndarray` (no backend dependency), so it is available on both native
-/// and wasm targets — `streaming.rs` uses it on native, and the wasm decode
-/// loop slices frames the same way.
+/// and wasm targets.
+///
+/// # Errors
+///
+/// Returns [`crate::error::Error::Model`] if the shape conversion fails
+/// (indicates a bug in the encoder output shape).
 pub(crate) fn encoder_frame(encoded: &Array3<f32>, t: usize) -> Result<Array3<f32>> {
-    use ndarray::s;
+    use ndarray::Axis;
     let hidden = encoded.shape()[1];
-    let frame = encoded.slice(s![0, .., t]).to_owned();
+    // Remove the batch dim (axis 0, index 0), then remove the time dim
+    // (axis 1, index t) -- avoids the `s![]` macro whose expansion contains
+    // an ndarray-internal `#[allow(unsafe_code)]` that conflicts with
+    // `workspace.lints.rust.unsafe_code = "forbid"` (E0453).
+    let frame = encoded
+        .index_axis(Axis(0), 0)
+        .index_axis(Axis(1), t)
+        .to_owned();
     Ok(frame.to_shape((1, hidden, 1))?.to_owned())
 }

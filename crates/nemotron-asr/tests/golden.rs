@@ -9,6 +9,9 @@
 //! test suite (`wasm-pack test`). The wasm32 equivalent lives in
 //! `tests/browser_smoke.rs`.
 #![cfg(not(target_arch = "wasm32"))]
+// `expect` is appropriate in tests: a failure is a test infrastructure problem,
+// not a user error, and the panic message names the failing step clearly.
+#![allow(clippy::expect_used)]
 //!
 //! Requires the model files under `models/` (gitignored). The test is skipped
 //! with a clear message if they are absent, so `cargo test` stays green in
@@ -39,7 +42,7 @@ fn transcribes_golden_clip() {
 
     if !model_dir.join("encoder.onnx").exists() {
         eprintln!(
-            "skipping: model weights not found at {} — download them to run the validation gate",
+            "skipping: model weights not found at {} -- download them to run the validation gate",
             model_dir.display()
         );
         return;

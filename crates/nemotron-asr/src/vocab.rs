@@ -26,6 +26,11 @@ pub struct SentencePieceVocab {
 
 impl SentencePieceVocab {
     /// Load and parse a `tokenizer.model` (SentencePiece `ModelProto`) file.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Tokenizer`] if the file cannot be opened, read, or
+    /// parsed, or if the resulting vocabulary is empty.
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let mut file = File::open(path.as_ref())
             .map_err(|e| Error::Tokenizer(format!("failed to open tokenizer.model: {e}")))?;
@@ -41,6 +46,11 @@ impl SentencePieceVocab {
     /// and handed in directly (there is no filesystem). [`Self::from_file`]
     /// simply reads the file and delegates here, so both paths share identical
     /// parsing.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Tokenizer`] if the protobuf is malformed or the
+    /// vocabulary is empty.
     pub fn from_bytes(data: &[u8]) -> Result<Self> {
         let pieces = parse_model_proto(data)?;
         if pieces.is_empty() {
@@ -52,11 +62,13 @@ impl SentencePieceVocab {
     }
 
     /// Number of pieces in the vocabulary.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.pieces.len()
     }
 
     /// Whether the vocabulary is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.pieces.is_empty()
     }
@@ -65,6 +77,7 @@ impl SentencePieceVocab {
     ///
     /// Out-of-range ids are skipped. The `▁` meta symbol becomes a space and a
     /// single leading space (from a word-initial piece) is trimmed.
+    #[must_use]
     pub fn decode(&self, ids: &[usize]) -> String {
         let mut out = String::new();
         for &id in ids {
@@ -77,6 +90,7 @@ impl SentencePieceVocab {
 
     /// Detokenize a single token id (no trimming), useful for streaming
     /// partials.
+    #[must_use]
     pub fn decode_single(&self, id: usize) -> String {
         self.pieces
             .get(id)
@@ -102,6 +116,12 @@ fn parse_model_proto(data: &[u8]) -> Result<Vec<String>> {
             (1, 2) => {
                 let (len, used) = read_varint(&data[pos..])?;
                 pos += used;
+                // The tokenizer.model protobuf is always well-formed (produced
+                // by the sentencepiece library) and the byte lengths it encodes
+                // are small string pieces, never approaching u32::MAX. A
+                // truncation here would only occur on a deliberately malformed
+                // file; the `end > data.len()` guard below catches that case.
+                #[allow(clippy::cast_possible_truncation)]
                 let end = pos + len as usize;
                 if end > data.len() {
                     break;
@@ -133,6 +153,8 @@ fn parse_piece_message(data: &[u8]) -> Result<String> {
         if field_num == 1 && wire_type == 2 {
             let (len, used) = read_varint(&data[pos..])?;
             pos += used;
+            // See comment in parse_model_proto for truncation rationale.
+            #[allow(clippy::cast_possible_truncation)]
             let end = pos + len as usize;
             if end <= data.len() {
                 piece = String::from_utf8_lossy(&data[pos..end]).into_owned();
@@ -159,7 +181,11 @@ fn skip_field(data: &[u8], mut pos: usize, wire_type: u64) -> Result<usize> {
         // length-delimited
         2 => {
             let (len, used) = read_varint(&data[pos..])?;
-            pos += used + len as usize;
+            // Truncation rationale: same as parse_model_proto.
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                pos += used + len as usize;
+            }
         }
         // 32-bit
         5 => pos += 4,
@@ -177,7 +203,7 @@ fn read_varint(data: &[u8]) -> Result<(u64, usize)> {
     // varints are at most 10 bytes for a 64-bit value.
     while pos < data.len() && pos < 10 {
         let byte = data[pos];
-        result |= ((byte & 0x7F) as u64) << shift;
+        result |= u64::from(byte & 0x7F) << shift;
         pos += 1;
         if byte & 0x80 == 0 {
             return Ok((result, pos));

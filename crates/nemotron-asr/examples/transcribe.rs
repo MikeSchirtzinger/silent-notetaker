@@ -26,6 +26,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("model loaded in {:.2}s", load_start.elapsed().as_secs_f64());
 
     let samples = audio::load_wav_mono(&wav_path)?;
+    // sample count and sample rate fit well within f64 mantissa for typical audio files.
+    #[allow(clippy::cast_precision_loss)]
     let audio_secs = samples.len() as f64 / SAMPLE_RATE as f64;
     eprintln!("audio: {audio_secs:.2}s ({} samples)", samples.len());
 
