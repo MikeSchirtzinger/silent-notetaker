@@ -13,18 +13,13 @@
 #   6. cargo audit                                [supply-chain]
 #   7. cargo test -p silent-core export_bindings + git diff --exit-code  [boundary-fresh]
 #   8. wasm-pack test --headless --chrome (browser_smoke)                [browser-wasm, --skip-wasm to skip]
-#   9. cargo run -p xtask -- model-audit          [EXPECTED FAIL until E1 — continue-on-error]
-#  10. cargo run -p xtask -- gen-headers --check  [EXPECTED FAIL until D2 — continue-on-error]
+#   9. cargo run -p xtask -- model-audit          [hard failure — E1 removed titanet.onnx + mel_fb.json]
+#  10. cargo run -p xtask -- gen-headers --check  [hard failure — E1 regenerated _headers]
 #  11. lychee docs/ README.md                     [link-check, --skip-link-check to skip; non-blocking]
 #
-# Expected outcome:
-#   Gates 1–8: GREEN
-#   Gate 9 (model-audit): RED (expected — titanet.onnx + mel_fb.json committed until E1)
-#   Gate 10 (gen-headers): RED (expected — d2-xtask subcommand pending)
+# Expected outcome (post-E1):
+#   Gates 1–10: GREEN
 #   Gate 11 (link-check): non-blocking warning
-#
-# E1 handoff: when E1 removes titanet.onnx + mel_fb.json and D2 ships gen-headers,
-#   flip the two "continue-on-error" gates to hard failures and update this comment.
 
 set -euo pipefail
 
@@ -162,64 +157,17 @@ if [[ "$SKIP_WASM" -eq 1 ]]; then
     results+=("  ${SKIP}            browser-wasm: skipped (--skip-wasm)")
 elif command -v wasm-pack &>/dev/null; then
     echo ""
-    echo -e "${BOLD}==> browser-wasm: vendor ort-web assets + wasm-pack headless Chrome${RESET}"
-
-    # Vendor assets if missing
-    ORT_WEB_VERSION="1.24.3"
-    VENDOR_DIR="${REPO_ROOT}/crates/nemotron-asr/vendor/ort-web-${ORT_WEB_VERSION}"
-    if [[ ! -f "${VENDOR_DIR}/ort.wasm.min.js" ]]; then
-        echo "  Vendoring ort-web assets..."
-        "${REPO_ROOT}/scripts/vendor-ort-web.sh"
-    else
-        echo "  ort-web assets already vendored."
-    fi
-
-    # Start local vendor server
-    python3 -m http.server 19999 --directory "$VENDOR_DIR" &
-    VENDOR_PID=$!
-    for i in $(seq 1 10); do
-        curl -sf http://localhost:19999/ort.wasm.min.js -o /dev/null 2>/dev/null && break
-        sleep 1
-    done
-    echo "  Vendor server running (pid ${VENDOR_PID})."
-
-    # Ensure webdriver.json blocks CDN (copy B3's config)
-    pushd "${REPO_ROOT}/crates/nemotron-asr" > /dev/null
-    ORIG_WEBDRIVER_JSON=""
-    if [[ -f webdriver.json ]]; then
-        ORIG_WEBDRIVER_JSON=$(cat webdriver.json)
-    fi
-    cat > webdriver.json << 'WEBDRIVER_EOF'
-{
-  "goog:chromeOptions": {
-    "args": [
-      "--disable-dev-shm-usage",
-      "--no-sandbox",
-      "--disable-gpu",
-      "--headless=new",
-      "--enable-logging",
-      "--log-level=0",
-      "--host-resolver-rules=MAP cdn.pyke.io 127.0.0.2,MAP signal.pyke.io 127.0.0.2"
-    ]
-  }
-}
-WEBDRIVER_EOF
-
+    echo -e "${BOLD}==> browser-wasm: scripts/browser-wasm-tests.sh (pinned chromedriver)${RESET}"
+    # Delegate to the in-repo script which pins chromedriver to the installed
+    # Chrome's major.minor.build — prevents the driver/browser version mismatch
+    # that broke the original spike runner (chromedriver 149 vs Chrome 148).
     WASM_EXIT=0
-    wasm-pack test --headless --chrome -- --test browser_smoke 2>&1 || WASM_EXIT=$?
-
-    # Restore original webdriver.json
-    if [[ -n "$ORIG_WEBDRIVER_JSON" ]]; then
-        echo "$ORIG_WEBDRIVER_JSON" > webdriver.json
-    fi
-
-    kill "$VENDOR_PID" 2>/dev/null || true
-    popd > /dev/null
+    "${REPO_ROOT}/scripts/browser-wasm-tests.sh" 2>&1 || WASM_EXIT=$?
 
     if [[ "$WASM_EXIT" -eq 0 ]]; then
-        results+=("  ${PASS}             browser-wasm: wasm-pack headless Chrome (browser_smoke)")
+        results+=("  ${PASS}             browser-wasm: wasm-pack headless Chrome (browser_smoke, pinned chromedriver)")
     else
-        results+=("  ${FAIL}             browser-wasm: wasm-pack headless Chrome (browser_smoke)")
+        results+=("  ${FAIL}             browser-wasm: wasm-pack headless Chrome (browser_smoke, pinned chromedriver)")
         overall_ok=0
     fi
 else
@@ -229,39 +177,16 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Gate 9: xtask model-audit (EXPECTED FAIL until E1)
+# Gate 9: xtask model-audit (hard failure — E1 removed titanet.onnx + mel_fb.json)
 # ---------------------------------------------------------------------------
-echo ""
-echo -e "${BOLD}==> xtask-gates: model-audit [EXPECTED FAIL until E1]${RESET}"
-echo "    NOTE: titanet.onnx + mel_fb.json are committed until E1 removes them."
-echo "    This step uses continue-on-error — failure is annotated but does not block."
-echo "    E1: flip this to a hard failure when titanet.onnx/mel_fb.json are removed."
-MODEL_AUDIT_EXIT=0
-cargo run -p xtask -- model-audit 2>&1 || MODEL_AUDIT_EXIT=$?
-if [[ "$MODEL_AUDIT_EXIT" -ne 0 ]]; then
-    echo -e "${YELLOW}  EXPECTED-FAIL: model-audit failed (titanet.onnx + mel_fb.json at root).${RESET}"
-    echo -e "${YELLOW}  Tracked to Task E1. Flip continue-on-error: false after E1 ships.${RESET}"
-    results+=("  ${EXPECTED_FAIL}    xtask-gates: model-audit (titanet.onnx/mel_fb.json — E1 removes these)")
-else
-    echo -e "${GREEN}  model-audit PASSED (weights may have been removed — verify E1 complete).${RESET}"
-    results+=("  ${PASS}  [E1 may be complete?]  xtask-gates: model-audit")
-fi
+run_gate "xtask-gates: model-audit" false \
+    cargo run -p xtask -- model-audit
 
 # ---------------------------------------------------------------------------
-# Gate 10: xtask gen-headers --check (EXPECTED FAIL until D2 ships)
+# Gate 10: xtask gen-headers --check (hard failure — E1 regenerated _headers)
 # ---------------------------------------------------------------------------
-echo ""
-echo -e "${BOLD}==> xtask-gates: gen-headers --check [EXPECTED FAIL until D2/E1]${RESET}"
-echo "    NOTE: d2-xtask is building this subcommand concurrently."
-echo "    E1: flip this to a hard failure once D2 ships and _headers parity is verified."
-GEN_HEADERS_EXIT=0
-cargo run -p xtask -- gen-headers --check --out _headers 2>&1 || GEN_HEADERS_EXIT=$?
-if [[ "$GEN_HEADERS_EXIT" -ne 0 ]]; then
-    echo -e "${YELLOW}  EXPECTED-FAIL: gen-headers --check failed (D2 in progress).${RESET}"
-    results+=("  ${EXPECTED_FAIL}    xtask-gates: gen-headers --check (D2 in progress — continue-on-error)")
-else
-    results+=("  ${PASS}  [D2 may be complete?]  xtask-gates: gen-headers --check")
-fi
+run_gate "xtask-gates: gen-headers --check" false \
+    cargo run -p xtask -- gen-headers --check --out _headers
 
 # ---------------------------------------------------------------------------
 # Gate 11: Link check (non-blocking)

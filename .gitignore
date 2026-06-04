@@ -28,6 +28,9 @@ token
 # Cloudflare Pages deploy bundle (assembled by deploy-cloudflare.sh)
 /dist/
 
+# Locally downloaded chromedriver binaries (browser-wasm-tests.sh caches these here)
+/vendor/chromedriver/
+
 # Presenter notes — on-stage cheat card, not for the public repo
 DEMO.md
 

@@ -27,11 +27,32 @@ ASSETS=(
 )
 
 # SHA-256 hashes from B3 spike verification (2026-06-04).
-declare -A EXPECTED_HASHES=(
-    ["ort.wasm.min.js"]="4043d2deda6a2e2fc783afc2b06d984068808181b88d451862c1230c433fce7a"
-    ["ort-wasm-simd-threaded.wasm"]="be0e129949062ad50290ef94683fac8be5bb6156f709e030b7a5f1661a2f6c17"
-    ["ort-wasm-simd-threaded.mjs"]="5687566b1bc1c8cf628d76c2ddb16b2a3b81a7997273d4666564880495088e57"
+# Stored as parallel arrays instead of an associative array with dotted keys
+# to avoid zsh warnings on keys containing '.' characters.
+HASH_KEYS=(
+    "ort.wasm.min.js"
+    "ort-wasm-simd-threaded.wasm"
+    "ort-wasm-simd-threaded.mjs"
 )
+HASH_VALS=(
+    "4043d2deda6a2e2fc783afc2b06d984068808181b88d451862c1230c433fce7a"
+    "be0e129949062ad50290ef94683fac8be5bb6156f709e030b7a5f1661a2f6c17"
+    "5687566b1bc1c8cf628d76c2ddb16b2a3b81a7997273d4666564880495088e57"
+)
+
+# Lookup function: get_hash <asset-name>
+get_hash() {
+    local name="$1"
+    local i
+    for i in "${!HASH_KEYS[@]}"; do
+        if [[ "${HASH_KEYS[$i]}" == "$name" ]]; then
+            echo "${HASH_VALS[$i]}"
+            return 0
+        fi
+    done
+    echo ""
+    return 1
+}
 
 mkdir -p "$OUTPUT_DIR"
 
@@ -51,7 +72,7 @@ echo "==> Verifying SHA-256 hashes"
 ALL_OK=1
 for asset in "${ASSETS[@]}"; do
     dest="${OUTPUT_DIR}/${asset}"
-    expected="${EXPECTED_HASHES[$asset]}"
+    expected=$(get_hash "$asset")
     if command -v sha256sum &>/dev/null; then
         actual=$(sha256sum "$dest" | awk '{print $1}')
     else
@@ -78,7 +99,7 @@ if [[ "$ALL_OK" -eq 1 ]]; then
     for asset in "${ASSETS[@]}"; do
         dest="${OUTPUT_DIR}/${asset}"
         size=$(ls -lh "$dest" | awk '{print $5}')
-        hash="${EXPECTED_HASHES[$asset]}"
+        hash=$(get_hash "$asset")
         echo "  ${asset}  ${size}  sha256:${hash:0:16}..."
     done
 else
