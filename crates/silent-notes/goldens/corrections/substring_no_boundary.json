@@ -1,0 +1,15 @@
+{
+ "description": "no word-boundary guard: the pattern matches inside larger words too",
+ "corrections": [
+  [
+   "cat",
+   "dog"
+  ]
+ ],
+ "cases": [
+  {
+   "input": "the cat sat; concatenate the category.",
+   "output": "the dog sat; condogenate the dogegory."
+  }
+ ]
+}

@@ -1,0 +1,19 @@
+{
+ "description": "unicode (BMP) wrong/right words, case-insensitive",
+ "corrections": [
+  [
+   "cafe",
+   "café"
+  ],
+  [
+   "MÜNCHEN",
+   "Munich"
+  ]
+ ],
+ "cases": [
+  {
+   "input": "meet me at the cafe in münchen, the Cafe is nice.",
+   "output": "meet me at the café in Munich, the café is nice."
+  }
+ ]
+}

@@ -1,0 +1,19 @@
+{
+ "description": "corrections apply in insertion order; later ones see earlier output",
+ "corrections": [
+  [
+   "foo",
+   "bar"
+  ],
+  [
+   "bar",
+   "baz"
+  ]
+ ],
+ "cases": [
+  {
+   "input": "foo and bar both end up the same.",
+   "output": "baz and baz both end up the same."
+  }
+ ]
+}

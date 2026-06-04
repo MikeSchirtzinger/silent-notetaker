@@ -1,0 +1,55 @@
+{
+ "description": "regex metachars in the wrong word are escaped to literals",
+ "corrections": [
+  [
+   "c++",
+   "C++"
+  ],
+  [
+   "node.js",
+   "Node.js"
+  ],
+  [
+   "a(b)",
+   "A-B"
+  ],
+  [
+   "$var",
+   "VAR"
+  ],
+  [
+   "a|b",
+   "A_OR_B"
+  ],
+  [
+   "x[1]",
+   "X1"
+  ]
+ ],
+ "cases": [
+  {
+   "input": "I wrote it in c++ not in cxx.",
+   "output": "I wrote it in C++ not in cxx."
+  },
+  {
+   "input": "node.js and nodexjs differ (the dot is literal).",
+   "output": "Node.js and nodexjs differ (the dot is literal)."
+  },
+  {
+   "input": "the token a(b) appears once; aXb does not match.",
+   "output": "the token A-B appears once; aXb does not match."
+  },
+  {
+   "input": "the price is $var dollars.",
+   "output": "the price is VAR dollars."
+  },
+  {
+   "input": "choose a|b from the menu.",
+   "output": "choose A_OR_B from the menu."
+  },
+  {
+   "input": "index x[1] then x.1 stays.",
+   "output": "index X1 then x.1 stays."
+  }
+ ]
+}

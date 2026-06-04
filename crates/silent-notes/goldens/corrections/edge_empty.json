@@ -1,0 +1,23 @@
+{
+ "description": "empty / no-match inputs are returned unchanged",
+ "corrections": [
+  [
+   "zzz",
+   "qqq"
+  ]
+ ],
+ "cases": [
+  {
+   "input": "",
+   "output": ""
+  },
+  {
+   "input": "   ",
+   "output": "   "
+  },
+  {
+   "input": "nothing to fix here",
+   "output": "nothing to fix here"
+  }
+ ]
+}

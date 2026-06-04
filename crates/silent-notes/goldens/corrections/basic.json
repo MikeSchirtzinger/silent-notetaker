@@ -1,0 +1,23 @@
+{
+ "description": "basic case-insensitive global replacement of a mis-heard name",
+ "corrections": [
+  [
+   "kuber netes",
+   "Kubernetes"
+  ]
+ ],
+ "cases": [
+  {
+   "input": "We deployed it to kuber netes yesterday.",
+   "output": "We deployed it to Kubernetes yesterday."
+  },
+  {
+   "input": "Kuber Netes scales well, and kuber netes is stable.",
+   "output": "Kubernetes scales well, and Kubernetes is stable."
+  },
+  {
+   "input": "No match here at all.",
+   "output": "No match here at all."
+  }
+ ]
+}

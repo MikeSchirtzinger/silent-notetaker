@@ -1,0 +1,15 @@
+{
+ "description": "global flag replaces every occurrence; insensitive flag ignores case",
+ "corrections": [
+  [
+   "jira",
+   "Linear"
+  ]
+ ],
+ "cases": [
+  {
+   "input": "jira JIRA Jira jIrA tracks the work in jira.",
+   "output": "Linear Linear Linear Linear tracks the work in Linear."
+  }
+ ]
+}

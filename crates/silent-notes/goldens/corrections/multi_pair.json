@@ -1,0 +1,19 @@
+{
+ "description": "several plain-word corrections applied to one line",
+ "corrections": [
+  [
+   "teh",
+   "the"
+  ],
+  [
+   "wrng",
+   "right"
+  ]
+ ],
+ "cases": [
+  {
+   "input": "teh quick brown fox; wrng becomes right.",
+   "output": "the quick brown fox; right becomes right."
+  }
+ ]
+}
