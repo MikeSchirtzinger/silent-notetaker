@@ -4,7 +4,12 @@ audio/
 models/
 artifacts/
 js/node_modules/
-js/ref/
+# js/ref/ heavy outputs are ignored in bulk; synthetic golden fixtures are tracked.
+# (Per goldens convention: small, stable, deterministic reference data stay in repo.)
+js/ref/*
+!js/ref/synthetic_spk1_sine440.json
+!js/ref/synthetic_spk2_sine880.json
+!js/ref/synthetic_spk3_noise.json
 js/titanet.onnx
 *.onnx
 *.flac
