@@ -22,6 +22,10 @@
 //!   Phase 3 trigger-extraction policy: categorized live notes, the four section
 //!   counters, and open-question resolution (Appendix A rows 16, 18). The policy
 //!   itself lives in `silent-notes`.
+//! - [`corrections`] — `CorrectionCommand` (UI → core) and `CorrectionEvent`
+//!   (core → UI) for the Phase 3 word-corrections policy (Appendix A row 25):
+//!   the add/remove/set commands and the changed-map event. The application
+//!   policy lives in `silent-notes`.
 //! - [`registry`] — the Hugging Face model registry types (PRD R4): the repo
 //!   stores typed model metadata, never weights. The registry drives engine
 //!   selection, CSP generation, the egress manifest, license display, and cache
@@ -47,6 +51,7 @@
 //! wherever a newtype is transparent, so ts-rs emits the correct alias.
 
 pub mod commands;
+pub mod corrections;
 pub mod diarization;
 pub mod engine;
 pub mod error;
@@ -101,6 +106,7 @@ pub const BOUNDARY_CONTRACT_VERSION: u32 = 1;
 )]
 mod ts_bindings {
     use crate::commands::{SessionEvent, SessionState, StopHooks, TimestampMode, UiCommand};
+    use crate::corrections::{Correction, CorrectionCommand, CorrectionEvent};
     use crate::diarization::{
         DiarizationCommand, DiarizationEvent, RelabelEntry, SpeakerDescriptor,
     };
@@ -153,6 +159,9 @@ mod ts_bindings {
             NoteEvent,
             NoteCategory,
             NoteCounters,
+            Correction,
+            CorrectionCommand,
+            CorrectionEvent,
             QuestionCommand,
             QuestionEvent,
             QuestionType,
@@ -200,6 +209,9 @@ mod ts_bindings {
             "NoteEvent.ts",
             "NoteCategory.ts",
             "NoteCounters.ts",
+            "Correction.ts",
+            "CorrectionCommand.ts",
+            "CorrectionEvent.ts",
             "QuestionCommand.ts",
             "QuestionEvent.ts",
             "QuestionType.ts",
