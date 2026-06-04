@@ -1,0 +1,140 @@
+# deny.toml — cargo-deny 0.19.x configuration for the Silent Notetaker workspace.
+#
+# Checked by CI job `supply-chain` via `cargo deny check`.
+# Run locally with: cargo deny check
+#
+# Sections:
+#   [graph]     — dependency graph filtering
+#   [advisories]— RustSec advisory database (CVEs, unmaintained, yanked)
+#   [licenses]  — allowed SPDX license expressions
+#   [bans]      — banned crates + duplicate-version policy
+#   [sources]   — allowed crate registry origins
+#
+# Rationale for every exception is documented inline.
+# Conforms to cargo-deny 0.19 schema (vulnerability/unmaintained/yanked/notice
+# top-level fields were removed in 0.15+ — see the ignore list for per-advisory
+# opt-outs instead).
+# ---------------------------------------------------------------------------
+
+[graph]
+# Check the full graph (workspace + transitive deps).
+# dev-deps included: ts-rs (bindings gate) + tempfile (xtask tests) must be clean.
+exclude-dev = false
+
+# ---------------------------------------------------------------------------
+# Advisories — RustSec advisory database
+# ---------------------------------------------------------------------------
+[advisories]
+# Advisory database is fetched automatically by cargo-deny.
+# Add specific RUSTSEC advisory IDs to ignore only with documented rationale:
+#
+#   ignore = [
+#     { id = "RUSTSEC-YYYY-NNNN", reason = "..." },
+#   ]
+#
+# No ignores at this time — a clean advisory record is a quality signal for
+# the nemotron-asr crates.io publish (PRD R10).
+ignore = []
+
+# ---------------------------------------------------------------------------
+# Licenses — SPDX expressions
+# ---------------------------------------------------------------------------
+[licenses]
+# The workspace itself is MIT OR Apache-2.0. We require all dependencies to be
+# under OSI-approved permissive or weak-copyleft licenses. GPL-family licenses
+# are rejected to avoid contaminating the published crates (especially
+# nemotron-asr which targets crates.io).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",   # LLVM/Rust standard library components
+    "ISC",                               # common for crypto/TLS libs (e.g. ring)
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "Unicode-DFS-2016",                  # Unicode data tables in std/unicode-ident
+    "Unicode-3.0",                       # Unicode character data (newer unicode crates)
+    "Zlib",                              # compression libs
+    "MPL-2.0",                           # weak copyleft, file-scoped — acceptable for dep use
+    "CC0-1.0",                           # public domain equivalent
+    "0BSD",                              # zero-clause BSD
+    "CDLA-Permissive-2.0",              # Community Data License Agreement Permissive 2.0
+                                         # used by webpki-root-certs (transitive via ureq →
+                                         # ort-sys download-binaries feature). Permissive
+                                         # data license acceptable for TLS cert bundling.
+    "OpenSSL",                           # OpenSSL license (for openssl-sys, build-only dep
+                                         # via ort-sys → ureq → native-tls → openssl-sys)
+]
+
+# 0.8 is cargo-deny's default; lower only if a crate has a non-standard header.
+confidence-threshold = 0.8
+
+# No per-crate license exceptions at this time.
+# Add exceptions with:
+#   [[licenses.exceptions]]
+#   allow = ["LicenseRef-proprietary"]
+#   crate = "some-crate@0.x"
+#   reason = "..."
+
+[licenses.private]
+# Workspace-only crates (publish = false) are excluded from license checks.
+ignore = true
+
+# ---------------------------------------------------------------------------
+# Bans — duplicate versions, banned crates
+# ---------------------------------------------------------------------------
+[bans]
+# Warn on multiple versions of the same crate. We have known acceptable
+# duplicates (ort RC pinning, toml version split) documented in skip below.
+multiple-versions = "warn"
+
+# Wildcards in version requirements are a quality issue for published crates.
+wildcards = "warn"
+
+highlight = "all"
+
+workspace-default-features = "allow"
+external-default-features = "allow"
+
+# Crates that are explicitly banned from the dependency tree.
+# NOTE: openssl/openssl-sys are NOT banned here because ort-sys (the build
+# script for the ONNX Runtime native download) pulls native-tls → openssl
+# as a build-time-only dependency. This is acceptable: it only runs during
+# cargo build on native targets (never in the wasm32 artifact or at runtime
+# in the browser). Ban openssl if/when ort migrates to rustls-based fetching.
+# See: ort-sys → ureq → native-tls → openssl (build only, non-wasm)
+deny = []
+
+# Acceptable duplicate version skips (all documented).
+skip = [
+    # ort =2.0.0-rc.12 is pinned in nemotron-asr for stability (the RC API is
+    # the only one ort-web 0.2.1 supports). If a workspace dep pulls in a newer
+    # ort in the future, the two versions coexist intentionally.
+    # Remove when nemotron-asr migrates off the RC pin (Task D3/K4).
+    { crate = "ort", reason = "nemotron-asr pins ort =2.0.0-rc.12 (required by ort-web 0.2.1). Intentional dual-version until D3/K4 migrates off the RC." },
+
+    # toml 0.8 (workspace pin) vs toml 0.5 which some older transitive deps may pull.
+    { crate = "toml", reason = "toml 0.8 is the workspace pin; older transitive deps may pull 0.5.x. Acceptable until those deps upgrade." },
+
+    # syn 1 vs 2 — very common in proc-macro dependency trees.
+    { crate = "syn", reason = "syn 1.x and 2.x coexist in proc-macro dependency trees; this is a widely accepted ecosystem situation." },
+]
+
+# Skip the ort ecosystem subtree to avoid false positives from ort's own
+# internal pinned transitive deps.
+skip-tree = [
+    { crate = "ort", reason = "ort RC ecosystem has internal pinned transitive deps that create acceptable duplicates." },
+]
+
+# ---------------------------------------------------------------------------
+# Sources — allowed crate registry origins
+# ---------------------------------------------------------------------------
+[sources]
+# Only allow crates from crates.io. No git dependencies in production crates
+# (they complicate reproducibility and cargo publish).
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# No git source exceptions at this time.
+# Add with:
+#   [[sources.allow-git]] — but prefer crates.io versions for all deps.

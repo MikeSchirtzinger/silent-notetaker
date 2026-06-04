@@ -1,0 +1,428 @@
+# CI: Silent Notetaker — Rust workspace gates
+#
+# Jobs (in dependency order — all run on every PR + push to rust-refactor/main):
+#
+#   1. core-gates        — fmt / check / test / clippy -D warnings (workspace)
+#   2. supply-chain      — cargo-deny (licenses/advisories/bans) + cargo-audit
+#   3. browser-wasm      — wasm-pack headless Chrome smoke tests (vendored ort-web assets)
+#   4. boundary-fresh    — export_bindings freshness gate (C1's contract check)
+#   5. xtask-gates       — model-audit + gen-headers --check
+#   6. link-check        — docs + registry link validation (non-blocking)
+#
+# NOTE: xtask-gates uses continue-on-error: true for model-audit and gen-headers
+# because d2-xtask (Task D2) is building those subcommands concurrently and
+# because model-audit INTENTIONALLY FAILS today (titanet.onnx + mel_fb.json are
+# committed at root until E1 removes them). See "E1: flip continue-on-error to
+# false" markers in the xtask-gates job.
+#
+# Toolchain: pinned via rust-toolchain.toml (1.95.0, components: rustfmt clippy
+# rust-src, target: wasm32-unknown-unknown). The dtolnay/rust-toolchain action
+# reads this file automatically when no `toolchain:` is specified.
+
+name: CI
+
+on:
+  push:
+    branches:
+      - rust-refactor
+      - main
+  pull_request:
+    branches:
+      - rust-refactor
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # ort-web 1.24.3 vendored assets (same version as B3 spike).
+  ORT_WEB_VERSION: "1.24.3"
+  ORT_WEB_BASE_URL: "https://cdn.pyke.io/0/pyke:ort-rs/web@1.24.3"
+
+# ---------------------------------------------------------------------------
+# Job 1: Core gates — fmt / check / test / clippy
+# ---------------------------------------------------------------------------
+jobs:
+  core-gates:
+    name: "Core gates (fmt / check / test / clippy)"
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml is auto-detected; pins 1.95.0 + wasm32 target.
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          components: "rustfmt,clippy,rust-src"
+          targets: "wasm32-unknown-unknown"
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # --- Format ---
+      - name: cargo fmt --all --check
+        run: cargo fmt --all --check
+
+      # --- Check (native + wasm32 for workspace members that target wasm) ---
+      - name: cargo check --workspace --all-targets
+        run: cargo check --workspace --all-targets
+
+      # --- Test ---
+      # golden.rs skips gracefully without models/ (the weights are not committed).
+      # browser_smoke.rs is wasm32-only and is skipped here (browser-wasm job handles it).
+      - name: cargo test --workspace --all-targets
+        run: cargo test --workspace --all-targets
+
+      # --- Clippy ---
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Supply chain — cargo-deny + cargo-audit
+  # (cargo-semver-checks comes at K4 when publishing — stub below)
+  # ---------------------------------------------------------------------------
+  supply-chain:
+    name: "Supply chain (cargo-deny + cargo-audit)"
+    runs-on: ubuntu-latest
+    needs: core-gates
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-registry-
+
+      # cargo-deny: license / advisory / ban checks (deny.toml at repo root).
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - name: cargo deny check
+        run: cargo deny check
+
+      # cargo-audit: advisory database scan for known CVEs.
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit
+        run: cargo audit
+
+      # K4: cargo-semver-checks — uncomment when nemotron-asr is ready to publish.
+      # - name: Install cargo-semver-checks
+      #   uses: taiki-e/install-action@v2
+      #   with:
+      #     tool: cargo-semver-checks
+      # - name: cargo semver-checks (nemotron-asr)
+      #   run: cargo semver-checks check-release -p nemotron-asr
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Browser WASM — wasm-pack headless Chrome (B3 draft adapted)
+  # ---------------------------------------------------------------------------
+  browser-wasm:
+    name: "Browser WASM (wasm-pack headless Chrome, vendored ort-web)"
+    runs-on: ubuntu-latest
+    needs: core-gates
+    defaults:
+      run:
+        working-directory: crates/nemotron-asr
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain + wasm32 target
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          targets: "wasm32-unknown-unknown"
+
+      - name: Cache Cargo registry + wasm target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      # --- Vendor ort-web runtime assets ---
+      # Cache key = ORT_WEB_VERSION (content-addressed by version tag on cdn.pyke.io).
+      # 3 files: ort.wasm.min.js (~50 KB), ort-wasm-simd-threaded.wasm (~12 MB),
+      # ort-wasm-simd-threaded.mjs (~24 KB). Well within Cloudflare's 25 MB/file limit.
+      - name: Cache vendored ort-web assets
+        id: cache-ort-web
+        uses: actions/cache@v4
+        with:
+          path: crates/nemotron-asr/vendor/ort-web-${{ env.ORT_WEB_VERSION }}
+          key: ort-web-${{ env.ORT_WEB_VERSION }}
+
+      - name: Download ort-web assets (if not cached)
+        if: steps.cache-ort-web.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p vendor/ort-web-${{ env.ORT_WEB_VERSION }}
+          BASE="${{ env.ORT_WEB_BASE_URL }}"
+          for asset in ort.wasm.min.js ort-wasm-simd-threaded.wasm ort-wasm-simd-threaded.mjs; do
+            echo "Downloading $asset ..."
+            curl -fSL --max-time 120 "$BASE/$asset" \
+              -o "vendor/ort-web-${{ env.ORT_WEB_VERSION }}/$asset"
+          done
+
+      - name: Verify ort-web asset hashes
+        # SHA-256 hashes verified by B3 spike (2026-06-04).
+        # Update ORT_WEB_VERSION + these hashes together if bumping the runtime.
+        run: |
+          cd vendor/ort-web-${{ env.ORT_WEB_VERSION }}
+          echo "4043d2deda6a2e2fc783afc2b06d984068808181b88d451862c1230c433fce7a  ort.wasm.min.js" | sha256sum -c -
+          echo "be0e129949062ad50290ef94683fac8be5bb6156f709e030b7a5f1661a2f6c17  ort-wasm-simd-threaded.wasm" | sha256sum -c -
+          echo "5687566b1bc1c8cf628d76c2ddb16b2a3b81a7997273d4666564880495088e57  ort-wasm-simd-threaded.mjs" | sha256sum -c -
+
+      # Start a local vendor HTTP server so ort-web assets are served without
+      # reaching cdn.pyke.io. The current browser_smoke.rs does NOT call
+      # init_ort_web() so no ORT assets are fetched during the test — but the
+      # server is wired here for future tests that do.
+      - name: Start local ort-web vendor server
+        run: |
+          python3 -m http.server 19999 \
+            --directory vendor/ort-web-${{ env.ORT_WEB_VERSION }} &
+          echo "ORT_WEB_VENDOR_PID=$!" >> "$GITHUB_ENV"
+          for i in $(seq 1 10); do
+            curl -sf http://localhost:19999/ort.wasm.min.js -o /dev/null && break
+            sleep 1
+          done
+          echo "Vendor server ready at http://localhost:19999/"
+
+      # CDN host-resolver block: proves zero external fetches to cdn.pyke.io.
+      # Tests must pass with cdn.pyke.io mapped to an unroutable address.
+      - name: Create webdriver.json (block CDN, headless Chrome config)
+        run: |
+          cat > webdriver.json << 'EOF'
+          {
+            "goog:chromeOptions": {
+              "args": [
+                "--disable-dev-shm-usage",
+                "--no-sandbox",
+                "--disable-gpu",
+                "--headless=new",
+                "--enable-logging",
+                "--log-level=0",
+                "--host-resolver-rules=MAP cdn.pyke.io 127.0.0.2,MAP signal.pyke.io 127.0.0.2"
+              ]
+            }
+          }
+          EOF
+
+      - name: wasm-pack test --headless --chrome (browser_smoke)
+        # IMPORTANT: Chrome and ChromeDriver major versions must match.
+        # wasm-pack downloads chromedriver automatically.
+        # The browser_smoke suite tests the pure-Rust mel frontend in a real
+        # browser without calling init_ort_web() — zero CDN fetches are proven
+        # by the --host-resolver-rules block above.
+        run: wasm-pack test --headless --chrome -- --test browser_smoke
+
+      - name: Stop vendor server
+        if: always()
+        run: |
+          if [ -n "${ORT_WEB_VENDOR_PID:-}" ]; then
+            kill "${ORT_WEB_VENDOR_PID}" 2>/dev/null || true
+          fi
+
+      # -----------------------------------------------------------------------
+      # FUTURE (NEEDS-BROWSER-TEST): Full WasmAsr golden round-trip
+      # -----------------------------------------------------------------------
+      # Blocked until:
+      #   1. WasmAsr::create() integration in browser_smoke.rs (Dist API + model fixture)
+      #   2. Registry-pinned model artifacts (D1 task) committed to registry/models.toml
+      #   3. Golden clip wasm test comparable to tests/golden.rs native counterpart
+      #
+      # TODO(d1-registry): use the registry revision SHA from registry/models.toml
+      # as the cache key: key: nemotron-models-${{ vars.NEMOTRON_MODEL_REVISION }}
+      #
+      # - name: Restore Nemotron model cache
+      #   uses: actions/cache@v4
+      #   with:
+      #     path: crates/nemotron-asr/models
+      #     key: nemotron-models-${{ vars.NEMOTRON_MODEL_REVISION }}
+      # - name: Download model if not cached
+      #   run: |
+      #     if [ ! -f models/encoder.onnx ]; then
+      #       python3 ../../scripts/download-model.py models
+      #     fi
+      # - name: wasm-pack test --headless --chrome (wasm_golden)
+      #   run: wasm-pack test --headless --chrome -- --test wasm_golden
+
+  # ---------------------------------------------------------------------------
+  # Job 4: Boundary freshness — C1's export_bindings gate
+  # ---------------------------------------------------------------------------
+  boundary-fresh:
+    name: "Boundary freshness (export_bindings diff gate)"
+    runs-on: ubuntu-latest
+    needs: core-gates
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # Regenerate TypeScript bindings from the current Rust types, then fail
+      # if the committed bindings/ directory is stale. This is C1's boundary
+      # freshness gate: the UI's TypeScript types are always in sync with the
+      # Rust contract types.
+      - name: Regenerate bindings
+        run: cargo test -p silent-core export_bindings
+
+      - name: Fail on stale bindings (git diff --exit-code)
+        run: |
+          if ! git diff --exit-code crates/silent-core/bindings/; then
+            echo "::error::Stale TypeScript bindings detected."
+            echo "::error::Run 'cargo test -p silent-core export_bindings' and commit the updated bindings/."
+            exit 1
+          fi
+          echo "Bindings are fresh — no drift detected."
+
+  # ---------------------------------------------------------------------------
+  # Job 5: xtask gates — model-audit + gen-headers --check
+  # ---------------------------------------------------------------------------
+  xtask-gates:
+    name: "xtask gates (model-audit + gen-headers)"
+    runs-on: ubuntu-latest
+    needs: core-gates
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      # -----------------------------------------------------------------------
+      # model-audit: KNOWN FAILURE until E1 removes titanet.onnx + mel_fb.json.
+      #
+      # This step INTENTIONALLY uses continue-on-error: true.
+      # E1: flip continue-on-error to false once titanet.onnx / mel_fb.json are removed.
+      # -----------------------------------------------------------------------
+      - name: "xtask model-audit [EXPECTED FAIL until E1]"
+        id: model_audit
+        continue-on-error: true
+        run: cargo run -p xtask -- model-audit
+
+      - name: Annotate model-audit failure (expected, tracked to E1)
+        if: steps.model_audit.outcome == 'failure'
+        run: |
+          echo "::warning::model-audit FAILED as expected: titanet.onnx and mel_fb.json are committed to the repo root."
+          echo "::warning::This is correct per spec Task D4. Task E1 removes these weights; flip continue-on-error to false at that point."
+
+      - name: Annotate unexpected model-audit success
+        if: steps.model_audit.outcome == 'success'
+        run: |
+          echo "::notice::model-audit passed — weights may have been removed ahead of E1. Verify E1 is complete, then flip continue-on-error: false."
+
+      # -----------------------------------------------------------------------
+      # gen-headers --check: also continue-on-error while d2-xtask builds it.
+      #
+      # E1: flip continue-on-error to false once gen-headers is implemented and
+      # the generated _headers matches the shipped file.
+      # -----------------------------------------------------------------------
+      - name: "xtask gen-headers --check [EXPECTED FAIL until D2/E1]"
+        id: gen_headers
+        continue-on-error: true
+        # --out specifies the on-disk file to compare against (the current _headers).
+        # gen-headers generates from the registry + invariants; --check diffs generated vs on-disk.
+        run: cargo run -p xtask -- gen-headers --check --out _headers
+
+      - name: Annotate gen-headers failure (expected while D2 builds it)
+        if: steps.gen_headers.outcome == 'failure'
+        run: |
+          echo "::warning::gen-headers --check FAILED as expected: d2-xtask is building this subcommand concurrently."
+          echo "::warning::Flip continue-on-error to false once D2 ships and E1 verifies _headers parity."
+
+  # ---------------------------------------------------------------------------
+  # Job 6: Link check — docs + registry links (non-blocking)
+  # ---------------------------------------------------------------------------
+  link-check:
+    name: "Link check (docs + registry, non-blocking)"
+    runs-on: ubuntu-latest
+    # Non-blocking: link rot should not block merges but should be visible.
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          # Check docs/, registry/ (when it exists), and the README.
+          # Exclude localhost URLs (bridge ws://localhost:8765) and HF LFS
+          # CDN redirects (they require authentication in some cases).
+          args: >-
+            --exclude "localhost"
+            --exclude "cdn-lfs\\.huggingface\\.co"
+            --exclude "cdn-lfs-us-1\\.huggingface\\.co"
+            --exclude "huggingface\\.co/resolve"
+            --timeout 30
+            --max-retries 3
+            docs/
+            README.md
+          fail: false
+          token: ${{ secrets.GITHUB_TOKEN }}
