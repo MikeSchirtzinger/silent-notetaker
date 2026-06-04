@@ -35,6 +35,16 @@ serde_json = "1"
 toml = "0.8"
 thiserror = "2"
 ts-rs = { version = "10", features = ["serde-compat"] }
+# Crash-diagnostics + PerfMonitor are formalized on `tracing` (PRD Phase 5 / R9).
+# `tracing` is the browser-free instrumentation facade; `tracing-subscriber`
+# (registry only — NOT its `fmt`/`std::time`/`ansi` machinery, which we do not
+# want on wasm) is the building block for the wasm `DiagLayer` in `silent-web`.
+# Neither pulls a browser dependency, so both compile for
+# wasm32-unknown-unknown.
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "registry",
+] }
 
 # ---------------------------------------------------------------------------
 # Workspace lints (PRD "Rust engineering bar"). Member crates opt in with
