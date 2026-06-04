@@ -1,0 +1,3 @@
+/target/
+# wasm-pack output (regenerate with `wasm-pack build --target web`).
+/pkg/
