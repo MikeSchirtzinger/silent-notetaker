@@ -1633,6 +1633,40 @@ let config = {
   corrections: {},
 };
 
+// Word corrections — applied in-worker per chunk (before tail-dedup tracking,
+// preserving the exact pipeline position). The POLICY is the Rust
+// `WasmCorrections` (crates/silent-notes, via crates/silent-web/pkg). The worker
+// lazily loads the SAME wasm pkg the main thread loads; the map is rebuilt from
+// `config.corrections` whenever it changes. `__correctionsPkgUrl` is the
+// absolute pkg URL the main thread injects (a relative URL cannot resolve from a
+// blob: worker). If the wasm has not loaded yet, applyCorrections is a no-op
+// pass-through (no fake corrections), exactly degrading like the old empty-map
+// loop did.
+let __correctionsWasm = null;     // WasmCorrections instance
+let __correctionsPkgUrl = null;   // absolute URL to silent_web.js
+let __correctionsLoading = null;  // in-flight load promise
+
+async function __ensureCorrectionsWasm() {
+  if (__correctionsWasm || !__correctionsPkgUrl) return __correctionsWasm;
+  if (__correctionsLoading) return __correctionsLoading;
+  __correctionsLoading = (async () => {
+    const mod = await import(__correctionsPkgUrl);
+    await mod.default();
+    __correctionsWasm = new mod.WasmCorrections();
+    __syncCorrectionsWasm();
+    return __correctionsWasm;
+  })();
+  return __correctionsLoading;
+}
+
+// Rebuild the Rust map from the plain `config.corrections` object, preserving
+// insertion order (Object.entries order == the order they were added).
+function __syncCorrectionsWasm() {
+  if (!__correctionsWasm) return;
+  const pairs = Object.entries(config.corrections || {}).map(([wrong, right]) => ({ wrong, right }));
+  __correctionsWasm.set(JSON.stringify(pairs));
+}
+
 function hasSpeech(audio, threshold) {
   let sumSquares = 0;
   const step = 4;
@@ -1669,11 +1703,11 @@ function deduplicateText(text) {
 }
 
 function applyCorrections(text) {
-  for (const [wrong, right] of Object.entries(config.corrections || {})) {
-    const re = new RegExp(wrong.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-    text = text.replace(re, right);
-  }
-  return text;
+  // POLICY moved to Rust (crates/silent-notes `Corrections`, exposed as
+  // WasmCorrections). The wasm map is kept in sync with config.corrections; if
+  // it has not loaded yet (or no pkg URL was injected), pass through unchanged
+  // — the same no-op the empty-map loop produced.
+  return __correctionsWasm ? __correctionsWasm.apply(text) : text;
 }
 
 async function processQueue() {
@@ -1766,6 +1800,17 @@ self.onmessage = async (e) => {
 
   if (type === 'corrections') {
     config.corrections = e.data.corrections || {};
+    // Absolute pkg URL (injected by the main thread) — needed because a blob:
+    // worker cannot resolve the relative pkg path. Load the wasm once, then keep
+    // the Rust map in sync on every corrections update.
+    if (e.data.pkgUrl) __correctionsPkgUrl = e.data.pkgUrl;
+    if (__correctionsWasm) {
+      __syncCorrectionsWasm();
+    } else if (__correctionsPkgUrl) {
+      __ensureCorrectionsWasm().catch((err) => {
+        self.postMessage({ type: 'error', message: `Corrections engine load failed: ${err.message}` });
+      });
+    }
     return;
   }
 
@@ -5840,58 +5885,86 @@ document.addEventListener('toggle', (e) => {
 
 /* ════════════════════════════════════════════
    Corrections
+   POLICY: crates/silent-notes `Corrections` (WasmCorrections, via the shared
+   NotesEngine). The `corrections` object below stays the UX mirror that drives
+   tag rendering + the worker push (pixel-identical UX); the Rust map is the
+   source of truth for the actual text application (live, in handleFinal, and
+   retroactive, here). The JS regex policy is gone — both the worker
+   `applyCorrections` and this retroactive pass now call the one Rust policy.
 ═══════════════════════════════════════════ */
-let corrections = {}; // { "wrong": "right" }
+let corrections = {}; // UX mirror of the Rust map: { "wrong": "right" }
+
+// Absolute URL to the wasm pkg, for the blob: transcription worker (it cannot
+// resolve the relative pkg path). Matches notes-engine.js's resolution order.
+function correctionsPkgUrl() {
+  return window.__SILENT_WEB_PKG_URL || window.__DIARIZATION_PKG_URL
+    || new URL('./crates/silent-web/pkg/silent_web.js', document.baseURI).href;
+}
 
 function toggleCorrections() {
   const bar = document.getElementById('correctionsBar');
   bar.style.display = bar.style.display === 'none' ? 'block' : 'none';
 }
 
-function addCorrection() {
+async function addCorrection() {
   const wrongEl = document.getElementById('corrWrong');
   const rightEl = document.getElementById('corrRight');
   const wrong = wrongEl.value.trim();
   const right = rightEl.value.trim();
   if (!wrong || !right) return;
 
-  corrections[wrong] = right;
+  // Source of truth: the Rust corrections map. The UX `corrections` object is
+  // synced from the Rust entries (insertion order preserved by the policy).
+  const engine = await _ensureNotesLoaded();
+  engine.addCorrection(wrong, right);
+  syncCorrectionsFromEngine(engine);
+
   wrongEl.value = '';
   rightEl.value = '';
 
-  // Send to worker
+  // Push the updated map to the transcription worker (live application).
   pushCorrectionsToWorker();
-  // Apply to existing transcript
-  applyCorrectionsToTranscript();
-  // Render tags
+  // Retroactively fix existing transcript/note text via the Rust policy.
+  await applyCorrectionsToTranscript();
+  // Render tags.
   renderCorrectionTags();
 }
 
-function removeCorrection(wrong) {
-  delete corrections[wrong];
+async function removeCorrection(wrong) {
+  const engine = await _ensureNotesLoaded();
+  engine.removeCorrection(wrong);
+  syncCorrectionsFromEngine(engine);
+
   pushCorrectionsToWorker();
-  applyCorrectionsToTranscript();
+  await applyCorrectionsToTranscript();
   renderCorrectionTags();
+}
+
+// Mirror the Rust corrections map into the plain `corrections` object the tag
+// renderer + worker push consume (keeps insertion order; pixel-identical UX).
+function syncCorrectionsFromEngine(engine) {
+  corrections = {};
+  for (const { wrong, right } of engine.correctionEntries()) corrections[wrong] = right;
 }
 
 function pushCorrectionsToWorker() {
   if (app.tm && app.tm.worker) {
-    app.tm.worker.postMessage({ type: 'corrections', corrections });
+    // Include the absolute pkg URL so the worker can load the SAME Rust policy.
+    app.tm.worker.postMessage({ type: 'corrections', corrections, pkgUrl: correctionsPkgUrl() });
   }
 }
 
-function applyCorrectionsToTranscript() {
-  // Apply all corrections to existing transcript text and note text
+async function applyCorrectionsToTranscript() {
+  // Apply the whole correction map to existing transcript + note text via the
+  // Rust policy (the same WasmCorrections.apply the live path uses), so the
+  // retroactive pass is byte-identical to the live pass.
+  const engine = await _ensureNotesLoaded();
   const transcriptItems = document.querySelectorAll('.transcript-text');
   const noteItems = document.querySelectorAll('.note-text');
 
-  for (const [wrong, right] of Object.entries(corrections)) {
-    const re = new RegExp(wrong.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
-    for (const el of [...transcriptItems, ...noteItems]) {
-      if (el.textContent.match(re)) {
-        el.textContent = el.textContent.replace(re, right);
-      }
-    }
+  for (const el of [...transcriptItems, ...noteItems]) {
+    const corrected = engine.applyCorrections(el.textContent);
+    if (corrected !== el.textContent) el.textContent = corrected;
   }
 }
 

@@ -67,6 +67,7 @@ export class NotesEngine {
     this._mod = null;
     this._note = null;          // WasmNoteEngine instance
     this._scheduler = null;     // WasmQuestionScheduler instance
+    this._corrections = null;   // WasmCorrections instance
     this._loadPromise = null;
     this.ready = false;
   }
@@ -89,8 +90,9 @@ export class NotesEngine {
       this._scheduler = new this._mod.WasmQuestionScheduler(
         Array.isArray(enabledTypes) && enabledTypes.length ? JSON.stringify(enabledTypes) : null
       );
+      this._corrections = new this._mod.WasmCorrections();
       this.ready = true;
-      console.log('[rust-notes] NotesEngine ready (NoteExtractor + OpenQs + SmartQ scheduler + Qwen)');
+      console.log('[rust-notes] NotesEngine ready (NoteExtractor + OpenQs + SmartQ scheduler + Corrections + Qwen)');
     })();
 
     return this._loadPromise;
@@ -178,6 +180,65 @@ export class NotesEngine {
    */
   resetNotes() {
     if (this._note) this._note.reset();
+  }
+
+  // ── Word corrections (WasmCorrections) ──────────────────────────────────────
+  //
+  // The insertion-ordered { wrong: right } map + the case-insensitive, global,
+  // sequential apply that replaced the JS `corrections` object +
+  // `applyCorrections` / `applyCorrectionsToTranscript` regex policy.
+
+  /**
+   * Add (or overwrite) a correction (`addCorrection`:
+   * `corrections[wrong] = right`). Empty wrong/right are ignored.
+   * @param {string} wrong
+   * @param {string} right
+   * @returns {boolean} whether the map changed.
+   */
+  addCorrection(wrong, right) {
+    return this._corrections ? this._corrections.add(wrong, right) : false;
+  }
+
+  /**
+   * Remove a correction by its `wrong` key (`removeCorrection`:
+   * `delete corrections[wrong]`).
+   * @param {string} wrong
+   * @returns {boolean} whether a pair was removed.
+   */
+  removeCorrection(wrong) {
+    return this._corrections ? this._corrections.remove(wrong) : false;
+  }
+
+  /**
+   * Replace the whole correction map from an ordered array of pairs (restore).
+   * @param {Array<{wrong:string, right:string}>} corrections
+   */
+  setCorrections(corrections) {
+    if (this._corrections) this._corrections.set(JSON.stringify(corrections || []));
+  }
+
+  /**
+   * The current correction map as an ordered array of `{ wrong, right }` pairs
+   * (insertion order). Used to re-render the tags + re-push to the worker.
+   * @returns {Array<{wrong:string, right:string}>}
+   */
+  correctionEntries() {
+    return this._corrections ? JSON.parse(this._corrections.entries()) : [];
+  }
+
+  /**
+   * Apply every correction to `text` (`applyCorrections`): case-insensitive,
+   * global, in insertion order. The single live + retroactive policy.
+   * @param {string} text
+   * @returns {string}
+   */
+  applyCorrections(text) {
+    return this._corrections ? this._corrections.apply(text) : text;
+  }
+
+  /** Clear all corrections (new meeting). */
+  clearCorrections() {
+    if (this._corrections) this._corrections.clear();
   }
 
   // ── Smart-question scheduler (WasmQuestionScheduler) ────────────────────────
