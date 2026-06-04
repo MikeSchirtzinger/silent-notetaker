@@ -38,9 +38,10 @@
 //! this module out (see `lib.rs`), so `cargo check --workspace` stays browser-
 //! dep-free.
 
+use silent_core::corrections::Correction;
 use silent_core::questions::QwenNote;
 use silent_notes::questions::{RerollOutcome, ScheduleOutcome, Scheduler, WorkerOutcome};
-use silent_notes::{NoteExtractor, OpenQuestions, TriggerNote};
+use silent_notes::{Corrections, NoteExtractor, OpenQuestions, TriggerNote};
 
 use silent_core::questions::{QuestionEvent, QuestionType};
 
@@ -265,6 +266,124 @@ impl WasmNoteEngine {
     pub fn reset(&mut self) {
         self.extractor = NoteExtractor::new();
         self.open_qs.reset();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WasmCorrections — the word-corrections policy
+// ---------------------------------------------------------------------------
+
+/// Browser-facing word-corrections surface (Appendix A row 25).
+///
+/// Owns the insertion-ordered `{ wrong: right }` map and applies it to incoming
+/// transcript text (case-insensitive, global, sequential) — replacing the JS
+/// `corrections` object + `applyCorrections` / `applyCorrectionsToTranscript`
+/// regex policy. One instance is the single source of truth for both the live
+/// per-chunk application (in `handleFinal`) and the retroactive re-application
+/// over existing transcript/note text when a correction is added/removed.
+///
+/// # Lifecycle (mirrors index.html)
+///
+/// ```text
+/// addCorrection(wrong, right):  c.add(wrong, right) → c.entries() re-renders tags
+///                               + re-pushes the map to the worker (parity)
+/// removeCorrection(wrong):      c.remove(wrong) → re-render + re-push
+/// per final transcript line:    text = c.apply(text)   // live, all engines
+/// add a correction (retroactive): for each .transcript-text/.note-text node:
+///                               node.textContent = c.apply(node.textContent)
+/// new meeting:                  c.clear()
+/// ```
+///
+/// Pure policy: no DOM, no model, no I/O. The panel UX, the tag rendering, and
+/// the worker push stay in `index.html`; only the regex application moved.
+#[wasm_bindgen]
+pub struct WasmCorrections {
+    corrections: Corrections,
+}
+
+impl Default for WasmCorrections {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[wasm_bindgen]
+impl WasmCorrections {
+    /// Create an empty correction map (index.html `let corrections = {}`).
+    #[wasm_bindgen(constructor)]
+    #[must_use]
+    pub fn new() -> Self {
+        console_error_panic_hook::set_once();
+        Self {
+            corrections: Corrections::new(),
+        }
+    }
+
+    /// Add (or overwrite) a correction (`addCorrection`:
+    /// `corrections[wrong] = right`). Empty `wrong`/`right` are ignored, matching
+    /// the JS `if (!wrong || !right) return` guard. Returns `true` if the map
+    /// changed.
+    pub fn add(&mut self, wrong: &str, right: &str) -> bool {
+        self.corrections.add(wrong, right)
+    }
+
+    /// Remove a correction by its `wrong` key (`removeCorrection`:
+    /// `delete corrections[wrong]`). Returns `true` if a pair was removed.
+    pub fn remove(&mut self, wrong: &str) -> bool {
+        self.corrections.remove(wrong)
+    }
+
+    /// Replace the entire map from a JSON array of `{ wrong, right }` pairs
+    /// (insertion order). Used on restore. Ill-formed input is a loud failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsError` if the JSON array cannot be parsed.
+    pub fn set(&mut self, corrections_json: &str) -> Result<(), JsError> {
+        let corrections: Vec<Correction> =
+            serde_json::from_str(corrections_json).map_err(to_js_err)?;
+        self.corrections.set(&corrections);
+        Ok(())
+    }
+
+    /// Clear all corrections (new meeting / reset).
+    pub fn clear(&mut self) {
+        self.corrections.clear();
+    }
+
+    /// The current map as a JSON array of `{ wrong, right }` pairs, in insertion
+    /// order. The glue re-renders the correction tags and re-pushes this to the
+    /// transcription worker, exactly as `renderCorrectionTags` /
+    /// `pushCorrectionsToWorker` do today.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsError` only on JSON serialization failure.
+    pub fn entries(&self) -> Result<JsValue, JsError> {
+        to_js_value(&self.corrections.entries())
+    }
+
+    /// Apply every correction to `text`, in insertion order
+    /// (`applyCorrections`). Case-insensitive, global, sequential. Returns the
+    /// corrected string. This is the single policy behind both the live
+    /// per-chunk application and the retroactive DOM re-application.
+    #[must_use]
+    pub fn apply(&self, text: &str) -> String {
+        self.corrections.apply(text)
+    }
+
+    /// Number of corrections in the map.
+    #[wasm_bindgen(js_name = len)]
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.corrections.len()
+    }
+
+    /// Whether the map is empty.
+    #[wasm_bindgen(js_name = isEmpty)]
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.corrections.is_empty()
     }
 }
 

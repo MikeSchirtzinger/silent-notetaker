@@ -12,9 +12,10 @@
 //! The `notes` module (wasm32 only, Phase 3) wraps `silent-notes` behind a
 //! typed surface: the live trigger extractor + open-question tracker
 //! ([`notes::WasmNoteEngine`]), the smart-question teleprompter scheduler
-//! ([`notes::WasmQuestionScheduler`]), and the Qwen final-notes free functions.
-//! The JS glue (`notes-engine.js`) drives it; the `question-worker.js` Qwen
-//! worker stays the executor.
+//! ([`notes::WasmQuestionScheduler`]), the word-corrections policy
+//! ([`notes::WasmCorrections`]), and the Qwen final-notes free functions. The JS
+//! glue (`notes-engine.js`) drives it; the `question-worker.js` Qwen worker
+//! stays the executor.
 //!
 //! # TypeScript types
 //!
@@ -46,4 +47,4 @@ pub mod notes;
 pub use diarization::WasmDiarization;
 
 #[cfg(target_arch = "wasm32")]
-pub use notes::{WasmNoteEngine, WasmQuestionScheduler};
+pub use notes::{WasmCorrections, WasmNoteEngine, WasmQuestionScheduler};
