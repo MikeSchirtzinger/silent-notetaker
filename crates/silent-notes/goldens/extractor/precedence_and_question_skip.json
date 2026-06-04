@@ -1,0 +1,88 @@
+{
+ "description": "category precedence + consider() skips question-terminated lines",
+ "lines": [
+  "Can we get the report by next Friday?",
+  "Should we also include the revenue numbers?",
+  "We agreed the report is due Friday and assigned to Bob."
+ ],
+ "expected": {
+  "trace": [
+   {
+    "op": "analyze",
+    "line": "Can we get the report by next Friday?",
+    "emitted": [
+     {
+      "id": 1,
+      "category": "actions",
+      "text": "Can we get the report by next Friday?",
+      "triggerPhrase": "by (next |this |end of )?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|month|sprint|quarter|day)",
+      "timestamp": 1000
+     }
+    ],
+    "counters": {
+     "decisions": 0,
+     "actions": 1,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "Should we also include the revenue numbers?",
+    "emitted": [
+     {
+      "id": 2,
+      "category": "questions",
+      "text": "Should we also include the revenue numbers?",
+      "triggerPhrase": "\\?$",
+      "timestamp": 1001
+     }
+    ],
+    "counters": {
+     "decisions": 0,
+     "actions": 1,
+     "keypoints": 0,
+     "questions": 1
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "We agreed the report is due Friday and assigned to Bob.",
+    "emitted": [
+     {
+      "id": 3,
+      "category": "decisions",
+      "text": "We agreed the report is due Friday and assigned to Bob.",
+      "triggerPhrase": "\\bagreed\\b",
+      "timestamp": 1002
+     }
+    ],
+    "counters": {
+     "decisions": 1,
+     "actions": 1,
+     "keypoints": 0,
+     "questions": 1
+    }
+   },
+   {
+    "op": "flush",
+    "emitted": [],
+    "counters": {
+     "decisions": 1,
+     "actions": 1,
+     "keypoints": 0,
+     "questions": 1
+    }
+   }
+  ],
+  "finalCounters": {
+   "decisions": 1,
+   "actions": 1,
+   "keypoints": 0,
+   "questions": 1
+  },
+  "openQuestions": [
+   "Should we also include the revenue numbers?"
+  ]
+ }
+}

@@ -1,0 +1,108 @@
+{
+ "description": "one trigger per category, clean punctuation",
+ "lines": [
+  "After a long debate we have decided to ship on Friday.",
+  "Alice will handle the deployment and rollback plan.",
+  "The latency improved by 40% after the cache change.",
+  "What should we do about the staging environment?"
+ ],
+ "expected": {
+  "trace": [
+   {
+    "op": "analyze",
+    "line": "After a long debate we have decided to ship on Friday.",
+    "emitted": [
+     {
+      "id": 1,
+      "category": "decisions",
+      "text": "After a long debate we have decided to ship on Friday.",
+      "triggerPhrase": "we('ve| have) decided to",
+      "timestamp": 1000
+     }
+    ],
+    "counters": {
+     "decisions": 1,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "Alice will handle the deployment and rollback plan.",
+    "emitted": [
+     {
+      "id": 2,
+      "category": "actions",
+      "text": "Alice will handle the deployment and rollback plan.",
+      "triggerPhrase": "(\\w+) (will|is going to|needs to|should) (handle|take care of|own|do|create|build|fix|update|send|schedule|write|review|check|look into|reach out|follow up)",
+      "timestamp": 1001
+     }
+    ],
+    "counters": {
+     "decisions": 1,
+     "actions": 1,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "The latency improved by 40% after the cache change.",
+    "emitted": [
+     {
+      "id": 3,
+      "category": "keypoints",
+      "text": "The latency improved by 40% after the cache change.",
+      "triggerPhrase": "\\d+[\\s]*(%|percent|x|times|minutes|hours|days|lines|files|MB|GB|ms|seconds)",
+      "timestamp": 1002
+     }
+    ],
+    "counters": {
+     "decisions": 1,
+     "actions": 1,
+     "keypoints": 1,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "What should we do about the staging environment?",
+    "emitted": [
+     {
+      "id": 4,
+      "category": "questions",
+      "text": "What should we do about the staging environment?",
+      "triggerPhrase": "\\?$",
+      "timestamp": 1003
+     }
+    ],
+    "counters": {
+     "decisions": 1,
+     "actions": 1,
+     "keypoints": 1,
+     "questions": 1
+    }
+   },
+   {
+    "op": "flush",
+    "emitted": [],
+    "counters": {
+     "decisions": 1,
+     "actions": 1,
+     "keypoints": 1,
+     "questions": 1
+    }
+   }
+  ],
+  "finalCounters": {
+   "decisions": 1,
+   "actions": 1,
+   "keypoints": 1,
+   "questions": 1
+  },
+  "openQuestions": [
+   "What should we do about the staging environment?"
+  ]
+ }
+}

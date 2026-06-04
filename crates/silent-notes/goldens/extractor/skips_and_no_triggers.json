@@ -1,0 +1,50 @@
+{
+ "description": "short sentences and plain transcript produce no notes",
+ "lines": [
+  "Ok. Hi. Yes.",
+  "The weather outside is quite pleasant today and nobody mentioned anything actionable."
+ ],
+ "expected": {
+  "trace": [
+   {
+    "op": "analyze",
+    "line": "Ok. Hi. Yes.",
+    "emitted": [],
+    "counters": {
+     "decisions": 0,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "The weather outside is quite pleasant today and nobody mentioned anything actionable.",
+    "emitted": [],
+    "counters": {
+     "decisions": 0,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "flush",
+    "emitted": [],
+    "counters": {
+     "decisions": 0,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 0
+    }
+   }
+  ],
+  "finalCounters": {
+   "decisions": 0,
+   "actions": 0,
+   "keypoints": 0,
+   "questions": 0
+  },
+  "openQuestions": []
+ }
+}

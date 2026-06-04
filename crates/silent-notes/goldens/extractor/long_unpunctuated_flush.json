@@ -1,0 +1,46 @@
+{
+ "description": "long unpunctuated buffer forces the >300 char flush with a deadline trigger",
+ "lines": [
+  "the team spent the entire morning walking through every open thread on the roadmap and the consensus that slowly emerged across all of those conversations was that the single most pressing item we still have to nail down before anything else can move forward is the launch deadline and nobody wanted to commit to one yet"
+ ],
+ "expected": {
+  "trace": [
+   {
+    "op": "analyze",
+    "line": "the team spent the entire morning walking through every open thread on the roadmap and the consensus that slowly emerged across all of those conversations was that the single most pressing item we still have to nail down before anything else can move forward is the launch deadline and nobody wanted to commit to one yet",
+    "emitted": [
+     {
+      "id": 1,
+      "category": "actions",
+      "text": "the team spent the entire morning walking through every open thread on the roadmap and the consensus that slowly emerged across all of those conversations was that the single most pressing item we still have to nail down before anything else can move forward is the launch deadline and nobody wanted to commit to one yet",
+      "triggerPhrase": "deadline",
+      "timestamp": 1000
+     }
+    ],
+    "counters": {
+     "decisions": 0,
+     "actions": 1,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "flush",
+    "emitted": [],
+    "counters": {
+     "decisions": 0,
+     "actions": 1,
+     "keypoints": 0,
+     "questions": 0
+    }
+   }
+  ],
+  "finalCounters": {
+   "decisions": 0,
+   "actions": 1,
+   "keypoints": 0,
+   "questions": 0
+  },
+  "openQuestions": []
+ }
+}

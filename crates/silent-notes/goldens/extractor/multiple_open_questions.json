@@ -1,0 +1,80 @@
+{
+ "description": "two open questions, one resolved one still open",
+ "lines": [
+  "How should we handle authentication for the mobile app?",
+  "What about the billing integration timeline?",
+  "For authentication on mobile we will reuse the existing OAuth tokens."
+ ],
+ "expected": {
+  "trace": [
+   {
+    "op": "analyze",
+    "line": "How should we handle authentication for the mobile app?",
+    "emitted": [
+     {
+      "id": 1,
+      "category": "questions",
+      "text": "How should we handle authentication for the mobile app?",
+      "triggerPhrase": "\\?$",
+      "timestamp": 1000
+     }
+    ],
+    "counters": {
+     "decisions": 0,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 1
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "What about the billing integration timeline?",
+    "emitted": [
+     {
+      "id": 2,
+      "category": "questions",
+      "text": "What about the billing integration timeline?",
+      "triggerPhrase": "\\?$",
+      "timestamp": 1001
+     }
+    ],
+    "counters": {
+     "decisions": 0,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 2
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "For authentication on mobile we will reuse the existing OAuth tokens.",
+    "emitted": [],
+    "counters": {
+     "decisions": 0,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 1
+    }
+   },
+   {
+    "op": "flush",
+    "emitted": [],
+    "counters": {
+     "decisions": 0,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 1
+    }
+   }
+  ],
+  "finalCounters": {
+   "decisions": 0,
+   "actions": 0,
+   "keypoints": 0,
+   "questions": 1
+  },
+  "openQuestions": [
+   "What about the billing integration timeline?"
+  ]
+ }
+}

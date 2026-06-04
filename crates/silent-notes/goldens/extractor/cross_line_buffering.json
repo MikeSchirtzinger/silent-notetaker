@@ -1,0 +1,58 @@
+{
+ "description": "sentence buffered across two lines, then completed",
+ "lines": [
+  "we have decided to",
+  " adopt the new design system next sprint."
+ ],
+ "expected": {
+  "trace": [
+   {
+    "op": "analyze",
+    "line": "we have decided to",
+    "emitted": [],
+    "counters": {
+     "decisions": 0,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": " adopt the new design system next sprint.",
+    "emitted": [
+     {
+      "id": 1,
+      "category": "decisions",
+      "text": "we have decided to  adopt the new design system next sprint.",
+      "triggerPhrase": "we('ve| have) decided to",
+      "timestamp": 1000
+     }
+    ],
+    "counters": {
+     "decisions": 1,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "flush",
+    "emitted": [],
+    "counters": {
+     "decisions": 1,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 0
+    }
+   }
+  ],
+  "finalCounters": {
+   "decisions": 1,
+   "actions": 0,
+   "keypoints": 0,
+   "questions": 0
+  },
+  "openQuestions": []
+ }
+}

@@ -1,0 +1,46 @@
+{
+ "description": "trailing unterminated decision sentence is caught by flush at stop",
+ "lines": [
+  "So to wrap up, we chose the Rust rewrite"
+ ],
+ "expected": {
+  "trace": [
+   {
+    "op": "analyze",
+    "line": "So to wrap up, we chose the Rust rewrite",
+    "emitted": [],
+    "counters": {
+     "decisions": 0,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "flush",
+    "emitted": [
+     {
+      "id": 1,
+      "category": "decisions",
+      "text": "So to wrap up, we chose the Rust rewrite.",
+      "triggerPhrase": "we chose",
+      "timestamp": 1000
+     }
+    ],
+    "counters": {
+     "decisions": 1,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 0
+    }
+   }
+  ],
+  "finalCounters": {
+   "decisions": 1,
+   "actions": 0,
+   "keypoints": 0,
+   "questions": 0
+  },
+  "openQuestions": []
+ }
+}
