@@ -13,6 +13,10 @@
 //! - [`engine`] — the async-first [`engine::AsrEngine`] trait, the named
 //!   [`engine::AnyAsrEngine`] enum-dispatch strategy, and the notes/question
 //!   trait shapes.
+//! - [`notes`] — `NoteCommand` (UI → core) and `NoteEvent` (core → UI) for the
+//!   Phase 3 trigger-extraction policy: categorized live notes, the four section
+//!   counters, and open-question resolution (Appendix A rows 16, 18). The policy
+//!   itself lives in `silent-notes`.
 //! - [`registry`] — the Hugging Face model registry types (PRD R4): the repo
 //!   stores typed model metadata, never weights. The registry drives engine
 //!   selection, CSP generation, the egress manifest, license display, and cache
@@ -39,6 +43,7 @@ pub mod engine;
 pub mod error;
 pub mod events;
 pub mod ids;
+pub mod notes;
 pub mod registry;
 
 pub use error::{AsrError, ModelResolveError};
@@ -80,6 +85,7 @@ mod ts_bindings {
     use crate::error::{AsrError, ModelResolveError};
     use crate::events::{AsrCapabilities, EngineEvent, EngineStats};
     use crate::ids::{ModelId, TimeRange};
+    use crate::notes::{NoteCategory, NoteCommand, NoteCounters, NoteEvent};
     use crate::registry::{
         Cache, CacheStore, DeviceTier, ExecutionProvider, Host, Model, ModelFile, PerfBudget,
         Provider, Registry, Task, Validation,
@@ -114,6 +120,10 @@ mod ts_bindings {
             DiarizationEvent,
             SpeakerDescriptor,
             RelabelEntry,
+            NoteCommand,
+            NoteEvent,
+            NoteCategory,
+            NoteCounters,
             Registry,
             Model,
             ModelFile,
@@ -142,6 +152,10 @@ mod ts_bindings {
             "DiarizationEvent.ts",
             "SpeakerDescriptor.ts",
             "RelabelEntry.ts",
+            "NoteCommand.ts",
+            "NoteEvent.ts",
+            "NoteCategory.ts",
+            "NoteCounters.ts",
             "AsrError.ts",
             "Registry.ts",
             "Model.ts",

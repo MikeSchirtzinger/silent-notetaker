@@ -1,0 +1,262 @@
+{
+ "description": "adversarial regex + boundary + case sweep across every category",
+ "lines": [
+  "Honestly, We'Ve Decided To rewrite the parser in Rust.",
+  "Everyone disagreed loudly about the timeline at first.",
+  "After more talk we finally agreed on the plan.",
+  "I'll review the migration script before the demo.",
+  "you'll schedule the retro for next week.",
+  "Please get it done by NEXT thursday at the latest.",
+  "Add a todo for the logging cleanup.",
+  "Throughput rose 3x and errors dropped to under 2%.",
+  "This is the highest-leverage change we can make this quarter.",
+  "We must never log raw audio, that is essential.",
+  "Does anyone know if the cache invalidation is correct?",
+  "The cache invalidation logic was fixed and verified yesterday.",
+  "Anyway, lunch is at noon and the room is booked."
+ ],
+ "expected": {
+  "trace": [
+   {
+    "op": "analyze",
+    "line": "Honestly, We'Ve Decided To rewrite the parser in Rust.",
+    "emitted": [
+     {
+      "id": 1,
+      "category": "decisions",
+      "text": "Honestly, We'Ve Decided To rewrite the parser in Rust.",
+      "triggerPhrase": "we('ve| have) decided to",
+      "timestamp": 1000
+     }
+    ],
+    "counters": {
+     "decisions": 1,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "Everyone disagreed loudly about the timeline at first.",
+    "emitted": [],
+    "counters": {
+     "decisions": 1,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "After more talk we finally agreed on the plan.",
+    "emitted": [
+     {
+      "id": 2,
+      "category": "decisions",
+      "text": "After more talk we finally agreed on the plan.",
+      "triggerPhrase": "\\bagreed\\b",
+      "timestamp": 1001
+     }
+    ],
+    "counters": {
+     "decisions": 2,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "I'll review the migration script before the demo.",
+    "emitted": [
+     {
+      "id": 3,
+      "category": "actions",
+      "text": "I'll review the migration script before the demo.",
+      "triggerPhrase": "I('ll| will) (handle|take care of|own|do|create|build|fix|update|send|schedule|write|review|check|look into|reach out|follow up)",
+      "timestamp": 1002
+     }
+    ],
+    "counters": {
+     "decisions": 2,
+     "actions": 1,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "you'll schedule the retro for next week.",
+    "emitted": [
+     {
+      "id": 4,
+      "category": "actions",
+      "text": "you'll schedule the retro for next week.",
+      "triggerPhrase": "you('ll| will) (handle|take care of|own|do|create|build|fix|update|send|schedule|write|review|check|look into|reach out|follow up)",
+      "timestamp": 1003
+     }
+    ],
+    "counters": {
+     "decisions": 2,
+     "actions": 2,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "Please get it done by NEXT thursday at the latest.",
+    "emitted": [
+     {
+      "id": 5,
+      "category": "actions",
+      "text": "Please get it done by NEXT thursday at the latest.",
+      "triggerPhrase": "by (next |this |end of )?(monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|month|sprint|quarter|day)",
+      "timestamp": 1004
+     }
+    ],
+    "counters": {
+     "decisions": 2,
+     "actions": 3,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "Add a todo for the logging cleanup.",
+    "emitted": [
+     {
+      "id": 6,
+      "category": "actions",
+      "text": "Add a todo for the logging cleanup.",
+      "triggerPhrase": "\\btodo\\b",
+      "timestamp": 1005
+     }
+    ],
+    "counters": {
+     "decisions": 2,
+     "actions": 4,
+     "keypoints": 0,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "Throughput rose 3x and errors dropped to under 2%.",
+    "emitted": [
+     {
+      "id": 7,
+      "category": "keypoints",
+      "text": "Throughput rose 3x and errors dropped to under 2%.",
+      "triggerPhrase": "\\d+[\\s]*(%|percent|x|times|minutes|hours|days|lines|files|MB|GB|ms|seconds)",
+      "timestamp": 1006
+     }
+    ],
+    "counters": {
+     "decisions": 2,
+     "actions": 4,
+     "keypoints": 1,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "This is the highest-leverage change we can make this quarter.",
+    "emitted": [
+     {
+      "id": 8,
+      "category": "keypoints",
+      "text": "This is the highest-leverage change we can make this quarter.",
+      "triggerPhrase": "highest.leverage|biggest.impact|most.important",
+      "timestamp": 1007
+     }
+    ],
+    "counters": {
+     "decisions": 2,
+     "actions": 4,
+     "keypoints": 2,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "We must never log raw audio, that is essential.",
+    "emitted": [
+     {
+      "id": 9,
+      "category": "keypoints",
+      "text": "We must never log raw audio, that is essential.",
+      "triggerPhrase": "\\b(never|always|must|critical|essential|required|mandatory)\\b",
+      "timestamp": 1008
+     }
+    ],
+    "counters": {
+     "decisions": 2,
+     "actions": 4,
+     "keypoints": 3,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "Does anyone know if the cache invalidation is correct?",
+    "emitted": [
+     {
+      "id": 10,
+      "category": "questions",
+      "text": "Does anyone know if the cache invalidation is correct?",
+      "triggerPhrase": "\\?$",
+      "timestamp": 1009
+     }
+    ],
+    "counters": {
+     "decisions": 2,
+     "actions": 4,
+     "keypoints": 3,
+     "questions": 1
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "The cache invalidation logic was fixed and verified yesterday.",
+    "emitted": [],
+    "counters": {
+     "decisions": 2,
+     "actions": 4,
+     "keypoints": 3,
+     "questions": 0
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "Anyway, lunch is at noon and the room is booked.",
+    "emitted": [],
+    "counters": {
+     "decisions": 2,
+     "actions": 4,
+     "keypoints": 3,
+     "questions": 0
+    }
+   },
+   {
+    "op": "flush",
+    "emitted": [],
+    "counters": {
+     "decisions": 2,
+     "actions": 4,
+     "keypoints": 3,
+     "questions": 0
+    }
+   }
+  ],
+  "finalCounters": {
+   "decisions": 2,
+   "actions": 4,
+   "keypoints": 3,
+   "questions": 0
+  },
+  "openQuestions": []
+ }
+}

@@ -1,0 +1,60 @@
+{
+ "description": "open question asked then resolved by a later declarative line",
+ "lines": [
+  "Does anyone know which database we should migrate to?",
+  "We profiled it and the database migration to Postgres is the plan."
+ ],
+ "expected": {
+  "trace": [
+   {
+    "op": "analyze",
+    "line": "Does anyone know which database we should migrate to?",
+    "emitted": [
+     {
+      "id": 1,
+      "category": "questions",
+      "text": "Does anyone know which database we should migrate to?",
+      "triggerPhrase": "\\?$",
+      "timestamp": 1000
+     }
+    ],
+    "counters": {
+     "decisions": 0,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 1
+    }
+   },
+   {
+    "op": "analyze",
+    "line": "We profiled it and the database migration to Postgres is the plan.",
+    "emitted": [],
+    "counters": {
+     "decisions": 0,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 1
+    }
+   },
+   {
+    "op": "flush",
+    "emitted": [],
+    "counters": {
+     "decisions": 0,
+     "actions": 0,
+     "keypoints": 0,
+     "questions": 1
+    }
+   }
+  ],
+  "finalCounters": {
+   "decisions": 0,
+   "actions": 0,
+   "keypoints": 0,
+   "questions": 1
+  },
+  "openQuestions": [
+   "Does anyone know which database we should migrate to?"
+  ]
+ }
+}
