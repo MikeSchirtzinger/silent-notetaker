@@ -245,13 +245,76 @@ jobs:
           }
           EOF
 
-      - name: wasm-pack test --headless --chrome (browser_smoke)
-        # IMPORTANT: Chrome and ChromeDriver major versions must match.
-        # wasm-pack downloads chromedriver automatically.
+      # Pin chromedriver to the installed Chrome's major.minor.build to prevent
+      # the version-mismatch failure from the original spike runner (chromedriver
+      # 149 vs Chrome 148). wasm-pack 0.13.1 fetches "latest stable" chromedriver
+      # which can diverge from the runner's Chrome version.
+      # Strategy: query chrome-for-testing API for highest matching patch, cache
+      # by version string (content-addressed — a new Chrome version busts the key).
+      - name: Detect Chrome version + resolve pinned chromedriver
+        id: resolve-chromedriver
+        run: |
+          CHROME_VER=$(google-chrome --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          echo "Chrome version: ${CHROME_VER}"
+          CHROME_PREFIX=$(echo "$CHROME_VER" | cut -d. -f1-3)
+          echo "Matching prefix: ${CHROME_PREFIX}.x"
+          # Find highest patch in same build series from chrome-for-testing API
+          MATCHED=$(python3 - <<PYEOF
+          import json, urllib.request, sys
+          url = "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json"
+          with urllib.request.urlopen(url, timeout=30) as r:
+              data = json.load(r)
+          prefix = "${CHROME_PREFIX}."
+          candidates = []
+          for v in data.get("versions", []):
+              ver = v.get("version", "")
+              if not ver.startswith(prefix):
+                  continue
+              for dl in v.get("downloads", {}).get("chromedriver", []):
+                  if dl.get("platform") == "linux64":
+                      candidates.append((int(ver.split(".")[-1]), ver, dl["url"]))
+                      break
+          if not candidates:
+              sys.exit(1)
+          candidates.sort(reverse=True)
+          _, ver, url = candidates[0]
+          print(f"version={ver}")
+          print(f"url={url}")
+          PYEOF
+          )
+          echo "$MATCHED" >> "$GITHUB_OUTPUT"
+          echo "Resolved: $MATCHED"
+
+      - name: Cache pinned chromedriver
+        id: cache-chromedriver
+        uses: actions/cache@v4
+        with:
+          path: /tmp/chromedriver-pinned
+          key: chromedriver-${{ steps.resolve-chromedriver.outputs.version }}-linux64
+
+      - name: Download pinned chromedriver (if not cached)
+        if: steps.cache-chromedriver.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p /tmp/chromedriver-pinned
+          curl -fSL --max-time 120 "${{ steps.resolve-chromedriver.outputs.url }}" \
+            -o /tmp/chromedriver-pinned/chromedriver.zip
+          unzip -o -q /tmp/chromedriver-pinned/chromedriver.zip -d /tmp/chromedriver-pinned
+          rm -f /tmp/chromedriver-pinned/chromedriver.zip
+          FOUND=$(find /tmp/chromedriver-pinned -name "chromedriver" -type f | head -1)
+          mv "$FOUND" /tmp/chromedriver-pinned/chromedriver
+          chmod +x /tmp/chromedriver-pinned/chromedriver
+
+      - name: wasm-pack test --headless --chrome (browser_smoke, pinned chromedriver)
+        # Pass --chromedriver explicitly (wasm-pack 0.13.1 supports this flag).
+        # This prevents wasm-pack from downloading its own chromedriver which may
+        # not match the runner's installed Chrome version.
         # The browser_smoke suite tests the pure-Rust mel frontend in a real
         # browser without calling init_ort_web() — zero CDN fetches are proven
         # by the --host-resolver-rules block above.
-        run: wasm-pack test --headless --chrome -- --test browser_smoke
+        run: |
+          wasm-pack test --headless --chrome \
+            --chromedriver /tmp/chromedriver-pinned/chromedriver \
+            -- --test browser_smoke
 
       - name: Stop vendor server
         if: always()
@@ -357,45 +420,20 @@ jobs:
             ${{ runner.os }}-cargo-
 
       # -----------------------------------------------------------------------
-      # model-audit: KNOWN FAILURE until E1 removes titanet.onnx + mel_fb.json.
-      #
-      # This step INTENTIONALLY uses continue-on-error: true.
-      # E1: flip continue-on-error to false once titanet.onnx / mel_fb.json are removed.
+      # model-audit: E1 removed titanet.onnx + mel_fb.json; this now hard-fails.
       # -----------------------------------------------------------------------
-      - name: "xtask model-audit [EXPECTED FAIL until E1]"
+      - name: "xtask model-audit"
         id: model_audit
-        continue-on-error: true
         run: cargo run -p xtask -- model-audit
 
-      - name: Annotate model-audit failure (expected, tracked to E1)
-        if: steps.model_audit.outcome == 'failure'
-        run: |
-          echo "::warning::model-audit FAILED as expected: titanet.onnx and mel_fb.json are committed to the repo root."
-          echo "::warning::This is correct per spec Task D4. Task E1 removes these weights; flip continue-on-error to false at that point."
-
-      - name: Annotate unexpected model-audit success
-        if: steps.model_audit.outcome == 'success'
-        run: |
-          echo "::notice::model-audit passed — weights may have been removed ahead of E1. Verify E1 is complete, then flip continue-on-error: false."
-
       # -----------------------------------------------------------------------
-      # gen-headers --check: also continue-on-error while d2-xtask builds it.
-      #
-      # E1: flip continue-on-error to false once gen-headers is implemented and
-      # the generated _headers matches the shipped file.
+      # gen-headers --check: E1 regenerated _headers; this now hard-fails on drift.
       # -----------------------------------------------------------------------
-      - name: "xtask gen-headers --check [EXPECTED FAIL until D2/E1]"
+      - name: "xtask gen-headers --check"
         id: gen_headers
-        continue-on-error: true
         # --out specifies the on-disk file to compare against (the current _headers).
         # gen-headers generates from the registry + invariants; --check diffs generated vs on-disk.
         run: cargo run -p xtask -- gen-headers --check --out _headers
-
-      - name: Annotate gen-headers failure (expected while D2 builds it)
-        if: steps.gen_headers.outcome == 'failure'
-        run: |
-          echo "::warning::gen-headers --check FAILED as expected: d2-xtask is building this subcommand concurrently."
-          echo "::warning::Flip continue-on-error to false once D2 ships and E1 verifies _headers parity."
 
   # ---------------------------------------------------------------------------
   # Job 6: Link check — docs + registry links (non-blocking)
