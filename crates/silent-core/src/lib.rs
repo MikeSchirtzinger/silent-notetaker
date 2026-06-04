@@ -26,6 +26,10 @@
 //!   stores typed model metadata, never weights. The registry drives engine
 //!   selection, CSP generation, the egress manifest, license display, and cache
 //!   verification.
+//! - [`storage`] — the Dexie v2 `SilentNotetaker` schema as typed records and
+//!   the migration/backup boundary the UI drives (PRD Phase 4, Appendix A
+//!   rows 1–3, 17, 26, 29, 33). The browser read/migrate lives in
+//!   `silent-storage`; the shapes and events live here.
 //! - [`ids`] — small shared value types ([`ids::ModelId`], [`ids::TimeRange`]).
 //!
 //! # No browser dependencies
@@ -52,6 +56,7 @@ pub mod notes;
 pub mod questions;
 pub mod registry;
 pub mod session;
+pub mod storage;
 
 pub use error::{AsrError, ModelResolveError};
 pub use events::{EngineEvent, EngineStats};
@@ -98,6 +103,10 @@ mod ts_bindings {
     use crate::registry::{
         Cache, CacheStore, DeviceTier, ExecutionProvider, Host, Model, ModelFile, PerfBudget,
         Provider, Registry, Task, Validation,
+    };
+    use crate::storage::{
+        ImageEncoding, Meeting, MigrationStatus, Note, Screenshot, StorageCounts, StorageEvent,
+        TranscriptChunk,
     };
     use std::path::Path;
     use ts_rs::TS;
@@ -152,6 +161,14 @@ mod ts_bindings {
             Provider,
             Host,
             ExecutionProvider,
+            Meeting,
+            TranscriptChunk,
+            Note,
+            Screenshot,
+            ImageEncoding,
+            StorageCounts,
+            StorageEvent,
+            MigrationStatus,
         );
 
         let bindings = Path::new(env!("CARGO_MANIFEST_DIR")).join("bindings");
@@ -183,6 +200,13 @@ mod ts_bindings {
             "Registry.ts",
             "Model.ts",
             "ModelId.ts",
+            "Meeting.ts",
+            "TranscriptChunk.ts",
+            "Note.ts",
+            "Screenshot.ts",
+            "ImageEncoding.ts",
+            "StorageEvent.ts",
+            "MigrationStatus.ts",
         ] {
             let p = bindings.join(expected);
             assert!(p.is_file(), "expected generated binding {}", p.display());
