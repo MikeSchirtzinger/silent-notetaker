@@ -9,8 +9,12 @@
 //! wasm-pack output (`pkg/`) and drives it — the same pattern as
 //! `nemotron-engine.js` drives `crates/nemotron-asr/pkg/`.
 //!
-//! Phase 3+ will add the ASR and notes surfaces here. For now the diarization
-//! surface is the sole export.
+//! The `notes` module (wasm32 only, Phase 3) wraps `silent-notes` behind a
+//! typed surface: the live trigger extractor + open-question tracker
+//! ([`notes::WasmNoteEngine`]), the smart-question teleprompter scheduler
+//! ([`notes::WasmQuestionScheduler`]), and the Qwen final-notes free functions.
+//! The JS glue (`notes-engine.js`) drives it; the `question-worker.js` Qwen
+//! worker stays the executor.
 //!
 //! # TypeScript types
 //!
@@ -34,5 +38,12 @@ pub use silent_core;
 #[cfg(target_arch = "wasm32")]
 pub mod diarization;
 
+/// Wasm-bindgen notes + smart-questions + Qwen surface (Phase 3). Wasm32 only.
+#[cfg(target_arch = "wasm32")]
+pub mod notes;
+
 #[cfg(target_arch = "wasm32")]
 pub use diarization::WasmDiarization;
+
+#[cfg(target_arch = "wasm32")]
+pub use notes::{WasmNoteEngine, WasmQuestionScheduler};

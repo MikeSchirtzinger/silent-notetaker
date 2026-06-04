@@ -1337,6 +1337,7 @@ dependencies = [
  "serde_json",
  "silent-core",
  "silent-diarization",
+ "silent-notes",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

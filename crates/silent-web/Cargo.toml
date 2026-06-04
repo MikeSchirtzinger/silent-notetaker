@@ -30,6 +30,7 @@ workspace = true
 [dependencies]
 silent-core = { path = "../silent-core" }
 silent-diarization = { path = "../silent-diarization" }
+silent-notes = { path = "../silent-notes" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
