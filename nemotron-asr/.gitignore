@@ -3,3 +3,6 @@
 Cargo.lock
 # wasm-pack output (regenerate with `wasm-pack build --target web`).
 /pkg/
+# Vendored ORT-web runtime assets (downloaded by snt-spikes/b3-ci/vendor-ort-web.sh).
+# Binary files; not committed. CI downloads and caches them.
+/vendor/

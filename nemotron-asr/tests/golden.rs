@@ -4,6 +4,12 @@
 //! Comparison is case-insensitive and whitespace/punctuation-normalised on a
 //! per-word basis. The words must all be correct and in order.
 //!
+//! This test is **native-only** (uses `OrtBackend` and `hound` for WAV I/O,
+//! neither of which is available on wasm32). It is excluded from the browser
+//! test suite (`wasm-pack test`). The wasm32 equivalent lives in
+//! `tests/browser_smoke.rs`.
+#![cfg(not(target_arch = "wasm32"))]
+//!
 //! Requires the model files under `models/` (gitignored). The test is skipped
 //! with a clear message if they are absent, so `cargo test` stays green in
 //! environments without the ~900 MB weights.

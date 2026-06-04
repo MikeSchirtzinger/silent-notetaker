@@ -1,0 +1,18 @@
+{
+  "goog:chromeOptions": {
+    "args": [
+      "--disable-dev-shm-usage",
+      "--no-sandbox",
+      "--disable-gpu",
+      "--headless=new",
+      "--enable-logging",
+      "--log-level=0"
+    ],
+    "perfLoggingPrefs": {
+      "enableNetwork": true
+    }
+  },
+  "goog:loggingPrefs": {
+    "performance": "ALL"
+  }
+}

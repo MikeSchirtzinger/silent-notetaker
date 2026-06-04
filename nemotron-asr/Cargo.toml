@@ -70,6 +70,28 @@ console_error_panic_hook = "0.1"
 hound = "3.5"
 
 [dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+# ---------------------------------------------------------------------------
+# Explicit test targets.
+#
+# `golden` is native-only (uses OrtBackend + hound). The file itself is gated
+# with `#![cfg(not(target_arch = "wasm32"))]` but declaring it explicitly here
+# lets `cargo test --target wasm32-unknown-unknown` skip it cleanly instead of
+# trying to compile a binary that would fail to link the native ORT backend.
+#
+# `browser_smoke` is wasm32-only (uses wasm-bindgen-test).  Declaring it
+# explicitly allows `cargo test` on the native target to skip it without
+# errors, while `wasm-pack test --headless --chrome` picks it up.
+# ---------------------------------------------------------------------------
+[[test]]
+name = "golden"
+path = "tests/golden.rs"
+
+[[test]]
+name = "browser_smoke"
+path = "tests/browser_smoke.rs"
+harness = true
 
 [profile.release]
 # Smaller, faster wasm; harmless for native release.
