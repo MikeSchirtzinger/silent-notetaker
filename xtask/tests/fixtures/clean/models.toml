@@ -1,0 +1,72 @@
+# Clean fixture registry — used by xtask tests to verify the "pass" direction.
+#
+# All entries have:
+#   - pinned revision (40-char commit SHA)
+#   - files with sha256 + size
+#   - non-empty license
+#   - license_verified = true
+#
+# This is a minimal fixture; it does not represent real model content.
+
+[[model]]
+id = "asr.fixture.streaming_tiny"
+task = "asr"
+provider = "huggingface"
+repo = "fixture-org/tiny-asr-model"
+revision = "abc1234567890abcdef1234567890abcdef12345"
+host = "rust-ort-web"
+execution_provider = "cpu"
+precision = ["int8"]
+memory_budget_mb = 64
+license = "MIT"
+license_verified = true
+network_origins = [
+    "https://huggingface.co",
+    "https://cdn-lfs.huggingface.co",
+]
+
+  [model.cache]
+  store = "cache-api"
+  verify_once_per_revision = true
+
+  [[model.files]]
+  path = "encoder_tiny.onnx"
+  size = 1024
+  sha256 = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+  purpose = "encoder"
+
+  [[model.files]]
+  path = "tokenizer.model"
+  size = 512
+  sha256 = "cafecafecafecafecafecafecafecafecafecafecafecafecafecafecafecafe"
+  purpose = "tokenizer"
+
+  [model.device_tiers]
+  wasm_only = { default_for_tier = true }
+
+[[model]]
+id = "speaker_embedding.fixture.tiny"
+task = "speaker_embedding"
+provider = "huggingface"
+repo = "fixture-org/titanet-fixture"
+revision = "1234567890abcdef1234567890abcdef12345670"
+host = "rust-ort-web"
+execution_provider = "cpu"
+precision = ["fp32"]
+memory_budget_mb = 32
+license = "nvidia-open-model-license"
+license_verified = true
+network_origins = [
+    "https://huggingface.co",
+    "https://cdn-lfs.huggingface.co",
+]
+
+  [model.cache]
+  store = "cache-api"
+  verify_once_per_revision = true
+
+  [[model.files]]
+  path = "titanet_tiny.onnx"
+  size = 2048
+  sha256 = "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20"
+  purpose = "embedder"

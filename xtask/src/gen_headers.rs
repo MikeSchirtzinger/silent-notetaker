@@ -1,0 +1,468 @@
+//! `xtask gen-headers` — generate the Cloudflare `_headers` file and the
+//! local-server CSP from the model registry + extension grants + static
+//! invariants.
+//!
+//! ## Design
+//!
+//! The generated output must semantically match what ships today in `_headers`.
+//! Key decisions preserved from the shipping file (documented so future changes
+//! are deliberate):
+//!
+//! **Preserved from shipping `_headers`:**
+//! - `Cross-Origin-Opener-Policy: same-origin` — required for `SharedArrayBuffer`
+//!   (multi-threaded WASM).
+//! - `Cross-Origin-Embedder-Policy: credentialless` — NOT `require-corp`;
+//!   `require-corp` breaks Hugging Face CDN redirects (decision log 2026-06-04).
+//! - CSP is **report-only** (`Content-Security-Policy-Report-Only`) — not
+//!   enforced until Phase 6 (Extension SDK), per PRD R5 and decision log.
+//! - `default-src 'self'` base.
+//! - `script-src 'self' 'unsafe-inline' blob: <cdn-origins>` — `'unsafe-inline'`
+//!   required by the current inline `<script>` blocks in `index.html`; `blob:`
+//!   for dynamically created workers.
+//! - `worker-src 'self' blob:` — blob: for the Nemotron/transformers workers.
+//! - `connect-src`: `'self' blob: data:`, HF origins, CDN origins,
+//!   and `ws://localhost:8765` (Claude bridge; decision log 2026-06-04 keeps
+//!   it in hosted builds — localhost is the user's own machine).
+//! - `img-src 'self' data: blob:` — blob: for screenshot thumbnails.
+//! - `media-src 'self' blob:` — blob: for audio playback.
+//! - `style-src 'self' 'unsafe-inline'` — inline styles in index.html.
+//!
+//! **Intentional differences from the shipping `_headers` comment:**
+//!
+//! The shipping `_headers` comment says `ws://localhost:8765` is
+//! "OMITTED here (hosted build; bridge is a local-only feature)". That comment
+//! was written before the 2026-06-04 decision log entry that explicitly REVERSES
+//! that decision: "Hosted builds keep it in CSP connect-src (correcting v1,
+//! which would have silently dropped the bridge feature from hosted
+//! deployments)." The generated output ADDS `ws://localhost:8765` to match the
+//! post-decision-log intent.
+//!
+//! The shipping `_headers` file does NOT contain `cdn.pyke.io` in its CSP line.
+//! The generated output ADDS it because it is a current runtime CDN origin
+//! (ort-web fetches the onnxruntime-web runtime from there) — the spec
+//! explicitly says "keep them for parity today". The vendoring decision (K2)
+//! will remove it later.
+//!
+//! ## `--check` mode
+//!
+//! When `--check` is passed, the command generates into a temp buffer, diffs
+//! against the on-disk `_headers`, and exits non-zero if they differ.
+//!
+//! ## Output targets
+//!
+//! - `--out <path>` — write the Cloudflare `_headers` file to `<path>`.
+//! - Without `--out` — print to stdout.
+//! - `--local-csp-out <path>` — also write the local-server CSP value (a single
+//!   `Content-Security-Policy` header value) to `<path>` for the Axum server.
+
+use anyhow::{Context, Result, bail};
+use silent_core::registry::Registry;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+
+/// Arguments for `xtask gen-headers`.
+#[derive(clap::Args, Debug)]
+pub struct GenHeadersArgs {
+    /// Path to the registry TOML file.
+    /// Defaults to `<repo_root>/registry/models.toml`.
+    #[arg(long)]
+    pub registry: Option<PathBuf>,
+
+    /// Write the generated `_headers` to this file instead of stdout.
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+
+    /// Also write the local-server CSP value to this file.
+    #[arg(long)]
+    pub local_csp_out: Option<PathBuf>,
+
+    /// Check mode: diff generated content against the on-disk file.
+    /// Exits non-zero if they differ.
+    /// Requires `--out` to specify the file to compare against.
+    #[arg(long)]
+    pub check: bool,
+}
+
+/// Static CDN origins always included in the CSP, regardless of registry
+/// content. These cover the current runtime dependencies:
+/// - jsdelivr / unpkg: transformers.js scripts
+/// - cdn.pyke.io: ort-web's onnxruntime-web runtime loader
+///
+/// Vendoring decision (Task K2) will remove cdn.pyke.io when it vendors
+/// those assets into the deploy bundle. Until then, they stay for parity.
+const STATIC_CDN_ORIGINS: &[&str] = &[
+    "https://cdn.jsdelivr.net",
+    "https://unpkg.com",
+    "https://cdn.pyke.io",
+];
+
+/// Hugging Face origins always included. Covers the CDN + regional LFS variants
+/// that HF redirects to (observed in production network panel — the `_headers`
+/// file already lists these):
+const HF_ORIGINS: &[&str] = &[
+    "https://huggingface.co",
+    "https://*.hf.co",
+    "https://cdn-lfs.huggingface.co",
+    "https://cdn-lfs-us-1.huggingface.co",
+];
+
+/// The Claude bridge WebSocket endpoint. Included in hosted builds per the
+/// 2026-06-04 decision log: "Hosted builds KEEP it in CSP connect-src."
+const BRIDGE_ORIGIN: &str = "ws://localhost:8765";
+
+/// Run `xtask gen-headers`.
+pub fn run(args: GenHeadersArgs) -> Result<()> {
+    let repo_root = resolve_repo_root()?;
+    let registry_path = args
+        .registry
+        .unwrap_or_else(|| repo_root.join("registry").join("models.toml"));
+
+    let registry = load_registry_optional(&registry_path)?;
+    let content = generate_headers(&registry);
+
+    if args.check {
+        // --check mode: compare generated vs on-disk.
+        let target_path = args
+            .out
+            .as_ref()
+            .context("--check requires --out=<path to compare against>")?;
+        check_freshness(target_path, &content)?;
+    } else if let Some(out_path) = &args.out {
+        std::fs::write(out_path, &content)
+            .with_context(|| format!("writing _headers to {}", out_path.display()))?;
+        eprintln!("[gen-headers] wrote: {}", out_path.display());
+    } else {
+        print!("{content}");
+    }
+
+    if let Some(csp_out) = &args.local_csp_out {
+        let csp_value = generate_local_csp_value(&registry);
+        std::fs::write(csp_out, &csp_value)
+            .with_context(|| format!("writing local CSP to {}", csp_out.display()))?;
+        eprintln!("[gen-headers] wrote local CSP: {}", csp_out.display());
+    }
+
+    Ok(())
+}
+
+/// Load the registry from the given path.
+///
+/// If the file does not exist, returns an empty `Registry` and logs a warning
+/// (the CSP can still be generated from static invariants; E1 will wire the
+/// real registry). This allows D2 to test gen-headers before D1 populates the
+/// registry, as required by the orchestrator decision.
+fn load_registry_optional(registry_path: &Path) -> Result<Registry> {
+    if !registry_path.exists() {
+        eprintln!(
+            "[gen-headers] registry not found at {} — using static invariants only \
+             (D1 will populate the registry; use --registry=<fixture> during development)",
+            registry_path.display()
+        );
+        return Ok(Registry::default());
+    }
+    let content = std::fs::read_to_string(registry_path)
+        .with_context(|| format!("reading registry: {}", registry_path.display()))?;
+    toml::from_str(&content)
+        .with_context(|| format!("parsing registry TOML: {}", registry_path.display()))
+}
+
+/// Collect all unique `network_origins` from the registry.
+fn registry_origins(registry: &Registry) -> BTreeSet<String> {
+    let mut origins = BTreeSet::new();
+    for model in &registry.models {
+        for origin in &model.network_origins {
+            origins.insert(origin.clone());
+        }
+    }
+    origins
+}
+
+/// Build the full `connect-src` directive value.
+///
+/// Sources (in order, deduped):
+/// 1. `'self' blob: data:` — static invariants.
+/// 2. CDN origins (jsdelivr, unpkg, cdn.pyke.io) — static runtime deps.
+/// 3. HF origins — static, always needed for model fetch.
+/// 4. Registry-derived `network_origins` — any additional origins from models.
+/// 5. Claude bridge — `ws://localhost:8765`.
+fn build_connect_src(registry: &Registry) -> String {
+    let mut parts: Vec<String> = vec!["'self'".into(), "blob:".into(), "data:".into()];
+
+    // Static CDN origins.
+    for origin in STATIC_CDN_ORIGINS {
+        parts.push((*origin).to_owned());
+    }
+
+    // Hugging Face origins (always included).
+    for origin in HF_ORIGINS {
+        parts.push((*origin).to_owned());
+    }
+
+    // Registry-derived origins (deduped via BTreeSet, sorted for determinism).
+    let reg_origins = registry_origins(registry);
+    for origin in reg_origins {
+        // Skip duplicates already covered by the static lists above.
+        if !parts.contains(&origin) {
+            parts.push(origin);
+        }
+    }
+
+    // Claude bridge — always last for visual clarity.
+    if !parts.contains(&BRIDGE_ORIGIN.to_owned()) {
+        parts.push(BRIDGE_ORIGIN.to_owned());
+    }
+
+    parts.join(" ")
+}
+
+/// Build the full report-only CSP directive value (a single long line).
+fn build_csp(registry: &Registry) -> String {
+    let connect_src = build_connect_src(registry);
+    // Script CDN origins (same set as the static CDNs, no HF).
+    let script_cdns = STATIC_CDN_ORIGINS.join(" ");
+    format!(
+        "default-src 'self'; \
+         script-src 'self' 'unsafe-inline' blob: {script_cdns}; \
+         worker-src 'self' blob:; \
+         connect-src {connect_src}; \
+         img-src 'self' data: blob:; \
+         media-src 'self' blob:; \
+         style-src 'self' 'unsafe-inline'"
+    )
+}
+
+/// Generate the full `_headers` file content.
+pub fn generate_headers(registry: &Registry) -> String {
+    let csp = build_csp(registry);
+    format!(
+        "# Cloudflare Pages / Netlify response headers.\n\
+         # GENERATED by `xtask gen-headers` — do not edit by hand.\n\
+         # Re-generate with: cargo xtask gen-headers --out _headers\n\
+         # Check freshness: cargo xtask gen-headers --out _headers --check\n\
+         #\n\
+         # Cross-origin isolation → crossOriginIsolated → SharedArrayBuffer →\n\
+         # multithreaded WASM.\n\
+         #\n\
+         # COEP=credentialless (not require-corp): require-corp breaks HF CDN\n\
+         # redirects (decision log 2026-06-04).\n\
+         #\n\
+         # CSP is REPORT-ONLY (not enforced) until Phase 6 (Extension SDK).\n\
+         # ws://localhost:8765 (Claude bridge) is KEPT in hosted builds —\n\
+         # decision log 2026-06-04: localhost is inside the user's trust boundary.\n\
+         /*\n\
+           Cross-Origin-Opener-Policy: same-origin\n\
+           Cross-Origin-Embedder-Policy: credentialless\n\
+           Content-Security-Policy-Report-Only: {csp}\n"
+    )
+}
+
+/// Generate the local-server `Content-Security-Policy` header VALUE (not the
+/// full `_headers` file — just the directive value for the Axum `server/`
+/// crate's enforced CSP header).
+///
+/// For the local server we emit the same policy but as an **enforcing** header
+/// (not report-only) because the local dev server does not need the observation
+/// period.
+pub fn generate_local_csp_value(registry: &Registry) -> String {
+    build_csp(registry)
+}
+
+/// Compare generated content to the on-disk file and bail on drift.
+fn check_freshness(target: &Path, generated: &str) -> Result<()> {
+    if !target.exists() {
+        bail!(
+            "[gen-headers --check] target file not found: {} \
+             (generate it first with: cargo xtask gen-headers --out {})",
+            target.display(),
+            target.display()
+        );
+    }
+    let on_disk =
+        std::fs::read_to_string(target).with_context(|| format!("reading {}", target.display()))?;
+
+    if on_disk == generated {
+        eprintln!(
+            "[gen-headers --check] PASS — {} is up to date.",
+            target.display()
+        );
+        Ok(())
+    } else {
+        // Emit a human-readable diff (line-by-line) so CI output is actionable.
+        eprintln!(
+            "[gen-headers --check] FAIL — {} is STALE. Diff (< on-disk, > generated):",
+            target.display()
+        );
+        diff_lines(&on_disk, generated);
+        bail!(
+            "_headers is stale relative to the registry; \
+             regenerate with: cargo xtask gen-headers --out {}",
+            target.display()
+        )
+    }
+}
+
+/// Print a simple line-level diff to stderr.
+fn diff_lines(old: &str, new: &str) {
+    let old_lines: Vec<&str> = old.lines().collect();
+    let new_lines: Vec<&str> = new.lines().collect();
+    let max = old_lines.len().max(new_lines.len());
+    for i in 0..max {
+        match (old_lines.get(i), new_lines.get(i)) {
+            (Some(o), Some(n)) if o == n => {}
+            (Some(o), Some(n)) => {
+                eprintln!("< {o}");
+                eprintln!("> {n}");
+            }
+            (Some(o), None) => eprintln!("< {o}"),
+            (None, Some(n)) => eprintln!("> {n}"),
+            (None, None) => {}
+        }
+    }
+}
+
+fn resolve_repo_root() -> Result<PathBuf> {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_owned());
+    let xtask_dir = PathBuf::from(manifest_dir);
+    xtask_dir
+        .parent()
+        .context("xtask CARGO_MANIFEST_DIR has no parent — unexpected layout")
+        .map(Path::to_path_buf)
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "tests use unwrap/expect as assertion mechanism"
+)]
+mod tests {
+    use super::*;
+    use silent_core::ids::ModelId;
+    use silent_core::registry::{
+        Cache, CacheStore, ExecutionProvider, Host, Model, ModelFile, Provider, Task,
+    };
+
+    fn make_minimal_registry() -> Registry {
+        let model = Model {
+            id: ModelId::new("asr.test.fixture"),
+            task: Task::Asr,
+            provider: Provider::Huggingface,
+            repo: "owner/test-repo".into(),
+            revision: "abc1234567890abcdef1234567890abcdef12345".into(),
+            host: Host::RustOrtWeb,
+            execution_provider: ExecutionProvider::Cpu,
+            precision: vec!["int8".into()],
+            memory_budget_mb: 100,
+            cache: Cache::new(CacheStore::CacheApi),
+            license: "MIT".into(),
+            license_verified: true,
+            network_origins: vec!["https://huggingface.co".into()],
+            files: vec![ModelFile {
+                path: "model.onnx".into(),
+                size: Some(1024),
+                sha256: Some("deadbeef".repeat(8)),
+                purpose: Some("encoder".into()),
+            }],
+            device_tiers: std::collections::BTreeMap::default(),
+            validation: None,
+            perf_budget: None,
+        };
+        Registry {
+            models: vec![model],
+        }
+    }
+
+    #[test]
+    fn generated_headers_contains_invariants() {
+        let registry = make_minimal_registry();
+        let headers = generate_headers(&registry);
+
+        // COOP/COEP invariants.
+        assert!(
+            headers.contains("Cross-Origin-Opener-Policy: same-origin"),
+            "missing COOP: {headers}"
+        );
+        assert!(
+            headers.contains("Cross-Origin-Embedder-Policy: credentialless"),
+            "missing COEP: {headers}"
+        );
+
+        // Report-only, not enforced.
+        assert!(
+            headers.contains("Content-Security-Policy-Report-Only:"),
+            "should be report-only: {headers}"
+        );
+        assert!(
+            !headers.contains("Content-Security-Policy:"),
+            "should NOT have enforcing CSP yet: {headers}"
+        );
+
+        // Bridge origin present.
+        assert!(
+            headers.contains("ws://localhost:8765"),
+            "missing bridge origin: {headers}"
+        );
+    }
+
+    #[test]
+    fn connect_src_includes_hf_and_cdn() {
+        let registry = make_minimal_registry();
+        let csp = build_csp(&registry);
+        assert!(csp.contains("https://huggingface.co"), "missing HF: {csp}");
+        assert!(csp.contains("https://*.hf.co"), "missing *.hf.co: {csp}");
+        assert!(
+            csp.contains("https://cdn-lfs.huggingface.co"),
+            "missing cdn-lfs: {csp}"
+        );
+        assert!(
+            csp.contains("https://cdn-lfs-us-1.huggingface.co"),
+            "missing cdn-lfs-us-1: {csp}"
+        );
+        assert!(
+            csp.contains("https://cdn.jsdelivr.net"),
+            "missing jsdelivr: {csp}"
+        );
+        assert!(csp.contains("https://unpkg.com"), "missing unpkg: {csp}");
+        assert!(
+            csp.contains("https://cdn.pyke.io"),
+            "missing cdn.pyke.io: {csp}"
+        );
+        assert!(csp.contains("ws://localhost:8765"), "missing bridge: {csp}");
+    }
+
+    #[test]
+    fn clean_fixture_registry_generates_valid_headers() {
+        let fixture =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/clean/models.toml");
+        let content = std::fs::read_to_string(&fixture).expect("read clean fixture");
+        let registry: Registry = toml::from_str(&content).expect("parse clean fixture");
+        let headers = generate_headers(&registry);
+        assert!(
+            headers.contains("Cross-Origin-Opener-Policy: same-origin"),
+            "missing COOP: {headers}"
+        );
+    }
+
+    #[test]
+    fn check_mode_passes_on_matching_content() {
+        use std::io::Write;
+        let registry = make_minimal_registry();
+        let generated = generate_headers(&registry);
+
+        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        tmp.write_all(generated.as_bytes()).expect("write");
+
+        // check_freshness should return Ok when content matches.
+        check_freshness(tmp.path(), &generated).expect("should pass on matching content");
+    }
+
+    #[test]
+    fn check_mode_fails_on_stale_content() {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().expect("tempfile");
+        tmp.write_all(b"stale content").expect("write");
+
+        let result = check_freshness(tmp.path(), "fresh generated content");
+        assert!(result.is_err(), "should fail on mismatched content");
+    }
+}

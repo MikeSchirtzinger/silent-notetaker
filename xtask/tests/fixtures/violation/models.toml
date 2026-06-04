@@ -1,0 +1,34 @@
+# Violation fixture registry — used by xtask tests to verify the "fail" direction.
+#
+# This file deliberately contains multiple registry violations:
+#   1. revision = "main"         — unpinned revision (must be rejected)
+#   2. file missing sha256       — incomplete file entry
+#   3. file missing size         — incomplete file entry
+#   4. license = ""              — empty license field
+#   5. license_verified = false  — human hasn't verified the license
+#
+# The model-audit test asserts that at least a "not pinned" violation is reported.
+
+[[model]]
+id = "asr.violation.unpinned"
+task = "asr"
+provider = "huggingface"
+repo = "someone/unpinned-model"
+revision = "main"
+host = "js-transformers"
+execution_provider = "webgpu"
+precision = ["q4f16"]
+memory_budget_mb = 5000
+license = ""
+license_verified = false
+network_origins = ["https://huggingface.co"]
+
+  [model.cache]
+  store = "transformers-idb"
+  verify_once_per_revision = true
+
+  [[model.files]]
+  path = "encoder.onnx"
+  # sha256 intentionally omitted
+  # size intentionally omitted
+  purpose = "encoder"

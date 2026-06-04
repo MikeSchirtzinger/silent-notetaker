@@ -27,8 +27,7 @@ fn load_registry() -> Registry {
     let path = registry_path();
     let contents = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
-    toml::from_str(&contents)
-        .unwrap_or_else(|e| panic!("failed to parse {}: {e}", path.display()))
+    toml::from_str(&contents).unwrap_or_else(|e| panic!("failed to parse {}: {e}", path.display()))
 }
 
 #[test]
@@ -81,7 +80,10 @@ fn all_required_models_present() {
     ];
 
     for id in required {
-        assert!(ids.contains(id), "required model {id} missing from registry");
+        assert!(
+            ids.contains(id),
+            "required model {id} missing from registry"
+        );
     }
 }
 
@@ -154,7 +156,11 @@ fn sensevoice_is_gated() {
         sv.revision
     );
     // Host must be js-sherpa
-    assert_eq!(sv.host, Host::JsSherpa, "SenseVoice must use js-sherpa host");
+    assert_eq!(
+        sv.host,
+        Host::JsSherpa,
+        "SenseVoice must use js-sherpa host"
+    );
     // Must have the pre-hashed files from A5
     assert_eq!(
         sv.files.len(),
@@ -267,20 +273,20 @@ fn qwen_tier_mechanism_encoded_as_data() {
     assert!(
         q06.device_tiers
             .get("wasm_only")
-            .map_or(false, |t| t.default_for_tier),
+            .is_some_and(|t| t.default_for_tier),
         "Qwen3-0.6B must be the wasm_only default"
     );
     assert!(
         q06.device_tiers
             .get("webgpu_low")
-            .map_or(false, |t| t.default_for_tier),
+            .is_some_and(|t| t.default_for_tier),
         "Qwen3-0.6B must be the webgpu_low default"
     );
     // 0.6B must NOT be default on high tiers
     assert!(
         !q06.device_tiers
             .get("webgpu_high")
-            .map_or(false, |t| t.default_for_tier),
+            .is_some_and(|t| t.default_for_tier),
         "Qwen3-0.6B must NOT be the webgpu_high default (1.7B is)"
     );
 
@@ -292,20 +298,20 @@ fn qwen_tier_mechanism_encoded_as_data() {
     assert!(
         q17.device_tiers
             .get("webgpu_high")
-            .map_or(false, |t| t.default_for_tier),
+            .is_some_and(|t| t.default_for_tier),
         "Qwen3-1.7B must be the webgpu_high default"
     );
     assert!(
         q17.device_tiers
             .get("webgpu_mid")
-            .map_or(false, |t| t.default_for_tier),
+            .is_some_and(|t| t.default_for_tier),
         "Qwen3-1.7B must be the webgpu_mid default"
     );
     // 1.7B must NOT be default on wasm_only
     assert!(
         !q17.device_tiers
             .get("wasm_only")
-            .map_or(false, |t| t.default_for_tier),
+            .is_some_and(|t| t.default_for_tier),
         "Qwen3-1.7B must NOT be the wasm_only default (too large)"
     );
 }
@@ -315,11 +321,9 @@ fn registry_survives_toml_round_trip() {
     let path = registry_path();
     let contents = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
-    let parsed: Registry =
-        toml::from_str(&contents).expect("real registry TOML must parse");
+    let parsed: Registry = toml::from_str(&contents).expect("real registry TOML must parse");
     let serialised = toml::to_string(&parsed).expect("re-serialise to TOML");
-    let reparsed: Registry =
-        toml::from_str(&serialised).expect("re-parse serialised TOML");
+    let reparsed: Registry = toml::from_str(&serialised).expect("re-parse serialised TOML");
     assert_eq!(
         parsed, reparsed,
         "real registry survives toml → struct → toml → struct round-trip"

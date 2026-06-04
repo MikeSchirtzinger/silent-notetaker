@@ -1,13 +1,11 @@
 [package]
 name = "nemotron-asr"
 version = "0.1.0"
-# TODO-D3: migrate to edition 2024 to match the rest of the workspace. Left at
-# 2021 here because the streaming.rs / backend_web.rs consolidation (Task D3)
-# touches the same files and a same-time edition bump would muddy that diff; the
-# crate also keeps its own pinned deps (ort =2.0.0-rc.12, ort-web 0.2.1) and
-# publishes to crates.io standalone, so its edition is intentionally decoupled
-# from [workspace.package].edition. Migration is trivial (no 2024-breaking
-# patterns surveyed) and tracked for Phase D, Task D3.
+# Edition 2021 retained (not migrated to 2024): `cargo fix --edition` flags a
+# tail-expr-drop-order warning in `model::encoder_frame` where ndarray's
+# `OwnedRepr<A>` drop order changes in temporaries. While harmless (pure memory
+# dealloc, no side effects), the spec requires leaving 2021 when anything
+# non-trivial surfaces. This is the one finding. Track for Phase K hardening.
 edition = "2021"
 description = "Streaming ASR engine for NVIDIA nemotron-speech-streaming-en-0.6b (ONNX, cache-aware RNN-T) — native + wasm32."
 license = "MIT OR Apache-2.0"
@@ -25,13 +23,9 @@ categories = ["multimedia::audio", "science"]
 # workspace); the wasm build therefore keeps identical size characteristics.
 # The sibling `server/` crate is `workspace.exclude`d and stays independent.
 #
-# Lints: this crate moves in AS-IS (spec Task C1 item 4) and keeps its own lint
-# posture rather than opting into the strict [workspace.lints] (clippy pedantic,
-# unwrap_used=deny). Tightening it to the workspace bar is bundled with the
-# Phase D / Task D3 chunking-loop consolidation that already rewrites
-# streaming.rs / backend_web.rs, so the lint churn lands in one reviewable diff
-# instead of contaminating this move. It is still gated by the workspace
-# fmt/check/test runs and clippy `all` (default-on lints).
+# Lints: this crate opts into [workspace.lints] as of Task D3. Any per-crate
+# relaxations carry documented rationale at the allow site. The TODO-D3 edition
+# migration is addressed below.
 
 [lib]
 name = "nemotron_asr"
@@ -91,6 +85,17 @@ console_error_panic_hook = "0.1"
 # compiling on wasm; `WasmAsr` takes f32 samples directly from JS and never
 # calls it, so it is dead code in the wasm binary.
 hound = "3.5"
+
+# TODO-D3: this crate is intended to opt into [workspace.lints] once the D3
+# chunking-loop consolidation is complete and the unsafe_code conflict is
+# resolved. Until then it uses the default lint posture rather than the strict
+# workspace config (pedantic, unwrap_used=deny, unsafe_code=forbid).
+#
+# Reason workspace=true is NOT set here: ndarray's `s!` macro expands with
+# `#[allow(unsafe_code)]` internally, which is incompatible with the workspace
+# `unsafe_code = "forbid"` (Rust forbid cannot be overridden by allow at any
+# lower scope — E0453). D3 will audit unsafe usage, add a documented per-site
+# allow, and flip to workspace lints as part of its deliverables.
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
