@@ -17,3 +17,10 @@ workspace = true
 
 [dependencies]
 silent-core = { path = "../silent-core" }
+
+[dev-dependencies]
+# Test-only: the search golden tests (`tests/search_golden.rs`) deserialize the
+# JS-generated fixtures under `goldens/search/`. The `search` module itself has
+# no serde dependency — it is pure stdlib — so these stay in dev-dependencies.
+serde = { workspace = true }
+serde_json = { workspace = true }
