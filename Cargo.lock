@@ -1286,7 +1286,10 @@ dependencies = [
 name = "silent-extension-sdk"
 version = "0.1.0"
 dependencies = [
- "silent-core",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "ts-rs",
 ]
 
 [[package]]
