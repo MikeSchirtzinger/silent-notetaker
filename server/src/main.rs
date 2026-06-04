@@ -42,25 +42,40 @@ async fn main() {
     let coep = HeaderName::from_static("cross-origin-embedder-policy");
 
     // CSP REPORT-ONLY — for tuning, NOT enforcement.
-    // Purpose: observe the real egress surface before locking it down.
-    // How to read violations: open DevTools → Console; violations appear as
-    //   "[Report Only] Refused to connect to ..." messages.  Note any origins
-    //   not in connect-src (especially HF redirect CDN hosts) and add them
-    //   before promoting.
-    // How to promote to enforcing: once a browser test (with mic + real model
-    //   download) shows ZERO violations, rename the header name below from
-    //   "content-security-policy-report-only" to "content-security-policy".
-    //   Never enforce without that test — blob: worker and HF CDN redirects
-    //   can vary and a wrong enforce would block transcription.
-    // ws://localhost:8765 is included here (local dev server — Claude bridge
-    //   is available locally; it is intentionally absent from the hosted
-    //   _headers where the bridge is not available).
+    //
+    // SOURCE OF TRUTH: this value MUST stay in sync with the generated policy.
+    //   `cargo xtask gen-headers` derives the canonical CSP (shipping `_headers`
+    //   + the local-server CSP via `--local-csp-out`) from the model registry +
+    //   static invariants. The string below is the same directive set/order that
+    //   `gen_headers::generate_local_csp_value` emits (see xtask/src/gen_headers.rs).
+    //   If you change egress origins, change them in gen_headers.rs and copy the
+    //   regenerated value here — do NOT hand-edit one without the other (that is
+    //   exactly the drift this comment exists to prevent: an earlier copy was
+    //   missing `https://cdn.pyke.io`, the ort-web onnxruntime-web runtime CDN,
+    //   producing spurious report-only violations locally that did not occur in
+    //   production where `_headers` is correct).
+    //
+    // Why report-only (not the enforcing header gen_headers documents for the
+    //   local server): the shipping `_headers` ships CSP as report-only until
+    //   Phase 6 (Extension SDK). The local dev server mirrors that observation
+    //   posture so violations surface in DevTools → Console as
+    //   "[Report Only] Refused to connect to ..." without blocking transcription.
+    //   Promote to enforcing (rename to "content-security-policy") only when a
+    //   real browser run with mic + model download shows ZERO violations — and do
+    //   it in lockstep with the hosted `_headers` promotion.
+    //
+    // ws://localhost:8765 (Claude bridge) is included; per the 2026-06-04 decision
+    //   log it is also KEPT in the hosted `_headers` (localhost is inside the
+    //   user's trust boundary).
     let csp_ro = HeaderName::from_static("content-security-policy-report-only");
+    // Kept byte-identical to `gen_headers::generate_local_csp_value` output.
     let csp_ro_value = HeaderValue::from_static(
         "default-src 'self'; \
-         script-src 'self' 'unsafe-inline' blob: https://cdn.jsdelivr.net https://unpkg.com; \
+         script-src 'self' 'unsafe-inline' blob: \
+             https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io; \
          worker-src 'self' blob:; \
-         connect-src 'self' blob: data: https://cdn.jsdelivr.net https://unpkg.com \
+         connect-src 'self' blob: data: \
+             https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io \
              https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co \
              https://cdn-lfs-us-1.huggingface.co ws://localhost:8765; \
          img-src 'self' data: blob:; \
