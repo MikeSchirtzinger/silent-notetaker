@@ -1,19 +1,84 @@
-# Stub crate (Phase 1 scaffold). Implemented in Phase 4 (Task H2): IndexedDB via
-# indexed_db_futures, the zero-loss Dexie v2 migration (productionized from spike
-# a4), and the four tables (meetings, transcriptChunks, notes, screenshots) with
-# export-backup before migrate.
+# Browser storage for Silent Notetaker (PRD Phase 4, Task H2).
+#
+# Productionizes the S4 spike (docs/research/spike-storage.md,
+# /Users/mike/dev/snt-spikes/a4-storage): open the existing Dexie v2
+# `SilentNotetaker` IndexedDB from Rust/WASM, read all four tables
+# (meetings, transcriptChunks, notes, screenshots) with the PROVEN two-phase
+# reader (no IDB transaction held across a non-IDB await), and run the zero-loss
+# migration that normalizes screenshots to `Uint8Array` — gated behind an
+# export-backup the UI offers first (PRD Phase 4 exit criterion / Key Risk:
+# "Dexie→Rust storage migration loses meetings").
+#
+# The typed record + boundary-event shapes live in `silent-core::storage` (the
+# contract, browser-free, testable without a browser). This crate is the BROWSER
+# runtime: it needs web-sys/js-sys/indexed_db_futures, which silent-core may not.
+#
+# Native (`cargo check --workspace`) builds this crate too — the IndexedDB reader
+# is `cfg(target_arch = "wasm32")`-gated, and the native build exercises the
+# re-exported core types + the pure-Rust backup serializer (covered by native
+# unit tests). The browser readback/migration is exercised by wasm-bindgen-test
+# (`tests/browser_idb.rs`, run at wiring time).
 [package]
 name = "silent-storage"
 version = "0.1.0"
-description = "Browser storage for Silent Notetaker: IndexedDB access and zero-loss Dexie v2 migration. Stub pending Phase 4."
+description = "Browser storage for Silent Notetaker: IndexedDB access via indexed_db_futures and the zero-loss Dexie v2 migration with export-backup."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lib]
+# `cdylib` for the wasm-pack build; `rlib` keeps the native library + tests
+# linkable. Mirrors nemotron-asr / silent-diarization / silent-web.
+crate-type = ["cdylib", "rlib"]
+
 [lints]
 workspace = true
 
 [dependencies]
 silent-core = { path = "../silent-core" }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# ---------------------------------------------------------------------------
+# wasm32 — the IndexedDB runtime. None of this enters the native build; the
+# reader/migrator is `cfg(target_arch = "wasm32")`-gated.
+#
+# `indexed_db_futures` 0.6 with cursors + streams + serde:
+#   - cursors: `open_cursor()` on object stores
+#   - streams: `cursor.stream_ser::<T>()` and `cursor.stream::<JsValue>()`
+#   - serde:   serde-based record deserialization (TryFromJs)
+# Pinned versions match the workspace lock (wasm-bindgen 0.2.122, js/web-sys
+# 0.3.99) and the proven S4 spike (indexed_db_futures 0.6.4).
+# ---------------------------------------------------------------------------
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "console",
+    "Window",
+    "Storage",
+    "Blob",
+    "BlobPropertyBag",
+    "Url",
+] }
+indexed_db_futures = { version = "0.6", features = ["cursors", "streams", "serde"] }
+futures = "0.3"
+console_error_panic_hook = "0.1"
+serde-wasm-bindgen = "0.6"
+
+[dev-dependencies]
+# The browser IDB round-trip (`tests/browser_idb.rs`) runs via
+# `wasm-pack test --headless --chrome`. Native `cargo test` runs the pure-Rust
+# unit tests in `src/` (serde/backup/normalization logic).
+wasm-bindgen-test = "0.3"
+
+# The browser IDB test is wasm32-only and needs a live IndexedDB; declared
+# explicitly so `cargo test` (native) does not try to build/run it, and
+# `cargo test --target wasm32-unknown-unknown` discovers it.
+[[test]]
+name = "browser_idb"
+path = "tests/browser_idb.rs"
