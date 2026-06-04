@@ -982,6 +982,8 @@ dependencies = [
 name = "silent-inference"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "silent-core",
 ]
 
