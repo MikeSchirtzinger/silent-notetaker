@@ -60,7 +60,14 @@ fn strip_leading_bullets(s: &str) -> &str {
 fn match_tag(rest: &str) -> Option<(&'static str, &str)> {
     const TAGS: [&str; 5] = ["TOPIC", "DECISION", "ACTION", "KEYPOINT", "QUESTION"];
     for tag in TAGS {
-        if rest.len() >= tag.len() && rest[..tag.len()].eq_ignore_ascii_case(tag) {
+        // Compare the leading bytes, never slicing a string. `rest[..tag.len()]`
+        // would PANIC when `tag.len()` lands inside a multi-byte char (e.g. a
+        // line like "ACTION – text": at the `–` (en-dash, 3 bytes) the 8-byte
+        // "KEYPOINT" probe would split it). The tags are pure ASCII, so an
+        // ASCII-case-insensitive byte-prefix compare is exact and panic-free.
+        let tb = tag.as_bytes();
+        let rb = rest.as_bytes();
+        if rb.len() >= tb.len() && rb[..tb.len()].eq_ignore_ascii_case(tb) {
             return Some((tag, &rest[tag.len()..]));
         }
     }
@@ -436,6 +443,23 @@ mod tests {
     #[test]
     fn drops_short_text() {
         assert!(parse_qwen_notes("ACTION| ok").is_empty());
+    }
+
+    #[test]
+    fn en_dash_separator_does_not_panic_on_tag_probe() {
+        // Regression: `match_tag` must not byte-slice a multi-byte char. The
+        // en-dash (`–`, 3 bytes) sits where the 8-byte "KEYPOINT" probe length
+        // lands inside it, which previously panicked. The `–` is a supported
+        // separator, so this line MUST parse to one action note.
+        let notes = parse_qwen_notes("ACTION – do the thing here");
+        assert_eq!(notes.len(), 1, "got: {notes:?}");
+        assert_eq!(notes[0].cat, "actions");
+        assert_eq!(notes[0].text, "do the thing here");
+        // And the en-dash can also appear in the note TEXT without breaking the
+        // tag probe (a non-ASCII byte before any tag length boundary).
+        let notes2 = parse_qwen_notes("KEYPOINT| margin — 12 percent");
+        assert_eq!(notes2.len(), 1);
+        assert_eq!(notes2[0].text, "margin — 12 percent");
     }
 
     #[test]
