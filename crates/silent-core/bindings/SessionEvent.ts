@@ -2,6 +2,8 @@
 import type { AsrError } from "./AsrError";
 import type { EngineEvent } from "./EngineEvent";
 import type { SessionState } from "./SessionState";
+import type { StopHooks } from "./StopHooks";
+import type { TimestampMode } from "./TimestampMode";
 
 /**
  * An event emitted by the core to the UI to render.
@@ -13,7 +15,23 @@ export type SessionEvent = { "tag": "state_changed", "payload": {
 /**
  * The new session state.
  */
-state: SessionState, } } | { "tag": "engine", "payload": EngineEvent } | { "tag": "speaker_label", "payload": { 
+state: SessionState, } } | { "tag": "engine", "payload": EngineEvent } | { "tag": "title_changed", "payload": { 
+/**
+ * The clamped, render-ready title.
+ */
+title: string, } } | { "tag": "sources_changed", "payload": { 
+/**
+ * Mic capture is active.
+ */
+mic: boolean, 
+/**
+ * Tab/system audio is mixed in.
+ */
+tab: boolean, } } | { "tag": "timestamp_mode_changed", "payload": { 
+/**
+ * The newly-active mode.
+ */
+mode: TimestampMode, } } | { "tag": "stop_hooks", "payload": StopHooks } | { "tag": "speaker_label", "payload": { 
 /**
  * The speaker's cluster id.
  */

@@ -1,0 +1,187 @@
+{
+ "description": "DOM-free goldens for index.html formatMs/formatStamp(ago,elapsed)/title-resolve/title-clamp",
+ "defaultTitle": "Untitled Meeting",
+ "maxTitleChars": 120,
+ "formatMs": [
+  {
+   "ms": 0,
+   "out": "00:00"
+  },
+  {
+   "ms": 999,
+   "out": "00:00"
+  },
+  {
+   "ms": 1000,
+   "out": "00:01"
+  },
+  {
+   "ms": 59000,
+   "out": "00:59"
+  },
+  {
+   "ms": 60000,
+   "out": "01:00"
+  },
+  {
+   "ms": 61500,
+   "out": "01:01"
+  },
+  {
+   "ms": 600000,
+   "out": "10:00"
+  },
+  {
+   "ms": 5940000,
+   "out": "99:00"
+  },
+  {
+   "ms": 6000000,
+   "out": "100:00"
+  },
+  {
+   "ms": 6059000,
+   "out": "100:59"
+  },
+  {
+   "ms": 362439000,
+   "out": "6040:39"
+  }
+ ],
+ "formatAgo": [
+  {
+   "deltaMs": 0,
+   "out": "0s ago"
+  },
+  {
+   "deltaMs": -5000,
+   "out": "0s ago"
+  },
+  {
+   "deltaMs": 1000,
+   "out": "1s ago"
+  },
+  {
+   "deltaMs": 30000,
+   "out": "30s ago"
+  },
+  {
+   "deltaMs": 59000,
+   "out": "59s ago"
+  },
+  {
+   "deltaMs": 60000,
+   "out": "1m ago"
+  },
+  {
+   "deltaMs": 90000,
+   "out": "1m ago"
+  },
+  {
+   "deltaMs": 3540000,
+   "out": "59m ago"
+  },
+  {
+   "deltaMs": 3600000,
+   "out": "1h ago"
+  },
+  {
+   "deltaMs": 5400000,
+   "out": "1h ago"
+  },
+  {
+   "deltaMs": 9000000,
+   "out": "2h ago"
+  },
+  {
+   "deltaMs": 90000000,
+   "out": "25h ago"
+  }
+ ],
+ "formatStampElapsed": [
+  {
+   "tsMs": 31000,
+   "start": 1000,
+   "out": "00:30"
+  },
+  {
+   "tsMs": 1000,
+   "start": 1000,
+   "out": "00:00"
+  },
+  {
+   "tsMs": 130000,
+   "start": 10000,
+   "out": "02:00"
+  },
+  {
+   "tsMs": 500,
+   "start": 0,
+   "out": "00:00"
+  }
+ ],
+ "resolveTitle": [
+  {
+   "raw": "",
+   "out": "Untitled Meeting",
+   "outChars": 16
+  },
+  {
+   "raw": "   ",
+   "out": "Untitled Meeting",
+   "outChars": 16
+  },
+  {
+   "raw": "\t\n ",
+   "out": "Untitled Meeting",
+   "outChars": 16
+  },
+  {
+   "raw": "Weekly Sync",
+   "out": "Weekly Sync",
+   "outChars": 11
+  },
+  {
+   "raw": "  Weekly Sync  ",
+   "out": "Weekly Sync",
+   "outChars": 11
+  },
+  {
+   "raw": "     Standup",
+   "out": "Standup",
+   "outChars": 7
+  },
+  {
+   "raw": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+   "out": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+   "outChars": 120
+  },
+  {
+   "raw": "  yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy  ",
+   "out": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+   "outChars": 120
+  }
+ ],
+ "clampTitle": [
+  {
+   "raw": "Standup",
+   "out": "Standup",
+   "outChars": 7
+  },
+  {
+   "raw": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "out": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "outChars": 120
+  },
+  {
+   "raw": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+   "out": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+   "outChars": 120
+  },
+  {
+   "raw": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+   "out": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+   "outChars": 120
+  }
+ ]
+}
