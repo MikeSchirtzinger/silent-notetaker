@@ -46,6 +46,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::TextEvent;
+
 /// 16 kHz mono is the rate every engine expects ([`silent_core::events::AsrCapabilities`]).
 /// Ring positions and audio caps are counted in samples at this rate.
 const SAMPLE_RATE_HZ: u64 = 16_000;
@@ -485,24 +487,6 @@ impl VoxtralRecyclePolicy {
 /// Sentinel context index marking the finalized terminal state. `u32::MAX` is
 /// unreachable as a real context count (it would require 4-billion recycles).
 const FINALIZED: u32 = u32::MAX;
-
-/// A transcript text event produced by the in-place partial-text accumulator.
-///
-/// Maps to the JS callbacks: [`Partial`](TextEvent::Partial) is `onPartial`
-/// (the live element updated in place), [`Final`](TextEvent::Final) is `onFinal`
-/// (promoted, sentence complete). The UI renders these (rendering stays in JS);
-/// the *segmentation policy* — what counts as a sentence, what the in-place
-/// buffer is — is Rust.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "text", rename_all = "snake_case")]
-pub enum TextEvent {
-    /// The current in-place sentence buffer (JS `onPartial(sentenceBuffer)`). The
-    /// UI overwrites the live element's text with this each time.
-    Partial(String),
-    /// A completed sentence (JS `onFinal(completeSentence)`), promoted out of the
-    /// live element. Will not be revised.
-    Final(String),
-}
 
 /// In-place partial-text accumulation: the `printLen` / `sentenceBuffer` machine
 /// from `flushDecodedText` and `streamer.end()`.
