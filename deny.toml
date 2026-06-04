@@ -32,9 +32,26 @@ exclude-dev = false
 #     { id = "RUSTSEC-YYYY-NNNN", reason = "..." },
 #   ]
 #
-# No ignores at this time — a clean advisory record is a quality signal for
-# the nemotron-asr crates.io publish (PRD R10).
-ignore = []
+# Per-advisory opt-outs (documented rationale required):
+ignore = [
+    # RUSTSEC-2024-0388 — `derivative` is UNMAINTAINED (not a vulnerability; an
+    # advisory of kind "unmaintained"). It enters the graph ONLY as a build-time
+    # proc-macro, transitively and unavoidably:
+    #     derivative (proc-macro, build-only)
+    #       └── wasm_evt_listener 0.1
+    #             └── indexed_db_futures 0.6.4
+    #                   └── silent-storage   (wasm32 only)
+    # `indexed_db_futures` is the proven, PRD-blessed IndexedDB binding for the
+    # Phase 4 zero-loss Dexie v2 migration (S4 spike → Task H2); there is no
+    # supported version that drops the `wasm_evt_listener`/`derivative` chain.
+    # It is build-only and confined to the wasm32 `silent-storage` artifact — it
+    # never reaches `nemotron-asr` (the crates.io publish target whose clean
+    # record matters for PRD R10) nor any runtime code path.
+    # REMEDIATION: drop this ignore when indexed_db_futures upgrades off
+    # wasm_evt_listener/derivative, or when silent-storage moves to a different
+    # IDB binding. Tracked alongside Task H2/K2.
+    { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; build-only proc-macro forced by indexed_db_futures (H2 storage migration), wasm32 silent-storage only, never in the publishable nemotron-asr crate or any runtime path." },
+]
 
 # ---------------------------------------------------------------------------
 # Licenses — SPDX expressions
