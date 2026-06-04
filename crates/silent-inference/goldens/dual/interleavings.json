@@ -1,0 +1,588 @@
+{
+ "description": "DOM-free goldens for index.html dual-mode draft/refine interleaving (Appendix A row 11)",
+ "cases": [
+  {
+   "name": "single_draft_then_refine",
+   "events": [
+    {
+     "kind": "moonshine",
+     "text": "helo wrld"
+    },
+    {
+     "kind": "sensevoice",
+     "text": "hello world"
+    }
+   ],
+   "steps": [
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "helo wrld"
+     },
+     "items": [
+      {
+       "text": "helo wrld",
+       "draft": true
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "sensevoice",
+      "text": "hello world"
+     },
+     "items": [
+      {
+       "text": "helo wrld",
+       "draft": true
+      },
+      {
+       "text": "hello world",
+       "draft": false
+      }
+     ]
+    }
+   ],
+   "final": [
+    {
+     "text": "helo wrld",
+     "draft": true
+    },
+    {
+     "text": "hello world",
+     "draft": false
+    }
+   ]
+  },
+  {
+   "name": "multiple_drafts_then_refine_keeps_last_preview",
+   "events": [
+    {
+     "kind": "moonshine",
+     "text": "draft one"
+    },
+    {
+     "kind": "moonshine",
+     "text": "draft two"
+    },
+    {
+     "kind": "moonshine",
+     "text": "draft three"
+    },
+    {
+     "kind": "sensevoice",
+     "text": "refined first segment"
+    }
+   ],
+   "steps": [
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "draft one"
+     },
+     "items": [
+      {
+       "text": "draft one",
+       "draft": true
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "draft two"
+     },
+     "items": [
+      {
+       "text": "draft one",
+       "draft": true
+      },
+      {
+       "text": "draft two",
+       "draft": true
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "draft three"
+     },
+     "items": [
+      {
+       "text": "draft one",
+       "draft": true
+      },
+      {
+       "text": "draft two",
+       "draft": true
+      },
+      {
+       "text": "draft three",
+       "draft": true
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "sensevoice",
+      "text": "refined first segment"
+     },
+     "items": [
+      {
+       "text": "draft three",
+       "draft": true
+      },
+      {
+       "text": "refined first segment",
+       "draft": false
+      }
+     ]
+    }
+   ],
+   "final": [
+    {
+     "text": "draft three",
+     "draft": true
+    },
+    {
+     "text": "refined first segment",
+     "draft": false
+    }
+   ]
+  },
+  {
+   "name": "interleaved_steady_state",
+   "events": [
+    {
+     "kind": "moonshine",
+     "text": "the quick"
+    },
+    {
+     "kind": "moonshine",
+     "text": "brown fox"
+    },
+    {
+     "kind": "sensevoice",
+     "text": "The quick brown fox"
+    },
+    {
+     "kind": "moonshine",
+     "text": "jumps over"
+    },
+    {
+     "kind": "moonshine",
+     "text": "the lazy"
+    },
+    {
+     "kind": "moonshine",
+     "text": "dog today"
+    },
+    {
+     "kind": "sensevoice",
+     "text": "jumps over the lazy dog."
+    }
+   ],
+   "steps": [
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "the quick"
+     },
+     "items": [
+      {
+       "text": "the quick",
+       "draft": true
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "brown fox"
+     },
+     "items": [
+      {
+       "text": "the quick",
+       "draft": true
+      },
+      {
+       "text": "brown fox",
+       "draft": true
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "sensevoice",
+      "text": "The quick brown fox"
+     },
+     "items": [
+      {
+       "text": "brown fox",
+       "draft": true
+      },
+      {
+       "text": "The quick brown fox",
+       "draft": false
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "jumps over"
+     },
+     "items": [
+      {
+       "text": "brown fox",
+       "draft": true
+      },
+      {
+       "text": "The quick brown fox",
+       "draft": false
+      },
+      {
+       "text": "jumps over",
+       "draft": true
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "the lazy"
+     },
+     "items": [
+      {
+       "text": "brown fox",
+       "draft": true
+      },
+      {
+       "text": "The quick brown fox",
+       "draft": false
+      },
+      {
+       "text": "jumps over",
+       "draft": true
+      },
+      {
+       "text": "the lazy",
+       "draft": true
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "dog today"
+     },
+     "items": [
+      {
+       "text": "brown fox",
+       "draft": true
+      },
+      {
+       "text": "The quick brown fox",
+       "draft": false
+      },
+      {
+       "text": "jumps over",
+       "draft": true
+      },
+      {
+       "text": "the lazy",
+       "draft": true
+      },
+      {
+       "text": "dog today",
+       "draft": true
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "sensevoice",
+      "text": "jumps over the lazy dog."
+     },
+     "items": [
+      {
+       "text": "The quick brown fox",
+       "draft": false
+      },
+      {
+       "text": "dog today",
+       "draft": true
+      },
+      {
+       "text": "jumps over the lazy dog.",
+       "draft": false
+      }
+     ]
+    }
+   ],
+   "final": [
+    {
+     "text": "The quick brown fox",
+     "draft": false
+    },
+    {
+     "text": "dog today",
+     "draft": true
+    },
+    {
+     "text": "jumps over the lazy dog.",
+     "draft": false
+    }
+   ]
+  },
+  {
+   "name": "refine_with_no_drafts",
+   "events": [
+    {
+     "kind": "sensevoice",
+     "text": "no drafts yet here"
+    },
+    {
+     "kind": "moonshine",
+     "text": "late draft"
+    },
+    {
+     "kind": "sensevoice",
+     "text": "second refined line"
+    }
+   ],
+   "steps": [
+    {
+     "after": {
+      "kind": "sensevoice",
+      "text": "no drafts yet here"
+     },
+     "items": [
+      {
+       "text": "no drafts yet here",
+       "draft": false
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "late draft"
+     },
+     "items": [
+      {
+       "text": "no drafts yet here",
+       "draft": false
+      },
+      {
+       "text": "late draft",
+       "draft": true
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "sensevoice",
+      "text": "second refined line"
+     },
+     "items": [
+      {
+       "text": "no drafts yet here",
+       "draft": false
+      },
+      {
+       "text": "late draft",
+       "draft": true
+      },
+      {
+       "text": "second refined line",
+       "draft": false
+      }
+     ]
+    }
+   ],
+   "final": [
+    {
+     "text": "no drafts yet here",
+     "draft": false
+    },
+    {
+     "text": "late draft",
+     "draft": true
+    },
+    {
+     "text": "second refined line",
+     "draft": false
+    }
+   ]
+  },
+  {
+   "name": "empty_and_whitespace_ignored",
+   "events": [
+    {
+     "kind": "moonshine",
+     "text": ""
+    },
+    {
+     "kind": "moonshine",
+     "text": "   "
+    },
+    {
+     "kind": "sensevoice",
+     "text": "\t\n "
+    },
+    {
+     "kind": "moonshine",
+     "text": "  real draft  "
+    },
+    {
+     "kind": "sensevoice",
+     "text": "  real final  "
+    }
+   ],
+   "steps": [
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": ""
+     },
+     "items": []
+    },
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "   "
+     },
+     "items": []
+    },
+    {
+     "after": {
+      "kind": "sensevoice",
+      "text": "\t\n "
+     },
+     "items": []
+    },
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "  real draft  "
+     },
+     "items": [
+      {
+       "text": "real draft",
+       "draft": true
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "sensevoice",
+      "text": "  real final  "
+     },
+     "items": [
+      {
+       "text": "real draft",
+       "draft": true
+      },
+      {
+       "text": "real final",
+       "draft": false
+      }
+     ]
+    }
+   ],
+   "final": [
+    {
+     "text": "real draft",
+     "draft": true
+    },
+    {
+     "text": "real final",
+     "draft": false
+    }
+   ]
+  },
+  {
+   "name": "back_to_back_refines",
+   "events": [
+    {
+     "kind": "moonshine",
+     "text": "d1"
+    },
+    {
+     "kind": "sensevoice",
+     "text": "final one"
+    },
+    {
+     "kind": "sensevoice",
+     "text": "final two"
+    }
+   ],
+   "steps": [
+    {
+     "after": {
+      "kind": "moonshine",
+      "text": "d1"
+     },
+     "items": [
+      {
+       "text": "d1",
+       "draft": true
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "sensevoice",
+      "text": "final one"
+     },
+     "items": [
+      {
+       "text": "d1",
+       "draft": true
+      },
+      {
+       "text": "final one",
+       "draft": false
+      }
+     ]
+    },
+    {
+     "after": {
+      "kind": "sensevoice",
+      "text": "final two"
+     },
+     "items": [
+      {
+       "text": "d1",
+       "draft": true
+      },
+      {
+       "text": "final one",
+       "draft": false
+      },
+      {
+       "text": "final two",
+       "draft": false
+      }
+     ]
+    }
+   ],
+   "final": [
+    {
+     "text": "d1",
+     "draft": true
+    },
+    {
+     "text": "final one",
+     "draft": false
+    },
+    {
+     "text": "final two",
+     "draft": false
+    }
+   ]
+  }
+ ]
+}
