@@ -1,18 +1,83 @@
-# Stub crate (Phase 1 scaffold). Implemented in Phase 2 (Tasks F1–F3): the
-# TitaNet embedder (productionized from spike b1), the SpeakerTracker port,
-# stop-time global recluster, and rename/merge-by-rename policy with persistence.
+# Speaker diarization for Silent Notetaker (Phase 2, Tasks F1–F3).
+#
+# Houses the TitaNet-small embedder (productionized from spike b1: native `ort`
+# + browser `ort-web`, the 80-band periodic-Hann frontend from `silent-audio`),
+# the SpeakerTracker port (centroid leader-clustering, thresholds as config,
+# 8-color rotation), the stop-time global recluster (docs/DIARIZATION.md), and
+# the rename / merge-by-rename policy that survives recluster.
+#
+# The frontend itself lives in `silent-audio` (pure Rust, no ort); this crate
+# adds the ONNX inference on top. Diarization command/event TYPES live in
+# `silent-core` (the typed boundary F2 wires the UI against). Raw embeddings
+# never cross an extension or network boundary (PRD R5/R7).
 [package]
 name = "silent-diarization"
 version = "0.1.0"
-description = "Speaker diarization for Silent Notetaker: TitaNet embedder, SpeakerTracker, stop-time recluster, rename/merge policy. Stub pending Phase 2."
+description = "Speaker diarization for Silent Notetaker: TitaNet embedder (native + ort-web), SpeakerTracker, stop-time global recluster, rename/merge-by-rename policy."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[lib]
+# `cdylib` is required for the wasm32 build (wasm-pack); `rlib` keeps the native
+# library + tests linkable as usual. Mirrors nemotron-asr.
+crate-type = ["cdylib", "rlib"]
+
 [lints]
 workspace = true
 
 [dependencies]
 silent-core = { path = "../silent-core" }
+silent-audio = { path = "../silent-audio" }
+ndarray = "0.16"
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+# ---------------------------------------------------------------------------
+# Native (non-wasm) — `ort` with the bundled ONNX Runtime (download-binaries).
+# Pinned to the same RC as nemotron-asr / spike b1 so the ort-web pairing on
+# wasm matches. CPU by design (registry: execution_provider = "cpu") — keeps the
+# GPU free for Voxtral streaming.
+# ---------------------------------------------------------------------------
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
+
+# ---------------------------------------------------------------------------
+# wasm32 — `ort` switches to the `alternative-backend` so `ort-web` supplies the
+# OrtApi (onnxruntime-web). Same pins as nemotron-asr / spike b1.
+# ---------------------------------------------------------------------------
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ort = { version = "=2.0.0-rc.12", default-features = false, features = [
+    "std",
+    "ndarray",
+    "api-17",
+    "alternative-backend",
+] }
+ort-web = "0.2.1"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+
+[dev-dependencies]
+approx = "0.5"
+
+# The native TitaNet golden test (`tests/titanet_golden.rs`) needs the ONNX
+# weights + `mel_fb.json`; it is gated on the SILENT_TITANET_ONNX /
+# SILENT_MEL_FB env vars and SKIPS LOUDLY when they are absent (the weights are
+# not committed; E1 removed them — fetch via the registry pin). Declared
+# explicitly so `cargo test --target wasm32-unknown-unknown` skips it cleanly.
+[[test]]
+name = "titanet_golden"
+path = "tests/titanet_golden.rs"
+
+[[test]]
+name = "tracker_golden"
+path = "tests/tracker_golden.rs"
+
+[[test]]
+name = "recluster_golden"
+path = "tests/recluster_golden.rs"
