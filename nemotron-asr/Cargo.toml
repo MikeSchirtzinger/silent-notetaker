@@ -1,0 +1,77 @@
+[package]
+name = "nemotron-asr"
+version = "0.1.0"
+edition = "2021"
+description = "Streaming ASR engine for NVIDIA nemotron-speech-streaming-en-0.6b (ONNX, cache-aware RNN-T) — native + wasm32."
+license = "MIT OR Apache-2.0"
+keywords = ["speech-recognition", "asr", "nemotron", "onnx", "streaming"]
+categories = ["multimedia::audio", "science"]
+
+# Standalone crate: intentionally NOT part of any workspace. The sibling
+# `server/` crate is independent and must not be coupled to this one.
+
+[lib]
+name = "nemotron_asr"
+path = "src/lib.rs"
+# `cdylib` is required for the wasm32 build (wasm-pack); `rlib` keeps the
+# native library + examples + tests linkable as usual.
+crate-type = ["cdylib", "rlib"]
+
+[[example]]
+name = "transcribe"
+path = "examples/transcribe.rs"
+
+# ---------------------------------------------------------------------------
+# Target-agnostic dependencies (pure Rust, build on both native and wasm).
+# audio.rs, vocab.rs, streaming.rs depend only on these.
+# ---------------------------------------------------------------------------
+[dependencies]
+ndarray = "0.17"
+realfft = "3"
+thiserror = "2"
+
+# ---------------------------------------------------------------------------
+# Native (non-wasm) dependencies.
+#
+# ort with default features gives `download-binaries` (auto-fetches the native
+# ONNX Runtime dylib), `ndarray`, `std`, and `api-24`. `hound` reads WAV files
+# and is only used by the native `load_wav_mono` helper / examples / tests.
+# ---------------------------------------------------------------------------
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
+hound = "3.5"
+
+# ---------------------------------------------------------------------------
+# wasm32 dependencies.
+#
+# `ort` here drops `download-binaries`/native linking and switches to the
+# `alternative-backend` feature so `ort-web` can supply the OrtApi. `api-17` is
+# the API level ort-web targets. `ort-web` bridges to onnxruntime-web (it
+# fetches the ORT-web JS + WASM itself at runtime).
+# ---------------------------------------------------------------------------
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ort = { version = "=2.0.0-rc.12", default-features = false, features = [
+    "std",
+    "ndarray",
+    "api-17",
+    "alternative-backend",
+] }
+# Latest published ort-web; the `+1.24` build metadata (onnxruntime-web 1.24)
+# is informational and stripped by Cargo. Also depends on `ort =2.0.0-rc.12`.
+ort-web = "0.2.1"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+# `hound` is pure Rust and compiles to wasm. It's included here only so the
+# unchanged `audio.rs` (whose native `load_wav_mono` references it) keeps
+# compiling on wasm; `WasmAsr` takes f32 samples directly from JS and never
+# calls it, so it is dead code in the wasm binary.
+hound = "3.5"
+
+[dev-dependencies]
+
+[profile.release]
+# Smaller, faster wasm; harmless for native release.
+opt-level = "s"
+lto = true

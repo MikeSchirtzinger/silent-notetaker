@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>nemotron-asr · live mic streaming</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1.5rem; }
+    #transcript { background:#111; color:#0f0; padding:1rem; min-height:4rem;
+                  white-space: pre-wrap; font-size:1.1rem; }
+    #log { background:#0a0a0a; color:#888; padding:.75rem; white-space: pre-wrap;
+           font-family: ui-monospace, monospace; font-size:.8rem; max-height:14rem; overflow:auto; }
+    #status { font-weight:600; margin:.5rem 0; }
+  </style>
+</head>
+<body>
+  <h1>nemotron-asr — live mic streaming</h1>
+  <p>Streams microphone audio in ~1&nbsp;s increments through <code>WasmAsr.transcribe_chunk</code>,
+     which carries encoder + decoder state across calls. Open the console for errors.</p>
+  <button id="start">Start mic</button>
+  <button id="stop" disabled>Stop</button>
+  <button id="sim">Simulate from test clip</button>
+  <div id="status">idle</div>
+  <h3>live transcript</h3>
+  <div id="transcript"></div>
+  <h3>chunk log</h3>
+  <div id="log"></div>
+
+  <script type="module">
+    // Dynamic, cache-busted import so a rebuilt pkg/ is always picked up fresh.
+    let initWasm = null, WasmAsr = null;
+    const MODEL_BASE = '../../models/';
+    const FEED = 16000;                       // feed ~1 s of audio per transcribe_chunk call
+
+    const $ = (id) => document.getElementById(id);
+    const status = (m) => { $('status').textContent = m; };
+    const log = (m) => { $('log').textContent += m + '\n'; };
+
+    let asr = null, ctx = null, stream = null, node = null, source = null;
+    let pending = [];                          // accumulated f32 samples awaiting a chunk
+    let busy = false, running = false;
+    window.__transcript = '';                 // mirror for headless reads
+
+    async function fetchBytes(url) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`fetch ${url}: ${r.status}`);
+      return new Uint8Array(await r.arrayBuffer());
+    }
+
+    async function ensureModel() {
+      if (asr) return asr;
+      status('initializing wasm + loading model (881 MB encoder)…');
+      if (!initWasm) {
+        const m = await import('../../pkg/nemotron_asr.js?cb=' + Date.now());
+        initWasm = m.default; WasmAsr = m.WasmAsr;
+      }
+      await initWasm();
+      const [enc, dec, tok] = await Promise.all([
+        fetchBytes(MODEL_BASE + 'encoder.onnx'),
+        fetchBytes(MODEL_BASE + 'decoder_joint_fp32.onnx'),
+        fetchBytes(MODEL_BASE + 'tokenizer.model'),
+      ]);
+      status('building onnxruntime-web sessions…');
+      asr = await WasmAsr.create(enc, dec, tok);
+      return asr;
+    }
+
+    function appendText(txt) {
+      if (!txt) return;
+      window.__transcript += txt;
+      $('transcript').textContent = window.__transcript;
+    }
+
+    async function pump(final = false) {
+      if (busy) return;
+      busy = true;
+      try {
+        while (pending.length >= FEED || (final && pending.length > 0)) {
+          const take = final ? pending.length : FEED;
+          const c = pending.splice(0, take);
+          const txt = await asr.transcribe_chunk(Float32Array.from(c));
+          const t0 = performance.now();
+          appendText(txt);
+          log(`+${(c.length / 16000).toFixed(2)}s -> ${JSON.stringify(txt)}`);
+          if (final) break;
+        }
+      } catch (e) { log('ERROR ' + e); console.error(e); }
+      busy = false;
+    }
+
+    $('start').addEventListener('click', async () => {
+      try {
+        $('start').disabled = true;
+        await ensureModel();
+        asr.reset();
+        window.__transcript = ''; $('transcript').textContent = '';
+        status('requesting mic…');
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: { channelCount: 1, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+        });
+        ctx = new AudioContext({ sampleRate: 16000 });
+        source = ctx.createMediaStreamSource(stream);
+        node = ctx.createScriptProcessor(4096, 1, 1);
+        node.onaudioprocess = (e) => {
+          if (!running) return;
+          const inp = e.inputBuffer.getChannelData(0);
+          for (let i = 0; i < inp.length; i++) pending.push(inp[i]);
+          pump();
+        };
+        source.connect(node); node.connect(ctx.destination);
+        running = true;
+        $('stop').disabled = false;
+        status(`listening @ ${ctx.sampleRate} Hz (feeding ${FEED / 16000}s chunks)…`);
+      } catch (e) { status('ERROR: ' + e); console.error(e); $('start').disabled = false; }
+    });
+
+    $('stop').addEventListener('click', async () => {
+      running = false;
+      $('stop').disabled = true;
+      status('flushing tail…');
+      try { stream && stream.getTracks().forEach((t) => t.stop()); } catch {}
+      await pump(true);
+      const tail = await asr.finalize();
+      if (tail) {
+        window.__transcript += tail;
+        document.getElementById('transcript').textContent = window.__transcript;
+        document.getElementById('log').textContent += '+finalize -> ' + JSON.stringify(tail) + '\n';
+      }
+      try { node && node.disconnect(); source && source.disconnect(); ctx && ctx.close(); } catch {}
+      status('stopped. final transcript above.');
+      window.__done = true;
+    });
+
+    // Deterministic validation: drive the EXACT same pump()/transcribe_chunk
+    // streaming path from the bundled test clip instead of getUserMedia. This
+    // exercises the incremental chunking + cross-call state carry (the novel
+    // part); only the audio source differs from the live mic.
+    async function runSim() {
+      try {
+        $('start').disabled = true; $('sim').disabled = true;
+        window.__simDone = false;
+        await ensureModel();
+        asr.reset();
+        window.__transcript = ''; $('transcript').textContent = ''; $('log').textContent = '';
+        status('decoding test clip…');
+        const ab = await (await fetch('../../test-assets/test_16k.wav')).arrayBuffer();
+        const actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        const buf = await actx.decodeAudioData(ab);
+        const ch0 = buf.getChannelData(0);
+        status(`streaming ${(ch0.length / 16000).toFixed(2)}s as ${FEED / 16000}s chunks…`);
+        for (let i = 0; i < ch0.length; i++) pending.push(ch0[i]);
+        await pump(false);   // drain full FEED-sized chunks
+        await pump(true);    // flush the tail
+        const tail = await asr.finalize();
+        if (tail) {
+          window.__transcript += tail;
+          document.getElementById('transcript').textContent = window.__transcript;
+          document.getElementById('log').textContent += '+finalize -> ' + JSON.stringify(tail) + '\n';
+        }
+        await actx.close();
+        status('sim done — final transcript above.');
+      } catch (e) { status('ERROR: ' + e); console.error(e); }
+      $('sim').disabled = false; $('start').disabled = false;
+      window.__simDone = true;
+    }
+    $('sim').addEventListener('click', runSim);
+    window.__runSim = runSim;            // headless trigger
+  </script>
+</body>
+</html>

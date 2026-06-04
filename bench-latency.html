@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>nemotron vs voxtral — time-to-transcription bench</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 1.5rem; max-width: 60rem; }
+    pre { background:#0a0a0a; color:#0f0; padding:1rem; white-space:pre-wrap; font-size:.85rem; }
+    table { border-collapse: collapse; margin:1rem 0; }
+    td,th { border:1px solid #ccc; padding:.35rem .7rem; text-align:right; }
+    th:first-child, td:first-child { text-align:left; }
+    button { font-size:1rem; padding:.5rem 1rem; margin-right:.5rem; }
+  </style>
+</head>
+<body>
+  <h1>Time-to-transcription bench</h1>
+  <p>Streams the bundled 6.03&nbsp;s clip through the engine in ~1&nbsp;s chunks (the live path),
+     measuring per-chunk processing latency, RTF, and time-to-first-text. Same audio both engines.</p>
+  <button id="nemo">Run Nemotron</button>
+  <button id="voxtral">Run Voxtral</button>
+  <div id="out"></div>
+  <h3>log</h3>
+  <pre id="log"></pre>
+
+  <script type="module">
+    const CLIP = './nemotron-asr/test-assets/test_16k.wav';
+    const GOLDEN = 'the quick brown fox jumps over the lazy dog';   // substring check (lowercased)
+    const $ = (id) => document.getElementById(id);
+    const log = (m) => { $('log').textContent += m + '\n'; console.log(m); };
+    window.__bench = { nemotron: null, voxtral: null };
+
+    async function loadClip() {
+      const ab = await (await fetch(CLIP)).arrayBuffer();
+      const actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      const buf = await actx.decodeAudioData(ab);
+      const ch0 = Float32Array.from(buf.getChannelData(0));
+      await actx.close();
+      return ch0;
+    }
+
+    function chunks(samples, size) {
+      const out = [];
+      for (let i = 0; i < samples.length; i += size) out.push(samples.subarray(i, i + size));
+      return out;
+    }
+
+    // ── Nemotron: drive the real swappable engine module ──
+    $('nemo').addEventListener('click', async () => {
+      try {
+        $('nemo').disabled = true;
+        log('[nemotron] loading clip…');
+        const audio = await loadClip();
+        const dur = audio.length / 16000;
+        log(`[nemotron] clip ${dur.toFixed(2)}s, crossOriginIsolated=${self.crossOriginIsolated}`);
+        const { NemotronEngine } = await import('./nemotron-engine.js');
+        const eng = new NemotronEngine();
+        eng.onStatus = (m, p) => log(`[nemotron] ${m}${p != null ? ' ('+p+'%)' : ''}`);
+        let transcript = '', firstAt = 0;
+        const t0 = performance.now();
+        eng.onText = (t) => { if (!firstAt) firstAt = performance.now(); transcript += t; };
+        await eng.load();
+
+        eng.reset();
+        // Feed realistically: 1s chunk, then await its decode, recording per-chunk latency.
+        const perChunk = [];
+        const feedStart = performance.now();
+        for (const c of chunks(audio, 16000)) {
+          const ct0 = performance.now();
+          eng.feed(c);
+          // drain this chunk before the next (mimics realtime arrival, isolates per-chunk cost)
+          await eng._chain;
+          perChunk.push(+(performance.now() - ct0).toFixed(1));
+        }
+        const tail = await eng.finalize();
+        const totalProc = performance.now() - feedStart;
+        const s = eng.stats();
+        const ok = transcript.toLowerCase().includes(GOLDEN);
+        log(`[nemotron] transcript: ${JSON.stringify(transcript.trim())}`);
+        log(`[nemotron] golden match: ${ok ? 'PASS ✅' : 'FAIL ❌'}`);
+        log(`[nemotron] per-chunk ms: [${perChunk.join(', ')}]`);
+        const r = {
+          engine: 'Nemotron 0.6B (WASM/CPU)',
+          audioSecs: +dur.toFixed(2),
+          ttftMs: Math.round(firstAt - t0 - (s.loadMs)),     // from start of feeding (approx)
+          ttftFromFeedMs: Math.round((firstAt && feedStart) ? firstAt - feedStart : 0),
+          avgChunkMs: s.avgChunkMs,
+          maxChunkMs: Math.max(...perChunk),
+          totalProcMs: Math.round(totalProc),
+          rtf: s.rtf,
+          loadMs: s.loadMs,
+          match: ok,
+        };
+        window.__bench.nemotron = r;
+        render();
+      } catch (e) { log('[nemotron] ERROR ' + (e && e.stack || e)); }
+      $('nemo').disabled = false;
+    });
+
+    // ── Voxtral: minimal streaming driver mirroring index.html's loop, on the same clip ──
+    $('voxtral').addEventListener('click', async () => {
+      try {
+        $('voxtral').disabled = true;
+        log('[voxtral] loading clip…');
+        const audio = await loadClip();
+        const dur = audio.length / 16000;
+        const tfjsUrl = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.0.0-next.7/dist/transformers.min.js';
+        const tfjs = await import(tfjsUrl);
+        const { VoxtralRealtimeForConditionalGeneration, VoxtralRealtimeProcessor, BaseStreamer, full } = tfjs;
+        const MODEL_ID = 'onnx-community/Voxtral-Mini-4B-Realtime-2602-ONNX';
+        log('[voxtral] loading model (~2.7GB, cached after first time)…');
+        const tLoad = performance.now();
+        const model = await VoxtralRealtimeForConditionalGeneration.from_pretrained(MODEL_ID, {
+          dtype: { embed_tokens: 'fp16', audio_encoder: 'q4', decoder_model_merged: 'q4f16' },
+          device: 'webgpu',
+        });
+        const processor = await VoxtralRealtimeProcessor.from_pretrained(MODEL_ID);
+        const loadMs = Math.round(performance.now() - tLoad);
+        log(`[voxtral] model ready in ${loadMs}ms, crossOriginIsolated=${self.crossOriginIsolated}`);
+
+        // Feed the whole clip and time first-token + total via a streamer callback.
+        let firstAt = 0, transcript = '';
+        const feedStart = performance.now();
+        class CB extends BaseStreamer {
+          put(value) {
+            if (!firstAt) firstAt = performance.now();
+            try {
+              const ids = Array.isArray(value?.[0]) ? value[0] : value;
+              transcript += processor.tokenizer.decode(ids, { skip_special_tokens: true });
+            } catch {}
+          }
+          end() {}
+        }
+        const inputs = await processor(audio, { sampling_rate: 16000 });
+        await model.generate({ ...inputs, max_new_tokens: 128, streamer: new CB(), do_sample: false });
+        const totalProc = performance.now() - feedStart;
+        const ok = transcript.toLowerCase().includes('quick brown fox');
+        log(`[voxtral] transcript: ${JSON.stringify(transcript.trim())}`);
+        const r = {
+          engine: 'Voxtral 4B (WebGPU)',
+          audioSecs: +dur.toFixed(2),
+          ttftFromFeedMs: Math.round(firstAt ? firstAt - feedStart : 0),
+          totalProcMs: Math.round(totalProc),
+          rtf: +((totalProc/1000)/dur).toFixed(3),
+          loadMs,
+          match: ok,
+        };
+        window.__bench.voxtral = r;
+        render();
+      } catch (e) { log('[voxtral] ERROR ' + (e && e.stack || e)); }
+      $('voxtral').disabled = false;
+    });
+
+    function render() {
+      const rows = [window.__bench.nemotron, window.__bench.voxtral].filter(Boolean);
+      if (!rows.length) return;
+      const cols = ['engine','audioSecs','ttftFromFeedMs','avgChunkMs','maxChunkMs','totalProcMs','rtf','loadMs','match'];
+      let html = '<table><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr>';
+      for (const r of rows) html += '<tr>' + cols.map(c => `<td>${r[c] ?? '—'}</td>`).join('') + '</tr>';
+      html += '</table>';
+      $('out').innerHTML = html;
+      window.__benchDone = true;
+    }
+  </script>
+</body>
+</html>

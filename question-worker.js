@@ -56,13 +56,12 @@ async function load() {
     try {
       generator = await pipeline('text-generation', config.model, { device: config.device, dtype: config.dtype, progress_callback });
     } catch (err) {
-      // Recap path requests WebGPU; if unavailable, fall back to WASM so it still works.
-      if (config.device === 'webgpu') {
-        self.postMessage({ type: 'status', message: `WebGPU unavailable (${err && err.message || err}); falling back to WASM…` });
-        config.device = 'wasm'; config.dtype = 'q4';
-        env.backends.onnx.wasm.numThreads = config.threads;
-        generator = await pipeline('text-generation', config.model, { device: 'wasm', dtype: 'q4', progress_callback });
-      } else { throw err; }
+      // Don't fall back in here — the main thread owns the policy (e.g. a big model that
+      // OOMs on WebGPU should demote to the smaller model, NOT crawl on WASM, and a
+      // failed download shouldn't trigger a second multi-GB download). Report and bail.
+      loading = null;
+      self.postMessage({ type: 'loadfailed', model: config.model, device: config.device, message: String(err && err.message || err) });
+      throw err;
     }
     self.postMessage({ type: 'ready', isolated: self.crossOriginIsolated, threads: env.backends.onnx.wasm.numThreads, device: config.device });
   })();

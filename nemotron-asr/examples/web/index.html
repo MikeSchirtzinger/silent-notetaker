@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>nemotron-asr · wasm demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+</head>
+<body>
+  <h1>nemotron-asr (wasm) demo</h1>
+  <p>
+    Pick a 16&nbsp;kHz mono WAV, or click "Transcribe sample" to run the bundled
+    test clip. Open the console for progress / errors.
+  </p>
+  <input id="file" type="file" accept=".wav,audio/wav" />
+  <button id="sample">Transcribe sample (test_16k.wav)</button>
+  <pre id="out" style="white-space: pre-wrap; background:#111; color:#0f0; padding:1rem; min-height:3rem;"></pre>
+
+  <!--
+    HOW THIS WORKS
+    ==============
+
+    1.  Build the package first:
+            wasm-pack build --target web --out-dir pkg
+        That produces ./pkg/ next to this crate. Serve the crate root over HTTP
+        (wasm + ES modules require http://, not file://), e.g.:
+            python3 -m http.server 8080
+        then open  http://localhost:8080/examples/web/index.html
+
+    2.  ort-web fetches onnxruntime-web (the ORT-web JS + .wasm) itself at
+        runtime from cdn.pyke.io. You do NOT load onnxruntime-web yourself.
+        If you have a Content-Security-Policy, allow cdn.pyke.io in
+        `script-src` and `connect-src` (and `signal.pyke.io` for telemetry, or
+        leave telemetry disabled — this crate disables it in WasmAsr::create).
+
+    3.  The three model artifacts (encoder.onnx, decoder_joint_fp32.onnx,
+        tokenizer.model) are fetched by *this* JS and passed to WasmAsr.create
+        as Uint8Array bytes. Point MODEL_BASE at wherever you host them.
+  -->
+  <script type="module">
+    // The path is relative to THIS file (examples/web/), so go up two levels
+    // to the crate root where wasm-pack wrote pkg/.
+    import init, { WasmAsr } from '../../pkg/nemotron_asr.js';
+
+    // Where the model artifacts live. Adjust to your hosting. Here we point at
+    // the gitignored models/ dir served from the crate root.
+    const MODEL_BASE = '../../models/';
+    const SAMPLE_WAV = '../../test-assets/test_16k.wav';
+
+    const out = (msg) => { document.getElementById('out').textContent += msg + '\n'; };
+
+    let asr = null;
+
+    async function fetchBytes(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`fetch ${url} failed: ${res.status}`);
+      return new Uint8Array(await res.arrayBuffer());
+    }
+
+    // Decode a WAV (16 kHz mono expected) to Float32 [-1, 1] using WebAudio.
+    async function wavToMonoF32(arrayBuffer) {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      const buf = await ctx.decodeAudioData(arrayBuffer);
+      // decodeAudioData resamples to the context's 16 kHz; take channel 0.
+      const ch0 = buf.getChannelData(0);
+      return new Float32Array(ch0); // copy out of the AudioBuffer
+    }
+
+    async function ensureModel() {
+      if (asr) return asr;
+      out('initializing wasm…');
+      await init();                                  // 1. instantiate our wasm module
+
+      out('fetching model artifacts…');
+      const [enc, dec, tok] = await Promise.all([     // 2. fetch the 3 artifacts
+        fetchBytes(MODEL_BASE + 'encoder.onnx'),
+        fetchBytes(MODEL_BASE + 'decoder_joint_fp32.onnx'),
+        fetchBytes(MODEL_BASE + 'tokenizer.model'),
+      ]);
+
+      out('creating WasmAsr (this fetches onnxruntime-web + builds sessions)…');
+      asr = await WasmAsr.create(enc, dec, tok);      // 3. async backend init + sessions
+      out('ready.');
+      return asr;
+    }
+
+    async function transcribe(samples) {
+      const engine = await ensureModel();
+      out(`transcribing ${(samples.length / 16000).toFixed(2)}s…`);
+      const t0 = performance.now();
+      const text = await engine.transcribe(samples);  // 4. async transcribe
+      const dt = (performance.now() - t0) / 1000;
+      out(`\n=== TRANSCRIPT ===\n${text}\n`);
+      out(`compute ${dt.toFixed(2)}s  (RTF ${(dt / (samples.length / 16000)).toFixed(3)}x)`);
+    }
+
+    document.getElementById('file').addEventListener('change', async (e) => {
+      const f = e.target.files[0];
+      if (!f) return;
+      try {
+        const samples = await wavToMonoF32(await f.arrayBuffer());
+        await transcribe(samples);
+      } catch (err) { out('ERROR: ' + err); console.error(err); }
+    });
+
+    document.getElementById('sample').addEventListener('click', async () => {
+      try {
+        const samples = await wavToMonoF32(await (await fetch(SAMPLE_WAV)).arrayBuffer());
+        await transcribe(samples);
+      } catch (err) { out('ERROR: ' + err); console.error(err); }
+    });
+  </script>
+</body>
+</html>
