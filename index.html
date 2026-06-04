@@ -2287,7 +2287,9 @@ const SmartQ = {
   },
   prewarm() {
     const s = (typeof loadSettings === 'function') ? loadSettings() : {};
-    this.enabled = s.smartQuestions !== false;
+    // Transcript-only mode (notes model = Off) keeps the teleprompter disabled
+    // and the Qwen worker unloaded — the empty NotesSlot=None state.
+    this.enabled = s.smartQuestions !== false && !notesModelOff();
     if (this.enabled && !this._warmed) { this._warmed = true; sharedQuestionGenerator.prewarm(); }
   },
   accumulate(text) {
@@ -2363,6 +2365,26 @@ function rerollSmartQ() {
   SmartQ._generate();
 }
 
+/* Show/hide the Ask-Now teleprompter bar for the current notes-model setting.
+   Transcript-only mode (notes model = Off) hides it CLEANLY — no dead panel —
+   per the R3 acceptance. Every other configuration leaves the bar exactly as it
+   was (the smartQuestions toggle still renders an empty bar, not a hidden one),
+   so the UX stays pixel-identical outside transcript-only mode. */
+function applyTeleprompterVisibility() {
+  const off = notesModelOff();
+  // Keep SmartQ.enabled authoritative so accumulate()/prewarm() never warm the
+  // Qwen worker in transcript-only mode, even if prewarm() hasn't run yet.
+  if (off) SmartQ.enabled = false;
+  const b = document.getElementById('smartqBar');
+  if (!b) return;
+  if (off) {
+    b.style.display = 'none';
+    SmartQ._renderEmpty();   // drop any stale loading/has-new state
+  } else {
+    b.style.display = '';
+  }
+}
+
 /* WebGPU recap generator — separate instance used only at Stop (GPU is free then).
    dtype q4 reuses the live model's cached weights (no second download); WebGPU is
    needed because the recap's longer multi-question output is ~100s on WASM vs ~15s on GPU.
@@ -2424,6 +2446,17 @@ function resolveQwenModelKey(forDevice) {
   let demoted = false;
   try { demoted = localStorage.getItem('qwenAutoDemoted') === '1'; } catch (_) {}
   return (forDevice === 'webgpu' && !demoted) ? GpuCaps.autoChoice() : '0.6b';
+}
+
+/* Transcript-only mode (Appendix A row 20, PRD R3): the notes/questions model
+   slot is OFF. This is a first-class supported configuration — silent-core
+   models it as SessionConfig.notes_model_off, the empty NotesSlot=None state.
+   When on, the Qwen worker is never loaded: no smart-questions teleprompter, no
+   AI final notes, no question recap. The live regex trigger notes (row 16,
+   NoteExtractor, model-free) keep working — they are NOT gated here. */
+function notesModelOff() {
+  const s = (typeof loadSettings === 'function') ? loadSettings() : {};
+  return s.qwenModel === 'off';
 }
 
 /* Pick the device for the LIVE smart-questions generator based on the chosen ASR engine.
@@ -3913,8 +3946,13 @@ class App {
       await _ensureNotesLoaded();   // Rust notes/questions policy (NoteExtractor + OpenQs + Scheduler)
       SmartQ.reset();    // fresh teleprompter for this meeting
       OpenQs.reset();    // fresh open-question tracking
-      configureLiveQuestionsDevice();  // CPU ASR (Nemotron) → GPU is free → run live Qwen on WebGPU
-      SmartQ.prewarm();  // warm Qwen off-thread so the first question is ready fast
+      applyTeleprompterVisibility();   // hide the Ask-Now bar cleanly in transcript-only mode
+      // Transcript-only mode (notes model = Off): never touch the Qwen worker —
+      // no device config, no prewarm. Live regex notes above still run.
+      if (!notesModelOff()) {
+        configureLiveQuestionsDevice();  // CPU ASR (Nemotron) → GPU is free → run live Qwen on WebGPU
+        SmartQ.prewarm();  // warm Qwen off-thread so the first question is ready fast
+      }
 
       // Reuse existing TranscriptionManager if models already loaded (e.g. New Meeting → Start)
       const canResume = this.tm && !this.tm.isRecording && (this.tm.worker || this.tm.senseVoice || this.tm.voxtralModel || this.tm.nemotron);
@@ -4082,10 +4120,15 @@ class App {
     this.showSummary();
 
     // Stop-time on-device passes (WebGPU — GPU is free now) — inject into the open summary modal.
+    // Transcript-only mode (notes model = Off) is authoritative over the per-pass
+    // flags: with no notes model loaded, neither Qwen pass can run. This mirrors
+    // silent-core SessionMachine::stop_hooks (notes_model_off ⇒ final_notes &&
+    // question_recap forced false). The summary modal already opened above.
     const sq = loadSettings();
+    const notesModel = !notesModelOff();
     // Final Meeting Notes: additive Qwen note set (does NOT replace the live regex notes above).
-    if (sq.aiFinalNotes !== false) this.generateFinalNotes();
-    if (sq.smartQuestions !== false && sq.smartqRecap !== false) this.generateQuestionRecap();
+    if (notesModel && sq.aiFinalNotes !== false) this.generateFinalNotes();
+    if (notesModel && sq.smartQuestions !== false && sq.smartqRecap !== false) this.generateQuestionRecap();
 
     // Request enhanced summary from Claude if connected
     if (this.bridge.connected) {
@@ -6195,7 +6238,7 @@ const DEFAULT_SETTINGS = {
   smartQuestions: true,                              // live "ask now" teleprompter (Qwen WASM)
   smartqTypes: ['clarify', 'risk', 'followup', 'coverage', 'deepen'],  // which question types rotate
   smartqRecap: true,                                 // WebGPU question recap when recording stops
-  qwenModel: 'auto',         // AI model for questions/notes: 'auto' (device-tier pick) | '0.6b' | '1.7b'
+  qwenModel: 'auto',         // AI model for questions/notes: 'auto' (device-tier pick) | '0.6b' | '1.7b' | 'off' (transcript-only mode)
 };
 
 function loadSettings() {
@@ -6314,6 +6357,7 @@ function openSettings() {
             <option value="auto" ${(!s.qwenModel || s.qwenModel === 'auto') ? 'selected' : ''}>Auto — pick for this device (recommended)</option>
             <option value="0.6b" ${s.qwenModel === '0.6b' ? 'selected' : ''}>${QWEN_MODELS['0.6b'].label}</option>
             <option value="1.7b" ${s.qwenModel === '1.7b' ? 'selected' : ''}>${QWEN_MODELS['1.7b'].label}</option>
+            <option value="off" ${s.qwenModel === 'off' ? 'selected' : ''}>Off — transcript only (no AI notes or questions)</option>
           </select>
         </label>
 
@@ -6377,9 +6421,11 @@ function applySettings() {
   };
   saveSettings(s);
 
-  // Apply smart-questions toggle live (stop generating / clear the bar if turned off)
-  SmartQ.enabled = s.smartQuestions !== false;
+  // Apply smart-questions toggle live (stop generating / clear the bar if turned off).
+  // Transcript-only mode (notes model = Off) also disables it and hides the bar.
+  SmartQ.enabled = s.smartQuestions !== false && s.qwenModel !== 'off';
   if (!SmartQ.enabled) SmartQ._renderEmpty();
+  applyTeleprompterVisibility();   // show/hide the Ask-Now bar for the new notes-model setting
   // Honor a mid-session question-type change: rebuild the Rust scheduler's
   // rotation (the former JS read `_enabledTypes()` fresh on each generate).
   if (_notesEngineReady && sharedNotesEngine) {
@@ -6429,6 +6475,7 @@ document.getElementById('meetingTitle').value = now.toLocaleDateString('en-US', 
 refreshTimeUI();
 applyTimestampVisibility();
 applySpeakerLabelVisibility();
+applyTeleprompterVisibility();   // hide the Ask-Now bar on load in transcript-only mode
 
 // DIAG: if a prior session left a trail (e.g. it froze last time), surface the
 // final rows in the engine-status area on load so Mike sees the crash evidence
