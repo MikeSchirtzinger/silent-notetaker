@@ -44,6 +44,7 @@ pub mod error;
 pub mod events;
 pub mod ids;
 pub mod notes;
+pub mod questions;
 pub mod registry;
 
 pub use error::{AsrError, ModelResolveError};
@@ -86,6 +87,7 @@ mod ts_bindings {
     use crate::events::{AsrCapabilities, EngineEvent, EngineStats};
     use crate::ids::{ModelId, TimeRange};
     use crate::notes::{NoteCategory, NoteCommand, NoteCounters, NoteEvent};
+    use crate::questions::{QuestionCommand, QuestionEvent, QuestionType, QwenNote, RecapGroup};
     use crate::registry::{
         Cache, CacheStore, DeviceTier, ExecutionProvider, Host, Model, ModelFile, PerfBudget,
         Provider, Registry, Task, Validation,
@@ -124,6 +126,11 @@ mod ts_bindings {
             NoteEvent,
             NoteCategory,
             NoteCounters,
+            QuestionCommand,
+            QuestionEvent,
+            QuestionType,
+            RecapGroup,
+            QwenNote,
             Registry,
             Model,
             ModelFile,
@@ -156,6 +163,11 @@ mod ts_bindings {
             "NoteEvent.ts",
             "NoteCategory.ts",
             "NoteCounters.ts",
+            "QuestionCommand.ts",
+            "QuestionEvent.ts",
+            "QuestionType.ts",
+            "RecapGroup.ts",
+            "QwenNote.ts",
             "AsrError.ts",
             "Registry.ts",
             "Model.ts",
