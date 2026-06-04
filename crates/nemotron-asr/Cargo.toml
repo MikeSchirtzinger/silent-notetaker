@@ -1,14 +1,37 @@
 [package]
 name = "nemotron-asr"
 version = "0.1.0"
+# TODO-D3: migrate to edition 2024 to match the rest of the workspace. Left at
+# 2021 here because the streaming.rs / backend_web.rs consolidation (Task D3)
+# touches the same files and a same-time edition bump would muddy that diff; the
+# crate also keeps its own pinned deps (ort =2.0.0-rc.12, ort-web 0.2.1) and
+# publishes to crates.io standalone, so its edition is intentionally decoupled
+# from [workspace.package].edition. Migration is trivial (no 2024-breaking
+# patterns surveyed) and tracked for Phase D, Task D3.
 edition = "2021"
 description = "Streaming ASR engine for NVIDIA nemotron-speech-streaming-en-0.6b (ONNX, cache-aware RNN-T) — native + wasm32."
 license = "MIT OR Apache-2.0"
 keywords = ["speech-recognition", "asr", "nemotron", "onnx", "streaming"]
 categories = ["multimedia::audio", "science"]
 
-# Standalone crate: intentionally NOT part of any workspace. The sibling
-# `server/` crate is independent and must not be coupled to this one.
+# Workspace member (Phase 1: moved root `nemotron-asr/` → `crates/nemotron-asr/`)
+# that stays STANDALONE-BUILDABLE on purpose: it keeps its own metadata, pinned
+# RC dependencies, README, LICENSE, and tests so `cargo publish` / `wasm-pack`
+# work from this dir alone. It joins the workspace only for unified gating
+# (fmt/check/test/clippy) — it deliberately does NOT inherit
+# [workspace.package] or [workspace.dependencies]. The standalone release
+# profile that keeps the wasm bundle small (opt-level "s" + LTO) now lives in
+# the workspace root [profile.release] (member profiles are ignored in a
+# workspace); the wasm build therefore keeps identical size characteristics.
+# The sibling `server/` crate is `workspace.exclude`d and stays independent.
+#
+# Lints: this crate moves in AS-IS (spec Task C1 item 4) and keeps its own lint
+# posture rather than opting into the strict [workspace.lints] (clippy pedantic,
+# unwrap_used=deny). Tightening it to the workspace bar is bundled with the
+# Phase D / Task D3 chunking-loop consolidation that already rewrites
+# streaming.rs / backend_web.rs, so the lint churn lands in one reviewable diff
+# instead of contaminating this move. It is still gated by the workspace
+# fmt/check/test runs and clippy `all` (default-on lints).
 
 [lib]
 name = "nemotron_asr"
@@ -93,7 +116,11 @@ name = "browser_smoke"
 path = "tests/browser_smoke.rs"
 harness = true
 
-[profile.release]
-# Smaller, faster wasm; harmless for native release.
-opt-level = "s"
-lto = true
+# NOTE: the release profile (opt-level "s" + LTO, which keep the wasm bundle
+# small) now lives in the workspace root [profile.release]. Cargo honors
+# `[profile.*]` only in the workspace root, so a member-level copy here would be
+# silently ignored (and warned about). For a fully standalone build outside the
+# workspace, re-add:
+#   [profile.release]
+#   opt-level = "s"
+#   lto = true

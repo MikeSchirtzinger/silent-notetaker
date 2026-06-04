@@ -30,8 +30,13 @@
  * before the engine loads.
  */
 
-const DEFAULT_MODEL_BASE = new URL('./nemotron-asr/models/', import.meta.url).href;
-const DEFAULT_PKG_URL    = new URL('./nemotron-asr/pkg/nemotron_asr.js', import.meta.url).href;
+// Paths follow the crate's home after the Phase-1 workspace move
+// (`nemotron-asr/` → `crates/nemotron-asr/`). The wasm-pack output (`pkg/`) and
+// the local-dev model dir (`models/`, only used when `__NEMOTRON_MODEL_BASE` is
+// unset) now live under `crates/nemotron-asr/`. Resolved relative to this
+// module's URL, so it works wherever the app shell is served from.
+const DEFAULT_MODEL_BASE = new URL('./crates/nemotron-asr/models/', import.meta.url).href;
+const DEFAULT_PKG_URL    = new URL('./crates/nemotron-asr/pkg/nemotron_asr.js', import.meta.url).href;
 
 /* onnxruntime-web defaults to min(4, ceil(hardwareConcurrency/2)) WASM threads — 4 on a
    10-core M1 Pro, leaving half the performance cores idle under the INT8 encoder. The

@@ -61,8 +61,7 @@ fn mel_silence_shape_correct() {
 
     let shape = mel.shape();
     assert_eq!(
-        shape[0],
-        N_MELS,
+        shape[0], N_MELS,
         "expected {N_MELS} mel bands, got {}",
         shape[0]
     );
@@ -107,7 +106,10 @@ fn vocab_decode_single_blank_is_blank() {
     // BLANK_ID is 1024 for nemotron; decode_single of an out-of-vocab token
     // should return an empty string without panicking.
     // We don't have a real vocab here, so we just verify the constant is sane.
-    assert!(BLANK_ID < 65_536, "BLANK_ID out of expected range: {BLANK_ID}");
+    assert!(
+        BLANK_ID < 65_536,
+        "BLANK_ID out of expected range: {BLANK_ID}"
+    );
 }
 
 // ---------------------------------------------------------------------------
