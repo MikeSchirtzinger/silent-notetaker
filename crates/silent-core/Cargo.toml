@@ -1,0 +1,26 @@
+[package]
+name = "silent-core"
+version = "0.1.0"
+description = "Silent Notetaker domain contracts: UI↔core commands and events, the shared AsrError, the engine/notes/question trait shapes, and the Hugging Face model registry types. The single source of truth for the typed boundary. No browser dependencies — testable without a GPU or a browser."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# ts-rs is a DEV dependency only. The `TS` derive is applied via
+# `#[cfg_attr(test, derive(ts_rs::TS))]`, so it compiles only in test builds
+# (where `export_bindings` runs) and never enters the production or
+# wasm32-unknown-unknown build. This keeps silent-core free of any non-domain
+# dependency at runtime (PRD: "silent-core must not depend on browser APIs").
+ts-rs = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
