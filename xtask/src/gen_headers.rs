@@ -13,12 +13,22 @@
 //!   (multi-threaded WASM).
 //! - `Cross-Origin-Embedder-Policy: credentialless` — NOT `require-corp`;
 //!   `require-corp` breaks Hugging Face CDN redirects (decision log 2026-06-04).
-//! - CSP is **report-only** (`Content-Security-Policy-Report-Only`) — not
-//!   enforced until Phase 6 (Extension SDK), per PRD R5 and decision log.
+//! - CSP is now **ENFORCED** (`Content-Security-Policy`) as of Phase 6 / R5
+//!   (Task j3 — "the privacy keystone"). It shipped report-only through Phase 1–5
+//!   so hidden egress could surface in dev-tools without breaking transcription;
+//!   the regression sweep under enforced CSP found zero violations, so it is now
+//!   the enforcement surface PRD R5 promises. The `--report-only` flag emits the
+//!   old `Content-Security-Policy-Report-Only` header for rollback (re-open the
+//!   observation period if a future origin regresses) without changing the
+//!   directive set.
 //! - `default-src 'self'` base.
-//! - `script-src 'self' 'unsafe-inline' blob: <cdn-origins>` — `'unsafe-inline'`
-//!   required by the current inline `<script>` blocks in `index.html`; `blob:`
-//!   for dynamically created workers.
+//! - `script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: <cdn-origins>` —
+//!   `'unsafe-inline'` for the inline `<script>` blocks in `index.html`;
+//!   `'wasm-unsafe-eval'` for `WebAssembly.instantiateStreaming`/`compile` (the
+//!   wasm-pack engines compile their modules — an enforced CSP blocks WASM
+//!   compilation without it; it does NOT enable JS `eval`); `blob:` for
+//!   dynamically created workers. (`'wasm-unsafe-eval'` was a latent dependency
+//!   masked by report-only; enforcement in Task j3 surfaced it.)
 //! - `worker-src 'self' blob:` — blob: for the Nemotron/transformers workers.
 //! - `connect-src`: `'self' blob: data:`, HF origins, CDN origins,
 //!   and `ws://localhost:8765` (Claude bridge; decision log 2026-06-04 keeps
@@ -81,6 +91,48 @@ pub struct GenHeadersArgs {
     /// Requires `--out` to specify the file to compare against.
     #[arg(long)]
     pub check: bool,
+
+    /// Rollback flag: emit the legacy `Content-Security-Policy-Report-Only`
+    /// header (and the report-only `_headers` comment block) instead of the
+    /// enforced `Content-Security-Policy`. The directive set is identical; only
+    /// the enforcement posture changes. Use this to re-open the observation
+    /// period if a future origin regresses under enforcement (PRD R5 / Task j3).
+    #[arg(long)]
+    pub report_only: bool,
+}
+
+/// CSP enforcement posture. The directive *value* is identical in both; only the
+/// header name (and the explanatory comment block) differs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CspMode {
+    /// `Content-Security-Policy` — the browser BLOCKS violating requests. This is
+    /// the Phase 6 / R5 default: CSP is the privacy-enforcement surface.
+    Enforced,
+    /// `Content-Security-Policy-Report-Only` — the browser REPORTS but does not
+    /// block. The pre-Phase-6 posture, kept as a `--report-only` rollback.
+    ReportOnly,
+}
+
+impl CspMode {
+    /// The HTTP response header name for this mode.
+    fn header_name(self) -> &'static str {
+        match self {
+            CspMode::Enforced => "Content-Security-Policy",
+            CspMode::ReportOnly => "Content-Security-Policy-Report-Only",
+        }
+    }
+
+    /// The one-line `_headers` comment describing the current posture.
+    fn comment_line(self) -> &'static str {
+        match self {
+            CspMode::Enforced => {
+                "# CSP is ENFORCED (Phase 6 / R5 — the privacy keystone, Task j3)."
+            }
+            CspMode::ReportOnly => {
+                "# CSP is REPORT-ONLY (rollback via --report-only; not enforced)."
+            }
+        }
+    }
 }
 
 /// Static CDN origins always included in the CSP, regardless of registry
@@ -117,8 +169,14 @@ pub fn run(args: GenHeadersArgs) -> Result<()> {
         .registry
         .unwrap_or_else(|| repo_root.join("registry").join("models.toml"));
 
+    let mode = if args.report_only {
+        CspMode::ReportOnly
+    } else {
+        CspMode::Enforced
+    };
+
     let registry = load_registry_optional(&registry_path)?;
-    let content = generate_headers(&registry);
+    let content = generate_headers_with_mode(&registry, mode);
 
     if args.check {
         // --check mode: compare generated vs on-disk.
@@ -130,7 +188,11 @@ pub fn run(args: GenHeadersArgs) -> Result<()> {
     } else if let Some(out_path) = &args.out {
         std::fs::write(out_path, &content)
             .with_context(|| format!("writing _headers to {}", out_path.display()))?;
-        eprintln!("[gen-headers] wrote: {}", out_path.display());
+        eprintln!(
+            "[gen-headers] wrote: {} ({:?} CSP)",
+            out_path.display(),
+            mode
+        );
     } else {
         print!("{content}");
     }
@@ -215,14 +277,25 @@ fn build_connect_src(registry: &Registry) -> String {
     parts.join(" ")
 }
 
-/// Build the full report-only CSP directive value (a single long line).
+/// Build the full CSP directive value (a single long line).
+///
+/// `'wasm-unsafe-eval'` in `script-src` is REQUIRED for the app to run at all:
+/// every wasm-pack engine (`silent-web`, `nemotron-asr`, …) compiles its module
+/// via `WebAssembly.instantiateStreaming`/`compile`, which an enforced CSP blocks
+/// unless `script-src` permits wasm compilation. The narrow `'wasm-unsafe-eval'`
+/// token allows WASM compilation ONLY — it does NOT enable JS `eval()` (that is
+/// the broader `'unsafe-eval'`, which is deliberately NOT granted). This was a
+/// latent dependency masked by report-only mode; enforcing CSP (Task j3) surfaced
+/// it, and it is fixed here in the generator (NOT hand-edited) so `_headers` and
+/// the local server stay in lockstep. Cross-origin isolation (COOP/COEP) exists
+/// precisely so this multithreaded WASM runs — the token is intrinsic to the app.
 fn build_csp(registry: &Registry) -> String {
     let connect_src = build_connect_src(registry);
     // Script CDN origins (same set as the static CDNs, no HF).
     let script_cdns = STATIC_CDN_ORIGINS.join(" ");
     format!(
         "default-src 'self'; \
-         script-src 'self' 'unsafe-inline' blob: {script_cdns}; \
+         script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: {script_cdns}; \
          worker-src 'self' blob:; \
          connect-src {connect_src}; \
          img-src 'self' data: blob:; \
@@ -231,14 +304,24 @@ fn build_csp(registry: &Registry) -> String {
     )
 }
 
-/// Generate the full `_headers` file content.
+/// Generate the full `_headers` file content for the *enforced* CSP posture
+/// (the Phase 6 / R5 default and what ships). `deploy-gate` calls this for its
+/// freshness check, so the shipped `_headers` must be the enforced output.
 pub fn generate_headers(registry: &Registry) -> String {
+    generate_headers_with_mode(registry, CspMode::Enforced)
+}
+
+/// Generate the full `_headers` file content for an explicit [`CspMode`].
+pub fn generate_headers_with_mode(registry: &Registry, mode: CspMode) -> String {
     let csp = build_csp(registry);
+    let header_name = mode.header_name();
+    let comment_line = mode.comment_line();
     format!(
         "# Cloudflare Pages / Netlify response headers.\n\
          # GENERATED by `xtask gen-headers` — do not edit by hand.\n\
          # Re-generate with: cargo xtask gen-headers --out _headers\n\
          # Check freshness: cargo xtask gen-headers --out _headers --check\n\
+         # Rollback to report-only: cargo xtask gen-headers --out _headers --report-only\n\
          #\n\
          # Cross-origin isolation → crossOriginIsolated → SharedArrayBuffer →\n\
          # multithreaded WASM.\n\
@@ -246,13 +329,16 @@ pub fn generate_headers(registry: &Registry) -> String {
          # COEP=credentialless (not require-corp): require-corp breaks HF CDN\n\
          # redirects (decision log 2026-06-04).\n\
          #\n\
-         # CSP is REPORT-ONLY (not enforced) until Phase 6 (Extension SDK).\n\
+         {comment_line}\n\
+         # Per-extension connect-src relaxations are applied to the extension's\n\
+         # own sandboxed-iframe context (GrantSet::connect_src) — NOT here. This\n\
+         # BASE page policy contains no extension origins.\n\
          # ws://localhost:8765 (Claude bridge) is KEPT in hosted builds —\n\
          # decision log 2026-06-04: localhost is inside the user's trust boundary.\n\
          /*\n\
            Cross-Origin-Opener-Policy: same-origin\n\
            Cross-Origin-Embedder-Policy: credentialless\n\
-           Content-Security-Policy-Report-Only: {csp}\n"
+           {header_name}: {csp}\n"
     )
 }
 
@@ -389,20 +475,52 @@ mod tests {
             "missing COEP: {headers}"
         );
 
-        // Report-only, not enforced.
+        // ENFORCED (Phase 6 / R5 / Task j3) — not report-only.
         assert!(
-            headers.contains("Content-Security-Policy-Report-Only:"),
-            "should be report-only: {headers}"
+            headers.contains("Content-Security-Policy: "),
+            "should be the ENFORCED CSP header: {headers}"
         );
         assert!(
-            !headers.contains("Content-Security-Policy:"),
-            "should NOT have enforcing CSP yet: {headers}"
+            !headers.contains("Content-Security-Policy-Report-Only"),
+            "should NOT be report-only by default anymore (j3 enforced it): {headers}"
         );
 
         // Bridge origin present.
         assert!(
             headers.contains("ws://localhost:8765"),
             "missing bridge origin: {headers}"
+        );
+
+        // The base page policy must NOT carry any per-extension origin — those
+        // are applied only to the extension's own iframe context (R7 / j1 notes).
+        assert!(
+            !headers.contains("api.notion.com"),
+            "base page CSP must not contain extension origins: {headers}"
+        );
+    }
+
+    #[test]
+    fn report_only_mode_emits_legacy_header_same_directives() {
+        let registry = make_minimal_registry();
+        let enforced = generate_headers_with_mode(&registry, CspMode::Enforced);
+        let report_only = generate_headers_with_mode(&registry, CspMode::ReportOnly);
+
+        assert!(
+            report_only.contains("Content-Security-Policy-Report-Only: "),
+            "rollback should emit report-only header: {report_only}"
+        );
+        // The directive VALUE must be identical across modes — only the posture
+        // (header name + comment) changes.
+        let enforced_csp = build_csp(&registry);
+        assert!(
+            enforced.contains(&format!("Content-Security-Policy: {enforced_csp}")),
+            "enforced header missing canonical directive value"
+        );
+        assert!(
+            report_only.contains(&format!(
+                "Content-Security-Policy-Report-Only: {enforced_csp}"
+            )),
+            "report-only header missing the SAME canonical directive value"
         );
     }
 
