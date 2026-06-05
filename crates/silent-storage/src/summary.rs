@@ -74,7 +74,14 @@ pub fn snapshot_to_summary(snap: &StorageSnapshot) -> Result<JsValue> {
     Ok(summary.into())
 }
 
-fn meetings_to_js(meetings: &[Meeting]) -> Result<JsValue> {
+/// Build a JS array of `{ id, title, startTime, endTime, duration }` from
+/// meeting rows (the history list query result). `pub` so `silent-web`'s
+/// `recent_meetings` wasm wrapper can reuse it.
+///
+/// # Errors
+///
+/// Returns [`StorageError::Js`] if any `Reflect::set` fails.
+pub fn meetings_to_js(meetings: &[Meeting]) -> Result<JsValue> {
     let arr = Array::new();
     for m in meetings {
         let obj = Object::new();
@@ -90,6 +97,44 @@ fn meetings_to_js(meetings: &[Meeting]) -> Result<JsValue> {
         arr.push(&obj);
     }
     Ok(arr.into())
+}
+
+/// Build a `{ meeting, notes, chunks }` JS object for the history-detail replay
+/// export (`openMeetingDetail`). The `meeting` is `null` if the id is unknown.
+///
+/// # Errors
+///
+/// Returns [`StorageError::Js`] if any `Reflect::set` fails.
+pub fn meeting_detail_to_js(snap: &StorageSnapshot, meeting_id: u32) -> Result<JsValue> {
+    let out = Object::new();
+
+    let meeting = snap.meetings.iter().find(|m| m.id == meeting_id);
+    match meeting {
+        Some(m) => {
+            let arr = meetings_to_js(std::slice::from_ref(m))?;
+            let one = Array::from(&arr).get(0);
+            set(&out, "meeting", &one)?;
+        }
+        None => set(&out, "meeting", &JsValue::NULL)?,
+    }
+
+    let notes: Vec<Note> = snap
+        .notes
+        .iter()
+        .filter(|n| n.meeting_id == meeting_id)
+        .cloned()
+        .collect();
+    set(&out, "notes", &notes_to_js(&notes)?)?;
+
+    let chunks: Vec<TranscriptChunk> = snap
+        .transcript_chunks
+        .iter()
+        .filter(|c| c.meeting_id == meeting_id)
+        .cloned()
+        .collect();
+    set(&out, "chunks", &chunks_to_js(&chunks)?)?;
+
+    Ok(out.into())
 }
 
 fn chunks_to_js(chunks: &[TranscriptChunk]) -> Result<JsValue> {
