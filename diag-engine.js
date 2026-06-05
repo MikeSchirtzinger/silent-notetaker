@@ -242,7 +242,10 @@ export class DiagEngine {
    */
   priorTrailBanner() {
     if (!this._diag) return { headline: '', summaryLines: [] };
-    try { return this._diag.priorTrailBanner(); } catch (_) { return { headline: '', summaryLines: [] }; }
+    // Mirrors `takeStats()` above: the wasm binding returns a JSON STRING
+    // (`prior_trail_banner` → `JsValue::from_str`), so it must be parsed before
+    // the caller can read `.headline` / `.summaryLines`.
+    try { return JSON.parse(this._diag.priorTrailBanner()); } catch (_) { return { headline: '', summaryLines: [] }; }
   }
 
   // ── internals ────────────────────────────────────────────────────────────────
