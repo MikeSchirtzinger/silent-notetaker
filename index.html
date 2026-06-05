@@ -2943,6 +2943,13 @@ class TranscriptionManager {
     this.nemotron = null;
     this.nemoRing = null;
     this._nemotronStopPromise = null;
+    // Rust-policy-driven engine loaders (strangler-fig; Appendix A rows 10, 11):
+    // Whisper/Moonshine solo (whisper), SenseVoice solo (senseVoice), Dual (dual),
+    // and the Voxtral two-cap recycle policy (_voxtralPolicy).
+    this.whisper = null;
+    this.senseVoice = null;
+    this.dual = null;
+    this._voxtralPolicy = null;
   }
 
   startScreenshotCapture(videoTrack) {
@@ -3096,41 +3103,28 @@ class TranscriptionManager {
       throw new Error(`Microphone access denied: ${err.message}`);
     }
 
-    // Spawn worker
-    this.worker = new Worker(__WORKER_URL, { type: 'module' });
+    // Rust-policy-driven Whisper/Moonshine engine (strangler-fig REPLACE): the
+    // chunk/VAD/hallucination/dedup loop is `WhisperStreamPolicy` in Rust; this
+    // loader drives a thin transformers.js executor worker. Replaces the inline
+    // transcription-worker-src policy loop.
+    const { WhisperEngine } = await import('./whisper-engine.js');
+    this.whisper = new WhisperEngine();
+    this.whisper.onPartial = (text) => this.onPartial(text);
+    this.whisper.onFinal   = (text) => this.onFinal(text);
+    this.whisper.onStatus  = (msg, pct) => this.onStatus(msg, pct);
 
-    this.worker.onmessage = (e) => {
-      const { type } = e.data;
-      if (type === 'partial') this.onPartial(e.data.text);
-      if (type === 'final')   this.onFinal(e.data.text);
-      if (type === 'status')  this.onStatus(e.data.message, null);
-      if (type === 'progress') this.onStatus(null, e.data.value);
-      if (type === 'ready')   this.onStatus('Moonshine ready — fully local', 100);
-      if (type === 'error')   this.onStatus('Error: ' + e.data.message, null);
-    };
-
-    // Send settings to worker before init
     const settings = app.getSettings ? app.getSettings() : {};
-    if (settings.model) {
-      this.worker.postMessage({ type: 'configure', config: {
-        model: settings.model,
-        dtype: settings.dtype || 'fp32',
-        device: settings.device || 'wasm',
-      }});
-    }
+    await this.whisper.load({
+      model: settings.model || 'onnx-community/whisper-large-v3-turbo',
+      dtype: settings.dtype || 'fp32',
+      device: settings.device || 'wasm',
+    });
+    // Word corrections compose downstream of dedup (same pipeline position).
+    try { this.whisper.setCorrections(Object.entries((settings.corrections || {})).map(([wrong, right]) => ({ wrong, right }))); } catch (_) {}
 
-    this.worker.postMessage({ type: 'init' });
-
-    // Audio capture (AudioWorklet, 16kHz)
-    const CHUNK_SAMPLES = 16000 * 5; // 5 seconds — longer chunks = better accuracy
-    let audioBuffer = [];
-
+    // Audio capture (AudioWorklet, 16kHz) → the Rust policy decides chunks.
     await this._startAudioCapture((samples) => {
-      for (let i = 0; i < samples.length; i++) audioBuffer.push(samples[i]);
-      if (audioBuffer.length >= CHUNK_SAMPLES) {
-        const chunk = new Float32Array(audioBuffer.splice(0, CHUNK_SAMPLES));
-        this.worker.postMessage({ type: 'transcribe', audio: chunk }, [chunk.buffer]);
-      }
+      this.whisper.feed(samples);
     });
   }
 
@@ -3153,8 +3147,12 @@ class TranscriptionManager {
       throw new Error(`Microphone access denied: ${err.message}`);
     }
 
-    // Initialize SenseVoice engine (runs on main thread via Emscripten WASM)
-    this.senseVoice = new SenseVoiceEngine();
+    // Rust-policy-driven SenseVoice engine (strangler-fig REPLACE): the 512-window
+    // drain + 0.3s decode gate is `SenseVoicePolicy` in Rust; the sherpa-onnx
+    // harness is the VAD/ASR executor. Replaces the inline SenseVoiceEngine policy.
+    // NOTE: live load is BLOCKED-ON-USER-GATE (k2-fsa Space 401-dead; re-host pending).
+    const { SenseVoiceEngine: RustSenseVoiceEngine } = await import('./sensevoice-engine.js');
+    this.senseVoice = new RustSenseVoiceEngine();
     this.senseVoice.onStatus = (msg, pct) => this.onStatus(msg, pct);
     this.senseVoice.onResult = async (text, samples) => {
       let speakerInfo = null;
@@ -3169,7 +3167,7 @@ class TranscriptionManager {
 
     await this.senseVoice.init();
 
-    // Audio capture (AudioWorklet, 16kHz) — sherpa-onnx VAD segments speech downstream
+    // Audio capture (AudioWorklet, 16kHz) — the Rust policy windows/segments.
     await this._startAudioCapture((samples) => {
       this.senseVoice.processAudio(samples);
     });
@@ -3193,60 +3191,60 @@ class TranscriptionManager {
       throw new Error(`Microphone access denied: ${err.message}`);
     }
 
-    // ── 1. Start Moonshine Worker (fast drafts) ──
-    this.onStatus('Loading Moonshine for real-time drafts...', 10);
-    this.worker = new Worker(__WORKER_URL, { type: 'module' });
-    this.worker.onmessage = (e) => {
-      const { type } = e.data;
-      if (type === 'final')   this.onPartial(e.data.text);  // Moonshine → "partial" (draft)
-      if (type === 'status')  this.onStatus('Moonshine: ' + e.data.message, null);
-      if (type === 'ready')   this.onStatus('Moonshine ready, loading SenseVoice...', 30);
-      if (type === 'error')   console.warn('[Moonshine]', e.data.message);
-    };
-    // Configure Moonshine — use base model, fast settings
-    this.worker.postMessage({ type: 'configure', config: {
-      model: 'onnx-community/moonshine-base-ONNX',
-      dtype: 'fp32',
-      device: 'webgpu',
-    }});
-    this.worker.postMessage({ type: 'init' });
-
-    // ── 2. Start SenseVoice (accurate refinement) ──
-    this.senseVoice = new SenseVoiceEngine();
-    this.senseVoice.onStatus = (msg, pct) => {
-      // Offset progress to account for Moonshine already loaded
-      if (pct !== null && pct !== undefined) pct = 30 + Math.round(pct * 0.7);
-      this.onStatus(msg, pct);
-    };
-    this.senseVoice.onResult = async (text, samples) => {
+    // Rust-policy-driven Dual engine (strangler-fig REPLACE): both legs are
+    // Rust-policy-driven (Moonshine = WhisperStreamPolicy MOONSHINE_DUAL,
+    // SenseVoice = SenseVoicePolicy), and the draft/refine interleaving is the Rust
+    // `DualCoordinator` (emits ListEdits the UI applies). Replaces the inline
+    // worker + SenseVoiceEngine + the Dual branches of handlePartial/handleFinal.
+    // NOTE: the SenseVoice leg's live load is BLOCKED-ON-USER-GATE (Space 401-dead).
+    const { DualEngine } = await import('./dual-engine.js');
+    this.dual = new DualEngine();
+    this.dual.onStatus = (msg, pct) => this.onStatus(msg, pct);
+    // The coordinator's ListEdits drive the transcript-item DOM directly.
+    this.dual.onListEdits = (edits) => this.applyDualListEdits(edits);
+    // Refined finals carry segment samples → speaker id + the storage/notes/bridge
+    // side-effects (the non-DOM half of handleFinal).
+    this.dual.onSegment = async (text, samples) => {
       let speakerInfo = null;
       if (samples && this.speakerTracker) {
         speakerInfo = await this.speakerTracker.identify(samples);
-        if (speakerInfo && speakerInfo.isNew) {
-          renderSpeakerTags();
-        }
+        if (speakerInfo && speakerInfo.isNew) renderSpeakerTags();
       }
+      // onFinal routes to app.handleFinal (storage / notes / bridge side-effects).
       this.onFinal(text, speakerInfo);
     };
 
-    await this.senseVoice.init();
+    await this.dual.init();
     this.onStatus('✓ Dual-model active — Moonshine (instant) + SenseVoice (refined)', 100);
 
-    // ── 3. Audio capture (AudioWorklet) — feeds both engines ──
-    const CHUNK_SAMPLES = 16000 * 3; // 3s chunks for Moonshine (fast feedback)
-    let moonshineBuffer = [];
-
+    // ── Audio capture (AudioWorklet) — feeds both legs ──
     await this._startAudioCapture((samples) => {
-      // Feed SenseVoice (VAD handles segmentation)
-      this.senseVoice.processAudio(samples);
-
-      // Feed Moonshine Worker in chunks
-      for (let i = 0; i < samples.length; i++) moonshineBuffer.push(samples[i]);
-      if (moonshineBuffer.length >= CHUNK_SAMPLES) {
-        const chunk = new Float32Array(moonshineBuffer.splice(0, CHUNK_SAMPLES));
-        this.worker.postMessage({ type: 'transcribe', audio: chunk }, [chunk.buffer]);
-      }
+      this.dual.feed(samples);
     });
+  }
+
+  /**
+   * Apply the Rust DualCoordinator's transcript-list edits to the DOM. The
+   * coordinator owns the draft/refine supersede policy; the UI mirrors it.
+   * `append` of a draft renders a `.transcript-draft` item; `append` of a refined
+   * item renders a normal item; `remove` drops a draft node. This REPLACES the
+   * inline Dual branches of handlePartial/handleFinal (the DOM half).
+   */
+  applyDualListEdits(edits) {
+    const container = document.getElementById('transcriptContent');
+    if (!container) return;
+    for (const edit of edits) {
+      if (edit.op === 'append') {
+        const ts = Date.now();
+        // app.renderTranscriptItem renders draft (italic/dim) or normal items.
+        app.renderTranscriptItem(ts, edit.item.text, !!edit.item.draft);
+      } else if (edit.op === 'remove') {
+        // The coordinator removes the OLDEST drafts first (ascending index); the
+        // DOM drafts are in document order, so remove the first draft node.
+        const draft = container.querySelector('.transcript-draft');
+        if (draft) draft.remove();
+      }
+    }
   }
 
   /**
@@ -3480,6 +3478,26 @@ class TranscriptionManager {
     this.voxtralStopRequested = false;
     const myRunId = ++this._voxtralRunId;
 
+    // Rust-policy-driven two-cap recycle + in-place partial-text machine
+    // (strangler-fig REPLACE; Appendix A row 10). The token/audio caps, the
+    // recycle decision, and the printLen/sentenceBuffer slicing are
+    // `VoxtralRecyclePolicy` in Rust (WasmVoxtralRecycle); the ring/mel/generate
+    // host loop below executes. Build a fresh policy per run.
+    {
+      const pkgUrl = (typeof window !== 'undefined' && (window.__SILENT_WEB_PKG_URL || window.__DIARIZATION_PKG_URL)) || new URL('./crates/silent-web/pkg/silent_web.js', import.meta.url).href;
+      const mod = await (async () => {
+        const w = (typeof window !== 'undefined') ? window : globalThis;
+        const cache = (w.__silentWebModulePromises ||= new Map());
+        let p = cache.get(pkgUrl);
+        if (!p) { p = (async () => { const m = await import(pkgUrl); await m.default(); return m; })(); cache.set(pkgUrl, p); }
+        return p;
+      })();
+      // TEST CAPS override (I5 witnessed-recycle run): window.__VOXTRAL_TEST_CAPS =
+      // { maxNewTokens, maxCtxSamples }. OMIT for shipping (320 tok / 45 s caps).
+      const tc = (typeof window !== 'undefined') ? window.__VOXTRAL_TEST_CAPS : null;
+      this._voxtralPolicy = tc ? mod.WasmVoxtralRecycle.withTestCaps(tc.maxNewTokens, tc.maxCtxSamples) : new mod.WasmVoxtralRecycle();
+    }
+
     // DIAG: begin a fresh crash-surviving diagnostic trail for this session.
     Diag.start();
 
@@ -3604,6 +3622,10 @@ class TranscriptionManager {
     const samplesPerTok = processor.audio_length_per_tok * hop_length;
     const tokenizer = processor.tokenizer;
     const specialIds = new Set(tokenizer.all_special_ids.map(BigInt));
+    // The Rust two-cap recycle policy (built in _startVoxtralLoop). It owns the
+    // token/audio caps, the recycle seam, and the in-place partial-text slicing.
+    const policy = this._voxtralPolicy;
+    const ms = (abs) => Math.round(abs * 1000 / 16000);
 
     // Best-effort tensor disposal. Transformers.js v3/v4 tensors own WebGPU/native
     // buffers that are NOT reclaimed by JS GC; without this the per-chunk mel features
@@ -3627,12 +3649,24 @@ class TranscriptionManager {
       // Both caps are handled by the same outer-while recycle: generate() returns early →
       // we break out → the outer while starts a fresh context anchored at the current ring
       // position — no audio is skipped, transcription is continuous across seams.
-      const MAX_CTX_SAMPLES = 16000 * 45; // 45 s of audio per context
       while (!isStop()) {
-        // Anchor this context at the current ring write position so a recycled context
-        // reads forward from "now" and never re-reads evicted samples. First context
-        // anchors at 0 (writeAbs is 0 after reset).
-        const baseAbs = ring.writeAbs;
+        // Policy decides the context: poll returns a StartContext naming the anchor
+        // (current ring write position — no skip, no re-read) and the token cap. The
+        // two caps + the recycle seam are the Rust policy's law now (row 10).
+        // A `null` here only happens if the policy is mid-Running (a context was
+        // abandoned without a recycle, e.g. ring eviction) — recover by recycling it
+        // so the next poll re-anchors a fresh context.
+        let startCmd = JSON.parse(policy.poll(ring.writeAbs, 0));
+        if (startCmd === null && policy.isRunning()) {
+          // Force the audio cap by reporting past-cap consumption, then re-poll.
+          policy.onAudioAdvanced(0, Number.MAX_SAFE_INTEGER);
+          JSON.parse(policy.poll(ring.writeAbs, 0)); // emits the recycle
+          startCmd = JSON.parse(policy.poll(ring.writeAbs, 0)); // seam StartContext
+        }
+        if (!startCmd || startCmd.cmd === 'finalize') break;
+        if (startCmd.cmd !== 'start_context') continue; // recycle w/o ctx → re-poll seam
+        const baseAbs = startCmd.anchor_abs;
+        const maxNewTokens = startCmd.max_new_tokens;
 
         // Wait for enough audio to form the first chunk of THIS context.
         await waitUntil(() => absLen() >= baseAbs + numSamplesFirst || isStop());
@@ -3651,32 +3685,29 @@ class TranscriptionManager {
 
         // DIAG: a NEW generate() context is about to start. Record input (prompt) token
         // count so we can see whether the recycle anchor keeps the prompt bounded.
+        let inTok = 0;
         try {
           const ii = firstChunkInputs.input_ids;
-          const inTok = ii && ii.dims ? ii.dims[ii.dims.length - 1] : 0;
+          inTok = ii && ii.dims ? ii.dims[ii.dims.length - 1] : 0;
           Diag.onLoopIter(inTok);
         } catch (_) { Diag.onLoopIter(0); }
+        // Confirm the prompt token count to the policy (its current-context stats).
+        try { policy.onContextStarted(inTok); } catch (_) {}
 
         let tokenCache = [];
-        let printLen = 0;
         let isPrompt = true;
-        let sentenceBuffer = '';
+        let lastConsumedAbs = baseAbs;
 
+        // The in-place partial-text machine is the Rust policy now: feed it the
+        // cumulative decode; it returns the same Partial(sentenceBuffer) per delta
+        // and Final(sentence) on each /^(.*[.!?])\s*/s boundary (row 10 semantics).
         const flushDecodedText = () => {
           if (tokenCache.length === 0) return;
           const text = tokenizer.decode(tokenCache, { skip_special_tokens: true });
-          const printableText = text.slice(printLen);
-          printLen = text.length;
-          if (printableText.length === 0) return;
-
-          sentenceBuffer += printableText;
-          onPartial(sentenceBuffer);
-
-          const sentenceEnd = sentenceBuffer.match(/^(.*[.!?])\s*/s);
-          if (sentenceEnd) {
-            const completeSentence = sentenceEnd[1].trim();
-            if (completeSentence.length > 0) onFinal(completeSentence, null);
-            sentenceBuffer = sentenceBuffer.slice(sentenceEnd[0].length);
+          const events = JSON.parse(policy.onDecodedText(text, ms(baseAbs), ms(lastConsumedAbs)));
+          for (const ev of events) {
+            if (ev.tag === 'partial') onPartial(ev.payload.text);
+            else if (ev.tag === 'final') onFinal(ev.payload.text, null);
           }
         };
 
@@ -3687,14 +3718,18 @@ class TranscriptionManager {
             const tokens = value[0];
             if (tokens.length === 1 && specialIds.has(tokens[0])) return;
             Diag.onPut(tokens.length); // DIAG: per-step (timer reads it; cheap, no alloc)
+            policy.onTokens(tokens.length); // policy applies the token cap on the next poll
             tokenCache = tokenCache.concat(Array.from ? Array.from(tokens) : [...tokens]);
             flushDecodedText();
           }
           end() {
-            if (isStop()) { tokenCache = []; printLen = 0; isPrompt = true; sentenceBuffer = ''; return; }
+            if (isStop()) { tokenCache = []; isPrompt = true; return; }
             flushDecodedText();
-            if (sentenceBuffer.trim().length > 0) { onFinal(sentenceBuffer.trim(), null); sentenceBuffer = ''; }
-            tokenCache = []; printLen = 0; isPrompt = true;
+            // streamer.end(): the policy flushes any trailing sentence buffer as a
+            // Final and resets its per-context text state.
+            const tail = JSON.parse(policy.onContextEndText(ms(baseAbs), ms(lastConsumedAbs)));
+            for (const ev of tail) if (ev.tag === 'final') onFinal(ev.payload.text, null);
+            tokenCache = []; isPrompt = true;
           }
         })();
 
@@ -3709,11 +3744,14 @@ class TranscriptionManager {
           let startIdx = baseAbs + melFrameIdx * hop_length - winHalf;
 
           while (!isStop()) {
-            // AUDIO/TIME CAP: if this context has consumed more than MAX_CTX_SAMPLES of
-            // ring audio, end the generator now. generate() will return (with whatever
-            // tokens were produced), the outer while recycles with a fresh context anchored
-            // at the current ring write position — transcription continues seamlessly.
-            if (startIdx - baseAbs > MAX_CTX_SAMPLES) break;
+            // AUDIO/TIME CAP is the Rust policy's law now: report the audio this
+            // context has consumed and poll. A Recycle (audio cap) ends the
+            // generator → generate() returns → the outer while opens the seam
+            // context anchored at the current ring position (continuous, no skip).
+            lastConsumedAbs = startIdx;
+            policy.onAudioAdvanced(baseAbs, startIdx);
+            const capCmd = JSON.parse(policy.poll(ring.writeAbs, 0));
+            if (capCmd && capCmd.cmd === 'recycle') break;
 
             const endNeeded = startIdx + processor.num_samples_per_audio_chunk;
             await waitUntil(() => absLen() >= endNeeded || isStop());
@@ -3748,18 +3786,24 @@ class TranscriptionManager {
           await model.generate({
             input_ids: firstChunkInputs.input_ids,
             input_features: inputFeaturesGenerator(),
-            // RAM FIX: was 4096 (→ ~2 GB KV+arena peak). 320 tokens ≈ 166 MB peak,
-            // reclaimed on each recycle. Audio/time cap (MAX_CTX_SAMPLES) is the primary
-            // guard for slow-token contexts; this is the secondary hard token ceiling.
-            max_new_tokens: 320,
+            // RAM FIX: the token cap comes from the Rust policy's StartContext
+            // (RecycleConfig::VOXTRAL_SHIPPING = 320; or the I5 test caps). 320
+            // tokens ≈ 166 MB peak, reclaimed on each recycle. The audio/time cap
+            // (45 s) is the primary guard for slow-token contexts; this is the
+            // secondary hard token ceiling — both are the policy's law now.
+            max_new_tokens: maxNewTokens,
             streamer,
           });
         } finally {
           // input_ids tensor is per-context and safe to free after generate returns.
           dispose(firstChunkInputs.input_ids);
         }
-        // Loop: if not stopped, generate returned (token cap OR audio/time cap) — recycle
-        // with a fresh context anchored at the current ring position.
+        // generate() returned (token cap OR audio cap OR stop). If the generator did
+        // not already recycle inside (the audio-cap path), the TOKEN cap fired —
+        // poll the policy now to emit the recycle so the seam re-anchors.
+        if (!isStop() && policy.isRunning()) {
+          JSON.parse(policy.poll(ring.writeAbs, 0)); // emits Recycle (token cap)
+        }
         if (!isStop()) Diag.onRecycle(); // DIAG: recycle event — should see bounded sawtooth in RSS
       }
     } catch (err) {
@@ -3871,6 +3915,8 @@ class TranscriptionManager {
   destroy() {
     this.stop();
     if (this.senseVoice) { this.senseVoice.destroy(); this.senseVoice = null; }
+    if (this.dual) { this.dual.stop?.(); this.dual = null; }
+    if (this.whisper) { this.whisper.stop?.(); this.whisper = null; }
     if (this.worker) { this.worker.postMessage({ type: 'terminate' }); this.worker = null; }
     // Voxtral model stays in memory until page unload (no explicit destroy API)
     this.voxtralModel = null;
@@ -4385,23 +4431,17 @@ class App {
           await this.tm._startNemotronCapture();
           this.handleStatus('Nemotron resumed — streaming transcription active', 100);
         } else {
-          // Moonshine / SenseVoice / Dual resume path (AudioWorklet)
-          const isDual = this.tm.engine === 'dual';
-          const CHUNK_SAMPLES = 16000 * (isDual ? 3 : 5);
-          let audioBuffer = [];
-
+          // Moonshine / SenseVoice / Dual resume path (AudioWorklet). The engines
+          // are the Rust-policy-driven loaders (whisper/senseVoice/dual); re-wire
+          // mic → engine.feed/processAudio. Reset the Rust policy streaming state
+          // for the resumed run.
+          this.tm.whisper?.reset?.();
+          this.tm.senseVoice?.reset?.();
+          this.tm.dual?.reset?.();
           await this.tm._startAudioCapture((samples) => {
-            // Feed SenseVoice if available
-            if (this.tm.senseVoice) this.tm.senseVoice.processAudio(samples);
-
-            // Feed Worker if available
-            if (this.tm.worker) {
-              for (let i = 0; i < samples.length; i++) audioBuffer.push(samples[i]);
-              if (audioBuffer.length >= CHUNK_SAMPLES) {
-                const chunk = new Float32Array(audioBuffer.splice(0, CHUNK_SAMPLES));
-                this.tm.worker.postMessage({ type: 'transcribe', audio: chunk }, [chunk.buffer]);
-              }
-            }
+            if (this.tm.dual)       this.tm.dual.feed(samples);
+            else if (this.tm.whisper) this.tm.whisper.feed(samples);
+            else if (this.tm.senseVoice) this.tm.senseVoice.processAudio(samples);
           });
           this.handleStatus('Resumed — models already loaded', 100);
         }
@@ -4695,23 +4735,15 @@ class App {
     document.getElementById('partialText').style.display = 'none';
 
     const timestamp = Date.now();
-    const isDual = this.tm && this.tm.engine === 'dual';
-
-    // In dual mode, remove recent draft items that SenseVoice is replacing
-    if (isDual) {
-      const container = document.getElementById('transcriptContent');
-      const drafts = container.querySelectorAll('.transcript-draft');
-      // Remove drafts — SenseVoice's refined text supersedes them
-      // Keep at most 1 draft as "preview" of upcoming content
-      const toRemove = [...drafts].slice(0, Math.max(0, drafts.length - 1));
-      toRemove.forEach(d => d.remove());
-    }
 
     await storage.addTranscriptChunk(this.meetingId, timestamp, text.trim());
 
-    // Voxtral and Nemotron promote their own live element to final — skip re-render
-    // (rendering here too would duplicate every sentence in the transcript).
-    const selfRendered = this.tm && (this.tm.engine === 'voxtral' || this.tm.engine === 'nemotron');
+    // Self-rendering engines promote/render their own transcript items, so
+    // handleFinal must NOT re-render (it would duplicate every sentence):
+    //  - voxtral / nemotron promote their live in-place element to final;
+    //  - dual renders the refined item via the Rust DualCoordinator's ListEdits
+    //    (applyDualListEdits), which also supersedes the older drafts.
+    const selfRendered = this.tm && (this.tm.engine === 'voxtral' || this.tm.engine === 'nemotron' || this.tm.engine === 'dual');
     if (!selfRendered) {
       this.renderTranscriptItem(timestamp, text.trim(), false, speakerInfo);
     } else {
@@ -6364,10 +6396,12 @@ function syncCorrectionsFromEngine(engine) {
 }
 
 function pushCorrectionsToWorker() {
-  if (app.tm && app.tm.worker) {
-    // Include the absolute pkg URL so the worker can load the SAME Rust policy.
-    app.tm.worker.postMessage({ type: 'corrections', corrections, pkgUrl: correctionsPkgUrl() });
-  }
+  // The Whisper/Moonshine engine (solo + the Dual moonshine leg) now applies word
+  // corrections downstream of dedup via its Rust WasmCorrections (same pipeline
+  // position as the old in-worker applyCorrections). Push the live map to it.
+  const pairs = Object.entries(corrections || {}).map(([wrong, right]) => ({ wrong, right }));
+  try { app.tm?.whisper?.setCorrections?.(pairs); } catch (_) {}
+  try { app.tm?.dual?.moonshine?.setCorrections?.(pairs); } catch (_) {}
 }
 
 async function applyCorrectionsToTranscript() {

@@ -59,6 +59,13 @@ cp storage-engine.js "$DIST/"
 cp exports-engine.js "$DIST/"
 cp bridge-engine.js "$DIST/"
 cp selection-engine.js "$DIST/"
+# Phase 5 (step y2-engine-paths; Appendix A rows 10, 11): the js-host engine
+# loaders that drive the silent_web `WasmWhisperStream`/`WasmVoxtralRecycle`/
+# `WasmSenseVoice`/`WasmDual` policies (REPLACED the inline index.html loops).
+cp whisper-engine.js "$DIST/"
+cp voxtral-engine.js "$DIST/"
+cp sensevoice-engine.js "$DIST/"
+cp dual-engine.js "$DIST/"
 
 # Cloudflare Pages response headers (COOP/COEP + CSP)
 cp _headers "$DIST/"
