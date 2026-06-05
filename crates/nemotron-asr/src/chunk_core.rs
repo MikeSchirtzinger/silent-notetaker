@@ -1,8 +1,9 @@
 //! Shared mel-chunk construction and greedy-decode helpers.
 //!
 //! This module is the *one chunking core* that both the native
-//! ([`crate::streaming`]) and wasm32 ([`crate::backend_web`]) backends build
-//! on. Both paths implement the **same** mel-frame layout policy:
+//! ([`crate::streaming`]) and wasm32 (`backend_web`, compiled only on
+//! `target_arch = "wasm32"`) backends build on. Both paths implement the
+//! **same** mel-frame layout policy:
 //!
 //! ```text
 //! encoder input shape: [1, N_MELS, PRE_ENCODE_CACHE + CHUNK_SIZE]
@@ -215,7 +216,8 @@ pub fn build_tail_mel_chunk(
 /// Index of the maximum element (first on ties), matching `np.argmax`.
 ///
 /// Used by both the native sync decode loop ([`crate::streaming`]) and the
-/// wasm async decode loop ([`crate::backend_web`]).
+/// wasm async decode loop (`backend_web`, compiled only on
+/// `target_arch = "wasm32"`).
 #[must_use]
 pub fn argmax(values: &[f32]) -> usize {
     let mut max_idx = 0;

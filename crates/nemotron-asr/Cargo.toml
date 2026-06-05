@@ -7,10 +7,32 @@ version = "0.1.0"
 # dealloc, no side effects), the spec requires leaving 2021 when anything
 # non-trivial surfaces. This is the one finding. Track for Phase K hardening.
 edition = "2021"
-description = "Streaming ASR engine for NVIDIA nemotron-speech-streaming-en-0.6b (ONNX, cache-aware RNN-T) — native + wasm32."
+description = "Cache-aware RNN-T streaming ASR for NVIDIA nemotron-speech-streaming-en-0.6b (ONNX) — the same Rust code runs natively and in the browser (wasm32)."
+authors = ["Brevity Ventures"]
 license = "MIT OR Apache-2.0"
 keywords = ["speech-recognition", "asr", "nemotron", "onnx", "streaming"]
 categories = ["multimedia::audio", "science"]
+repository = "https://github.com/brevity-ventures/silent-notetaker"
+documentation = "https://docs.rs/nemotron-asr"
+homepage = "https://brevity.ventures"
+readme = "README.md"
+# MSRV is part of the public contract (rust-toolchain.toml policy:
+# latest-stable-minus-two). An MSRV bump is a semver-minor change.
+rust-version = "1.93"
+
+# Publish hygiene: ship the Rust crate, not the provenance/demo scaffolding.
+# `.gitignore` already keeps /target, /pkg, /vendor, /models, and Cargo.lock out
+# of the package; this list additionally drops the Python reference harness
+# (kept in-repo for credibility, not needed to build or run the crate) and the
+# wasm demo HTML. Retained on purpose: `test-assets/test_16k.wav` (golden test
+# fixture, 192 KB), `reference/FINDINGS.md` + `README_WASM.md` (linked from the
+# README and small).
+exclude = [
+    "reference/golden_harness.py",
+    "reference/inspect_onnx.py",
+    "examples/web/",
+    "webdriver.json",
+]
 
 # Workspace member (Phase 1: moved root `nemotron-asr/` → `crates/nemotron-asr/`)
 # that stays STANDALONE-BUILDABLE on purpose: it keeps its own metadata, pinned
@@ -53,6 +75,16 @@ thiserror = "2"
 # ort with default features gives `download-binaries` (auto-fetches the native
 # ONNX Runtime dylib), `ndarray`, `std`, and `api-24`. `hound` reads WAV files
 # and is only used by the native `load_wav_mono` helper / examples / tests.
+#
+# ⚠ UPGRADE CHECKPOINT (PRD risk table). `ort =2.0.0-rc.12` is a hard pin on a
+# release candidate. The exact-version pin is intentional: ort 2.0 RCs carry
+# breaking API changes between releases, and the wasm `alternative-backend` leg
+# must stay lock-step with `ort-web 0.2.1` (which itself depends on
+# `ort =2.0.0-rc.12`). Bumping ort without bumping ort-web breaks the wasm
+# build. Scheduled checkpoint: re-evaluate at ort 2.0 GA (PRD Phase 5) — verify
+# the native golden test still passes, the wasm bundle stays ~424 KB, and the
+# matching ort-web release is available before relaxing this pin. A bump here is
+# a semver-minor change for this crate (new RC/GA can shift behavior).
 # ---------------------------------------------------------------------------
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ort = { version = "=2.0.0-rc.12", features = ["ndarray"] }
@@ -124,3 +156,18 @@ harness = true
 #   [profile.release]
 #   opt-level = "s"
 #   lto = true
+
+# ---------------------------------------------------------------------------
+# docs.rs configuration.
+#
+# Build the API docs on the default (native) target. On native, `OrtBackend`
+# exists and the wasm-only `backend_web` module is cfg'd out; the crate-level
+# docs reference `backend_web` only as a plain code span, so the native docs
+# build is clean at the published bar (zero warnings with missing_docs denied).
+# Building docs on wasm32 instead would break the native-only `OrtBackend`
+# intra-doc links, so wasm32 is deliberately NOT a docs.rs target — the wasm
+# leg is documented in prose and in README_WASM.md.
+# ---------------------------------------------------------------------------
+[package.metadata.docs.rs]
+all-features = false
+rustdoc-args = ["--cfg", "docsrs"]
