@@ -56,6 +56,7 @@ cp diarization-engine.js "$DIST/"
 cp notes-engine.js "$DIST/"
 cp session-engine.js "$DIST/"
 cp storage-engine.js "$DIST/"
+cp exports-engine.js "$DIST/"
 
 # Cloudflare Pages response headers (COOP/COEP + CSP)
 cp _headers "$DIST/"

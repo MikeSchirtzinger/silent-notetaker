@@ -238,11 +238,27 @@ export class StorageEngine {
 
   /**
    * Last-50 meetings newest-first
-   * (`db.meetings.orderBy('startTime').reverse().limit(50)`).
+   * (`db.meetings.orderBy('startTime').reverse().limit(50)`). Ranked by the
+   * `silent-storage::search` policy — the same function the fuzzy search filters
+   * on, so the initial and filtered lists rank identically (Appendix A row 29).
    * @returns {Promise<Array<{id:number,title:string,startTime:number,endTime:(number|null),duration:number}>>}
    */
   recentMeetings() {
     return this._m().recent_meetings();
+  }
+
+  /**
+   * Fuzzy-search the meeting history (Appendix A row 29): case-insensitive
+   * substring across title → notes → transcript chunks, within the last-50
+   * newest-first window. Returns the matched meetings in display order — the
+   * SAME row shape as {@link recentMeetings}. An empty/whitespace query returns
+   * the full recent list. Runs the `silent-storage::search` policy in ONE DB
+   * read (the JS N+1 per-meeting detail reads are gone).
+   * @param {string} query
+   * @returns {Promise<Array<{id:number,title:string,startTime:number,endTime:(number|null),duration:number}>>}
+   */
+  searchHistory(query) {
+    return this._m().search_history(String(query || ''));
   }
 
   /**

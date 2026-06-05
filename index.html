@@ -2058,9 +2058,56 @@ const storage = {
   async markScreenshotAnalyzed(timestamp, analysis) { return (await _ensureStorageLoaded()).markScreenshotAnalyzed(timestamp, analysis); },
   async countScreenshots(meetingId) { return (await _ensureStorageLoaded()).countScreenshots(meetingId); },
   async recentMeetings() { return (await _ensureStorageLoaded()).recentMeetings(); },
+  async searchHistory(query) { return (await _ensureStorageLoaded()).searchHistory(query); },
   async meetingDetail(id) { return (await _ensureStorageLoaded()).meetingDetail(id); },
   async saveSpeakerNames(meetingId, names) { return (await _ensureStorageLoaded()).saveSpeakerNames(meetingId, names); },
   async loadSpeakerNames(meetingId) { return (await _ensureStorageLoaded()).loadSpeakerNames(meetingId); },
+};
+
+// sharedExportsEngine: the single ExportsEngine, loaded once at boot. The
+// export/copy/history formatters (notesToMarkdown, transcriptText,
+// summaryMarkdownWithAi, historyReplayMarkdown, executiveLine, formatDuration)
+// are SYNCHRONOUS once loaded — they run inside non-async copy handlers and a
+// sync `.map()` in the history renderer — so the engine is preloaded on boot and
+// the `exportsEngine` facade calls through to it directly. Until it resolves the
+// methods throw (loud failure); the boot preload below makes it ready well before
+// any user can open the history modal or click Copy.
+let sharedExportsEngine = null;
+let _exportsLoadPromise = null;
+
+function _ensureExportsLoaded() {
+  if (_exportsLoadPromise) return _exportsLoadPromise;
+  _exportsLoadPromise = (async () => {
+    const { ExportsEngine } = await import('./exports-engine.js');
+    if (!sharedExportsEngine) sharedExportsEngine = new ExportsEngine();
+    await sharedExportsEngine.load();
+    return sharedExportsEngine;
+  })();
+  return _exportsLoadPromise;
+}
+
+// `exportsEngine` — the synchronous export-formatting facade the copy/history
+// paths call. Methods delegate to the loaded Rust surface; they throw if called
+// before the boot preload resolves (which is effectively never in practice).
+const exportsEngine = {
+  notesToMarkdown(title, date, duration, notes, withTime) {
+    return sharedExportsEngine.notesToMarkdown(title, date, duration, notes, withTime);
+  },
+  historyReplayMarkdown(title, date, duration, notes) {
+    return sharedExportsEngine.historyReplayMarkdown(title, date, duration, notes);
+  },
+  executiveLine(duration, notes, totalWords) {
+    return sharedExportsEngine.executiveLine(duration, notes, totalWords);
+  },
+  transcriptText(lines, withTime) {
+    return sharedExportsEngine.transcriptText(lines, withTime);
+  },
+  summaryMarkdownWithAi(baseMd, aiGroups) {
+    return sharedExportsEngine.summaryMarkdownWithAi(baseMd, aiGroups);
+  },
+  formatDuration(ms) {
+    return sharedExportsEngine.formatDuration(ms);
+  },
 };
 
 // Add a note `{ meetingId, category, text, timestamp, triggerPhrase }`-shaped
@@ -4907,33 +4954,33 @@ class App {
     return this.session.currentDurationStr(Date.now());
   }
 
-  // Returns structured notes as markdown
+  // Returns structured notes as markdown. The DOM supplies the note text +
+  // per-line stamps; the FORMATTING (section order, empty-text filter, the
+  // `- [ts] text` shape, the trim) is the Rust `silent-core::export` policy
+  // (Appendix A row 30).
   notesToMarkdown() {
     const title = document.getElementById('meetingTitle').value.trim() || 'Meeting Notes';
     const duration = this.currentDurationStr();
     const date = new Date().toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
     const withTime = loadSettings().showTimestamps !== false;
-    let md = `# ${title}\n**Date:** ${date}  **Duration:** ${duration}\n\n`;
 
     const sections = [
-      { id: 'decisionsList', header: '## Decisions' },
-      { id: 'actionsList',   header: '## Action Items' },
-      { id: 'keypointsList', header: '## Key Points' },
-      { id: 'questionsList', header: '## Open Questions' },
+      { id: 'decisionsList', category: 'decisions' },
+      { id: 'actionsList',   category: 'actions'   },
+      { id: 'keypointsList', category: 'keypoints' },
+      { id: 'questionsList', category: 'questions' },
     ];
-
-    for (const { id, header } of sections) {
-      const items = [...document.querySelectorAll(`#${id} .note-item`)].map(item => {
-        const text = item.querySelector('.note-text')?.textContent.trim() || '';
-        const t = item.querySelector('.note-time')?.textContent.trim() || '';
-        return withTime && t ? `- [${t}] ${text}` : `- ${text}`;
-      }).filter(line => line.replace(/^- (\[[^\]]*\] )?/, '').length > 0);
-      if (items.length > 0) {
-        md += `${header}\n${items.join('\n')}\n\n`;
+    const notes = [];
+    for (const { id, category } of sections) {
+      for (const item of document.querySelectorAll(`#${id} .note-item`)) {
+        notes.push({
+          category,
+          text: item.querySelector('.note-text')?.textContent.trim() || '',
+          time: item.querySelector('.note-time')?.textContent.trim() || null,
+        });
       }
     }
-
-    return md.trim();
+    return exportsEngine.notesToMarkdown(title, date, duration, notes, withTime);
   }
 
   generateSummary() {
@@ -4949,14 +4996,15 @@ class App {
       questions: [...document.querySelectorAll('#questionsList .note-text')].map(el => el.textContent.trim()),
     };
 
-    // Build executive summary line
-    const parts = [];
-    if (sections.decisions.length) parts.push(`${sections.decisions.length} decision${sections.decisions.length > 1 ? 's' : ''} made`);
-    if (sections.actions.length)   parts.push(`${sections.actions.length} action item${sections.actions.length > 1 ? 's' : ''} assigned`);
-    if (sections.questions.length) parts.push(`${sections.questions.length} open question${sections.questions.length > 1 ? 's' : ''}`);
-    const executiveLine = parts.length > 0
-      ? `${duration} meeting with ${parts.join(', ')}.`
-      : `${duration} meeting recorded. ${this.totalWords} words transcribed.`;
+    // Build the executive summary line via the Rust `silent-core::export`
+    // policy (singular/plural + the words-transcribed fallback — Appendix A
+    // row 30). Only the per-category counts matter, so flatten the section text
+    // arrays into category-tagged note records.
+    const notes = [];
+    for (const cat of ['decisions', 'actions', 'keypoints', 'questions']) {
+      for (const text of sections[cat]) notes.push({ category: cat, text });
+    }
+    const executiveLine = exportsEngine.executiveLine(duration, notes, this.totalWords);
 
     return { title, date, duration, executiveLine, sections, totalWords: this.totalWords, totalNotes: this.totalNotes };
   }
@@ -5198,22 +5246,20 @@ function showToast(msg, duration = 2200) {
    Copy summary markdown (from summary modal)
 ═══════════════════════════════════════════ */
 function copySummaryMarkdown() {
-  let md = app.notesToMarkdown();
-  // Append the additive AI Meeting Notes (if generated) so the exported summary includes them.
-  const groups = [...document.querySelectorAll('#aiNotesMount .ai-notes-group')];
-  if (groups.length) {
-    md += '\n\n## AI Meeting Notes (on-device · Qwen)\n';
-    for (const g of groups) {
-      const label = g.querySelector('.ai-notes-group-label')?.textContent.trim() || '';
-      const items = [...g.querySelectorAll('.summary-item')].map(i => {
-        const chip = i.querySelector('.note-chip');
-        const text = chip ? i.textContent.replace(chip.textContent, '').trim() : i.textContent.trim();
-        return chip ? `- **${chip.textContent.trim()}** — ${text}` : `- ${text}`;
-      });
-      if (items.length) md += `\n### ${label}\n${items.join('\n')}\n`;
-    }
-    md = md.trim();
-  }
+  const base = app.notesToMarkdown();
+  // Walk the additive AI Meeting Notes groups from the DOM; the Rust
+  // `silent-core::export::summary_markdown_with_ai` policy composes the append
+  // (header, per-group `### label` blocks, the `- **chip** — text` shape, trim —
+  // Appendix A row 30). An empty group set leaves the base unchanged.
+  const aiGroups = [...document.querySelectorAll('#aiNotesMount .ai-notes-group')].map(g => ({
+    label: g.querySelector('.ai-notes-group-label')?.textContent.trim() || '',
+    items: [...g.querySelectorAll('.summary-item')].map(i => {
+      const chip = i.querySelector('.note-chip');
+      const text = chip ? i.textContent.replace(chip.textContent, '').trim() : i.textContent.trim();
+      return { chip: chip ? chip.textContent.trim() : null, text };
+    }),
+  }));
+  const md = exportsEngine.summaryMarkdownWithAi(base, aiGroups);
   navigator.clipboard.writeText(md).then(() => {
     showToast('Copied to clipboard as Markdown');
   }).catch(() => {
@@ -5247,12 +5293,14 @@ function copyTranscript() {
     return;
   }
   const withTime = loadSettings().showTimestamps !== false;
-  const lines = items.map(it => {
-    const t   = it.querySelector('.transcript-time')?.textContent.trim() || '';
-    const txt = it.querySelector('.transcript-text')?.textContent.trim() || '';
-    return withTime && t ? `[${t}] ${txt}` : txt;
-  }).filter(Boolean);
-  const text = lines.join('\n');
+  // The DOM supplies each line's stamp + text; the Rust
+  // `silent-core::export::transcript_text` policy does the timestamp-aware join
+  // + empty-line filter (Appendix A row 30).
+  const lines = items.map(it => ({
+    time: it.querySelector('.transcript-time')?.textContent.trim() || '',
+    text: it.querySelector('.transcript-text')?.textContent.trim() || '',
+  }));
+  const text = exportsEngine.transcriptText(lines, withTime);
   navigator.clipboard.writeText(text).then(() => {
     showToast(withTime ? 'Transcript copied (with timestamps)' : 'Transcript copied (no timestamps)');
   }).catch(() => {
@@ -5388,7 +5436,7 @@ function _renderHistoryItems(meetings, query) {
   }
   return meetings.map(m => {
     const date = new Date(m.startTime).toLocaleString();
-    const dur  = m.duration ? formatDuration(m.duration) : '—';
+    const dur  = m.duration ? exportsEngine.formatDuration(m.duration) : '—';
     return `
       <div class="meeting-history-item" onclick="openMeetingDetail(${m.id})">
         <div class="meeting-history-title">${esc(m.title || 'Untitled Meeting')}</div>
@@ -5400,36 +5448,17 @@ function _renderHistoryItems(meetings, query) {
   }).join('');
 }
 
-/** Filter allMeetings by query against title + notes + transcript content. */
+/** Filter the history by query against title + notes + transcript content.
+ * The search POLICY (case-insensitive substring across title → notes → chunks,
+ * newest-first within the last-50 window) is the Rust `silent-storage::search`
+ * module, run in ONE DB read (Appendix A row 29). An empty query returns the
+ * full recent list. */
 async function _filterHistory(allMeetings, rawQuery) {
   const listEl = document.getElementById('historyList');
   if (!listEl) return;
 
-  const q = rawQuery.trim().toLowerCase();
-  if (!q) {
-    listEl.innerHTML = _renderHistoryItems(allMeetings, '');
-    return;
-  }
-
-  // Filter by title first (synchronous), then do async content search for
-  // meetings that don't match by title. N+1 over ≤50 meetings is acceptable.
-  const matched = [];
-  for (const m of allMeetings) {
-    const titleMatch = (m.title || '').toLowerCase().includes(q);
-    if (titleMatch) {
-      matched.push(m);
-      continue;
-    }
-    // Check notes + transcript chunks (one detail read per non-title-match,
-    // N+1 over ≤50 meetings — same behavior as the old Dexie content search).
-    const detail = await storage.meetingDetail(m.id);
-    const notesHit = (detail.notes || []).some(n => (n.text || '').toLowerCase().includes(q));
-    if (notesHit) { matched.push(m); continue; }
-    const chunkHit = (detail.chunks || []).some(c => (c.text || '').toLowerCase().includes(q));
-    if (chunkHit) { matched.push(m); continue; }
-  }
-
-  listEl.innerHTML = _renderHistoryItems(matched, q);
+  const matched = await storage.searchHistory(rawQuery);
+  listEl.innerHTML = _renderHistoryItems(matched, rawQuery.trim());
 }
 
 async function openMeetingDetail(id) {
@@ -5439,22 +5468,17 @@ async function openMeetingDetail(id) {
   if (!meeting) { showToast('Meeting not found'); return; }
 
   const date = new Date(meeting.startTime).toLocaleString();
-  const dur  = meeting.duration ? formatDuration(meeting.duration) : '—';
+  const dur  = meeting.duration ? exportsEngine.formatDuration(meeting.duration) : '—';
 
-  // Build markdown
+  // The stored note rows + the locale date/duration drive the Rust
+  // `silent-core::export::history_replay_markdown` policy (always `- text`, no
+  // per-line stamps, no empty-text filter — Appendix A rows 29, 30). The
+  // exporter clamps an empty title to "Meeting Notes" itself.
   const title = meeting.title || 'Meeting Notes';
-  const sections = { decisions: [], actions: [], keypoints: [], questions: [] };
-  for (const n of notes) {
-    if (sections[n.category]) sections[n.category].push(n.text);
-  }
-
-  let md = `# ${title}\n**Date:** ${date}  **Duration:** ${dur}\n\n`;
-  const sectionHeaders = { decisions: '## Decisions', actions: '## Action Items', keypoints: '## Key Points', questions: '## Open Questions' };
-  for (const [cat, header] of Object.entries(sectionHeaders)) {
-    if (sections[cat].length > 0) {
-      md += `${header}\n${sections[cat].map(t => `- ${t}`).join('\n')}\n\n`;
-    }
-  }
+  const md = exportsEngine.historyReplayMarkdown(
+    title, date, dur,
+    notes.map(n => ({ category: n.category, text: n.text })),
+  );
 
   openExportModal(md, title);
 }
@@ -5499,12 +5523,10 @@ function closeModal() {
   document.getElementById('modalOverlay').style.display = 'none';
 }
 
-function formatDuration(ms) {
-  const total = Math.floor(ms / 1000);
-  const m = Math.floor(total / 60);
-  const s = total % 60;
-  return `${m}m ${s}s`;
-}
+// The history-list duration formatter (`formatDuration`) is now the Rust
+// `silent-core::timestamp::format_duration` policy, called via
+// `exportsEngine.formatDuration` (Appendix A row 24). The JS implementation was
+// removed — strangler-fig REPLACE.
 
 /* ════════════════════════════════════════════
    Bridge setup panel
@@ -6845,6 +6867,14 @@ _runStorageMigration().then(() => {
   console.log('[SilentNotetaker] storage ready (Rust/WASM IndexedDB)');
 }).catch(err => {
   app.handleStatus('Storage error: ' + (err && err.message ? err.message : err), null);
+});
+
+// Preload the export-formatting engine so the synchronous copy/history
+// formatters are ready before any user action (Appendix A rows 24, 30).
+_ensureExportsLoaded().then(() => {
+  console.log('[SilentNotetaker] exports ready (Rust/WASM formatters)');
+}).catch(err => {
+  console.warn('[rust-exports] preload failed', err);
 });
 
 // ESC to close modal
