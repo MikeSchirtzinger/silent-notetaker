@@ -23,7 +23,7 @@
 use ndarray::{Array1, Array3, Array4};
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorRef};
-use ort_web::{sync_outputs, FEATURE_NONE};
+use ort_web::{sync_outputs, Dist, FEATURE_NONE};
 use wasm_bindgen::prelude::*;
 
 use crate::audio::MelFrontend;
@@ -37,14 +37,15 @@ use crate::constants::{
 };
 use crate::vocab::SentencePieceVocab;
 
-/// Initialise the `ort-web` backend (fetches the onnxruntime-web JS + WASM).
+/// Initialise the `ort-web` backend from the default CDN (`cdn.pyke.io`).
 ///
 /// Must be called, and awaited, exactly once before constructing a
 /// [`WasmAsr`]. Uses the CPU build (`FEATURE_NONE`) -- `FINDINGS.md` shows this
 /// model runs comfortably in realtime on CPU and WebGPU is actively worse for
 /// this model class. By default `ort-web` fetches its assets from
 /// `cdn.pyke.io`; ensure that origin is permitted by your Content-Security-Policy
-/// `connect-src`/`script-src`.
+/// `connect-src`/`script-src`. Prefer [`init_ort_web_vendored`] for hosted
+/// deploys (R6 vendoring): same-origin assets keep `cdn.pyke.io` out of the CSP.
 async fn init_ort_web() -> Result<(), JsError> {
     let api = ort_web::api(FEATURE_NONE)
         .await
@@ -52,6 +53,29 @@ async fn init_ort_web() -> Result<(), JsError> {
     // Safe to call once; sets the global OrtApi used by all ort calls.
     ort::set_api(api);
     // Telemetry would otherwise phone home on first session commit.
+    let _ = ort::init().with_telemetry(false).commit();
+    Ok(())
+}
+
+/// Initialise the `ort-web` backend from a same-origin vendored base URL
+/// (e.g. `"./vendor/ort-web/1.24.3/"`).
+///
+/// This is the R6 vendoring path (Task K2): serving the onnxruntime-web runtime
+/// from the SAME origin as the wasm bundle keeps `cdn.pyke.io` out of the CSP
+/// `connect-src`/`script-src` (shrinking the egress allowlist to `'self'` + HF +
+/// the localhost bridge — a real privacy tightening). Same-origin assets also
+/// trivially satisfy COEP `require-corp` (no CORS/CORP handshake needed), so this
+/// path stays cross-origin-isolated without depending on a third party's headers.
+///
+/// Mirrors `silent_diarization::embedder_web::init_ort_web_vendored` so both
+/// ort-web consumers vendor from one runtime copy. The binary name override
+/// matches the asset `scripts/vendor-ort-web.sh` downloads.
+async fn init_ort_web_vendored(base_url: &str) -> Result<(), JsError> {
+    let dist = Dist::new(base_url).with_binary_name("ort-wasm-simd-threaded.wasm");
+    let api = ort_web::api(dist)
+        .await
+        .map_err(|e| JsError::new(&format!("ort-web init (vendored {base_url}) failed: {e}")))?;
+    ort::set_api(api);
     let _ = ort::init().with_telemetry(false).commit();
     Ok(())
 }
@@ -137,7 +161,40 @@ impl WasmAsr {
     ) -> Result<WasmAsr, JsError> {
         console_error_panic_hook::set_once();
         init_ort_web().await?;
+        Self::build(encoder_onnx, decoder_onnx, tokenizer_model).await
+    }
 
+    /// Create an engine, loading the `ort-web` runtime from a same-origin
+    /// vendored base URL (e.g. `"./vendor/ort-web/1.24.3/"`).
+    ///
+    /// This is the R6 vendoring entry point (Task K2): it keeps `cdn.pyke.io`
+    /// out of the page CSP by serving onnxruntime-web same-origin. Functionally
+    /// identical to [`WasmAsr::create`] except for where the runtime is fetched
+    /// from. Mirrors `silent_diarization`'s `WasmTitaNetEmbedder::create_with_dist`
+    /// so both ort-web consumers share one vendored runtime copy.
+    ///
+    /// # Errors
+    ///
+    /// Returns `JsError` if the vendored `ort-web` runtime, either ONNX session,
+    /// or the tokenizer cannot be initialised.
+    pub async fn create_with_dist(
+        encoder_onnx: &[u8],
+        decoder_onnx: &[u8],
+        tokenizer_model: &[u8],
+        dist_base_url: &str,
+    ) -> Result<WasmAsr, JsError> {
+        console_error_panic_hook::set_once();
+        init_ort_web_vendored(dist_base_url).await?;
+        Self::build(encoder_onnx, decoder_onnx, tokenizer_model).await
+    }
+
+    /// Shared session construction (the `ort-web` runtime must already be
+    /// initialised by `create` or `create_with_dist`).
+    async fn build(
+        encoder_onnx: &[u8],
+        decoder_onnx: &[u8],
+        tokenizer_model: &[u8],
+    ) -> Result<WasmAsr, JsError> {
         let encoder = Session::builder()
             .map_err(to_js)?
             .commit_from_memory(encoder_onnx)

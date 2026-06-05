@@ -37,6 +37,14 @@ token
 # Locally downloaded chromedriver binaries (browser-wasm-tests.sh caches these here)
 /vendor/chromedriver/
 
+# Build-at-deploy vendored runtimes (R6 / K2). scripts/vendor-transformers.sh +
+# scripts/vendor-ort-web.sh fetch + sha256-verify these at deploy time; the
+# binaries are NEVER committed (they are pinned by hash in the scripts, copied
+# into dist/vendor/ by deploy-cloudflare.sh). A stale committed copy would defeat
+# the hash-pinning guarantee.
+/vendor/transformers-runtime/
+/vendor/ort-web-*/
+
 # Presenter notes — on-stage cheat card, not for the public repo
 DEMO.md
 

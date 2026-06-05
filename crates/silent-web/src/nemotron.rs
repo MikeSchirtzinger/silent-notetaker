@@ -215,6 +215,40 @@ impl WasmNemotron {
         })
     }
 
+    /// Build the Nemotron engine, loading the `ort-web` runtime from a
+    /// same-origin vendored base URL (e.g. `"./vendor/ort-web/1.24.3/"`).
+    ///
+    /// The R6 vendoring entry point (Task K2): identical to [`create`] except the
+    /// onnxruntime-web runtime is fetched same-origin, which keeps `cdn.pyke.io`
+    /// out of the page CSP `connect-src`/`script-src`. The thin JS loader
+    /// (`nemotron-engine.js`) passes the vendored base when one is configured and
+    /// falls back to [`create`] (CDN) otherwise.
+    ///
+    /// [`create`]: WasmNemotron::create
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsError` if the vendored `WasmAsr::create_with_dist` fails
+    /// (ort-web init, ONNX session build, or tokenizer parse).
+    #[wasm_bindgen(js_name = createWithDist)]
+    pub async fn create_with_dist(
+        encoder_onnx: &[u8],
+        decoder_onnx: &[u8],
+        tokenizer_model: &[u8],
+        dist_base_url: &str,
+    ) -> Result<WasmNemotron, JsError> {
+        console_error_panic_hook::set_once();
+        let asr =
+            WasmAsr::create_with_dist(encoder_onnx, decoder_onnx, tokenizer_model, dist_base_url)
+                .await?;
+        Ok(WasmNemotron {
+            asr,
+            telemetry: Telemetry::default(),
+            cursor_ms: 0,
+            emitted_text: false,
+        })
+    }
+
     /// Pay the one-time JIT / arena-growth cost up front so the user's first
     /// spoken words are not garbled (the `nemotron-engine.js` warm-up trick).
     /// Runs one synthetic 1.2 s chunk through the decode then resets state.
