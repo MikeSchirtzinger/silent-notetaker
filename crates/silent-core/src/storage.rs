@@ -19,6 +19,27 @@
 //! });
 //! ```
 //!
+//! # Schema v3 (Rust-owned, this task)
+//!
+//! When Dexie is removed and `silent-storage` becomes the sole owner of the
+//! `SilentNotetaker` database, the schema gains one store and the four existing
+//! stores keep their exact key paths so the live CRUD and the zero-loss migration
+//! both keep working:
+//!
+//! ```text
+//! speakerNames: keyPath "meetingId" (NO autoIncrement) — the durable
+//!               per-meeting speaker-rename map (Phase-F carry-forward): the
+//!               human labels the user assigned to `S1`/`S2`/… so renames survive
+//!               a reload. One row per meeting; the row's `names` object maps a
+//!               raw speaker id to its assigned name.
+//! ```
+//!
+//! Bumping the Dexie user-version `2` → `3` raises the raw IDB version `20` → `30`
+//! (the ×10 rule), and the upgrade creates `speakerNames` if absent. The four
+//! Dexie v2 stores are created (for a fresh install) or left untouched (existing
+//! DBs), so a v2 database opened at v3 is non-destructive — exactly what the
+//! migration assumes.
+//!
 //! # Faithfulness to real captured data (not the synthetic spike fixture)
 //!
 //! The structs encode what the SHIPPING app actually writes, including the
@@ -243,6 +264,39 @@ pub struct Screenshot {
     #[serde(default)]
     pub analysis: String,
 }
+
+/// A `speakerNames` row: the durable per-meeting speaker-rename map
+/// (Phase-F carry-forward).
+///
+/// The diarization tracker holds the human labels the user assigns to raw
+/// speaker ids (`S1`, `S2`, …) only in memory, so renames were lost on reload —
+/// the Phase-F gap this record closes. One row per meeting, keyed by
+/// `meeting_id` (NOT auto-increment): writing the same meeting's map again
+/// `put`s over the row. `names` maps a raw speaker id to its assigned name; only
+/// renamed speakers appear (an absent id falls back to the raw id, exactly as the
+/// live tracker does).
+///
+/// This is additive schema (a new store, no change to the four existing ones),
+/// so it never affects the zero-loss migration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct SpeakerName {
+    /// Foreign key to `meetings.id` AND the store's primary key (one row per
+    /// meeting; `put` overwrites).
+    #[serde(rename = "meetingId")]
+    pub meeting_id: u32,
+    /// Map of raw speaker id (`"S1"`) → assigned human name (`"Alice"`). Only
+    /// renamed speakers are stored; an id not present here keeps its raw label.
+    pub names: std::collections::BTreeMap<String, String>,
+}
+
+/// The `speakerNames` store name (schema v3, Rust-owned).
+pub const SPEAKER_NAMES_STORE: &str = "speakerNames";
+
+/// The Rust-owned schema version that adds the `speakerNames` store
+/// (`db.version(3)` equivalent; raw IDB version `30` via the ×10 rule).
+pub const RUST_SCHEMA_VERSION: u32 = 3;
 
 /// A complete readback of all four `SilentNotetaker` tables.
 ///
@@ -564,6 +618,33 @@ mod tests {
         assert_eq!(DEXIE_VERSION_MULTIPLIER, 10);
         assert_eq!(expected_idb_version(DEXIE_SCHEMA_VERSION), 20);
         assert_eq!(expected_idb_version(2), 20);
+    }
+
+    /// The Rust-owned schema (v3) raises the raw IDB version to 30, leaving the
+    /// Dexie v2 layout (20) intact for the migration pre-flight.
+    #[test]
+    fn rust_schema_version_maps_to_thirty() {
+        assert_eq!(RUST_SCHEMA_VERSION, 3);
+        assert_eq!(expected_idb_version(RUST_SCHEMA_VERSION), 30);
+        assert_eq!(SPEAKER_NAMES_STORE, "speakerNames");
+    }
+
+    /// The durable speaker-name map round-trips its camelCase `meetingId` key and
+    /// keeps the rename map (Phase-F carry-forward).
+    #[test]
+    fn speaker_name_serde_roundtrip() {
+        let mut names = std::collections::BTreeMap::new();
+        names.insert("S1".to_owned(), "Alice".to_owned());
+        names.insert("S2".to_owned(), "Bob".to_owned());
+        let row = SpeakerName {
+            meeting_id: 7,
+            names,
+        };
+        let json = serde_json::to_string(&row).expect("serialize");
+        assert!(json.contains("\"meetingId\":7"), "camelCase key: {json}");
+        let back: SpeakerName = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(row, back);
+        assert_eq!(back.names.get("S1").map(String::as_str), Some("Alice"));
     }
 
     #[test]

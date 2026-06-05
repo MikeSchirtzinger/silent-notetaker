@@ -120,8 +120,8 @@ mod ts_bindings {
         Provider, Registry, Task, Validation,
     };
     use crate::storage::{
-        ImageEncoding, Meeting, MigrationStatus, Note, Screenshot, StorageCounts, StorageEvent,
-        TranscriptChunk,
+        ImageEncoding, Meeting, MigrationStatus, Note, Screenshot, SpeakerName, StorageCounts,
+        StorageEvent, TranscriptChunk,
     };
     use std::path::Path;
     use ts_rs::TS;
@@ -183,6 +183,7 @@ mod ts_bindings {
             TranscriptChunk,
             Note,
             Screenshot,
+            SpeakerName,
             ImageEncoding,
             StorageCounts,
             StorageEvent,
@@ -225,6 +226,7 @@ mod ts_bindings {
             "TranscriptChunk.ts",
             "Note.ts",
             "Screenshot.ts",
+            "SpeakerName.ts",
             "ImageEncoding.ts",
             "StorageEvent.ts",
             "MigrationStatus.ts",
