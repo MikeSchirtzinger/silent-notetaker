@@ -43,6 +43,16 @@
 //! unchanged — the wrapper only adds the event glue. The thin loader
 //! (`nemotron-engine.js`) drives it.
 //!
+//! The `selection` module (wasm32 only, Phase 5, Task I3) wraps
+//! `silent_inference::selection` behind a typed surface: the registry-driven ASR
+//! picker option list (Appendix A rows 7, 8 — every engine sourced from the
+//! embedded registry's `ui` entries), per-engine availability verdicts with
+//! reasons + a CPU-tier recommendation (R1), device-tier resolution from a typed
+//! `DeviceProbe` (R3), and the queued mid-recording switch with a friendly
+//! "takes effect next meeting" notice (R3 decision log). The JS glue
+//! (`selection-engine.js`) drives it; the picker render + persistence stay in
+//! `index.html`.
+//!
 //! # TypeScript types
 //!
 //! The boundary types (`DiarizationCommand`, `DiarizationEvent`, etc.) are
@@ -101,6 +111,14 @@ pub mod exports;
 /// `nemotron-asr`'s `WasmAsr` behind the typed `EngineEvent` boundary.
 #[cfg(target_arch = "wasm32")]
 pub mod nemotron;
+
+/// Wasm-bindgen registry-driven engine-selection surface (Phase 5, Task I3;
+/// Appendix A rows 7, 8). Wasm32 only. Wraps `silent_inference::selection` — the
+/// embedded-registry-driven model picker policy, device-tier resolution,
+/// availability verdicts with reasons, and the queued mid-recording switch. The
+/// JS glue (`selection-engine.js`) drives it.
+#[cfg(target_arch = "wasm32")]
+pub mod selection;
 
 /// Wasm-bindgen Claude-bridge reconnect surface (Phase 4, Task x4). Wasm32 only.
 /// Wraps `silent_core::bridge::ReconnectPolicy` — the deterministic

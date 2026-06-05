@@ -31,6 +31,11 @@ workspace = true
 silent-core = { path = "../silent-core" }
 silent-diarization = { path = "../silent-diarization" }
 silent-notes = { path = "../silent-notes" }
+# Registry-driven engine selection (Phase 5, Task I3; Appendix A rows 7, 8). Pure
+# Rust law — no browser deps — so it is an ordinary (both-target) dependency; the
+# `selection` wasm-bindgen surface here is the thin glue that hands the JS
+# `DeviceProbe` in and returns the picker JSON out.
+silent-inference = { path = "../silent-inference" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # Crash-diagnostics subscriber (PRD Phase 5, Appendix A row 34). `tracing` +
