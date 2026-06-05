@@ -17,6 +17,14 @@
 //! glue (`notes-engine.js`) drives it; the `question-worker.js` Qwen worker
 //! stays the executor.
 //!
+//! The `session` module (wasm32 only, Phase 4) wraps `silent-core`'s
+//! [`session::WasmSession`] — the recording-session state machine — behind the
+//! typed `SessionEvent` / `SideEffect` boundary: start/stop/continue/new-meeting,
+//! the Mic/Tab source set, the 120-char auto-title, the timer projection, and
+//! the stop-time hooks (recluster / final notes / question recap / auto-summary).
+//! The JS glue (`session-engine.js`) drives it; index.html executes the side
+//! effects and renders the events (Appendix A rows 1, 2, 3, 6, 31).
+//!
 //! The `nemotron` module (wasm32 only, Phase 3, Task w4) wraps `nemotron-asr`'s
 //! `WasmAsr` ([`nemotron::WasmNemotron`]) behind the typed `EngineEvent`
 //! boundary: model-download progress (Appendix A row 9) and PerfMonitor stats
@@ -52,6 +60,12 @@ pub mod diarization;
 #[cfg(target_arch = "wasm32")]
 pub mod notes;
 
+/// Wasm-bindgen recording-session surface (Phase 4, Task h1 wiring). Wasm32
+/// only. Wraps `silent_core::session::SessionMachine` behind the typed
+/// `SessionEvent` / `SideEffect` boundary (Appendix A rows 1, 2, 3, 6, 31).
+#[cfg(target_arch = "wasm32")]
+pub mod session;
+
 /// Wasm-bindgen Nemotron ASR surface (Phase 3, Task w4). Wasm32 only. Wraps
 /// `nemotron-asr`'s `WasmAsr` behind the typed `EngineEvent` boundary.
 #[cfg(target_arch = "wasm32")]
@@ -65,3 +79,6 @@ pub use nemotron::WasmNemotron;
 
 #[cfg(target_arch = "wasm32")]
 pub use notes::{WasmCorrections, WasmNoteEngine, WasmQuestionScheduler};
+
+#[cfg(target_arch = "wasm32")]
+pub use session::WasmSession;
