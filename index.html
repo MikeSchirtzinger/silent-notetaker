@@ -4,7 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Silent Notetaker</title>
-  <script src="https://unpkg.com/dexie@4/dist/dexie.min.js"></script>
+  <!-- Storage is Rust/WASM (storage-engine.js → crates/silent-web/pkg). Dexie
+       (unpkg) is removed — IndexedDB access, the zero-loss Dexie v2 migration,
+       and the durable speaker-name map all live in silent-storage. -->
   <!-- Transformers.js v4 loaded via direct CDN import in startVoxtral() -->
   <style>
     /* ─────────────────────────────────────────
@@ -2014,15 +2016,114 @@ const __WORKER_BLOB = new Blob(
 const __WORKER_URL = URL.createObjectURL(__WORKER_BLOB);
 
 /* ════════════════════════════════════════════
-   IndexedDB via Dexie
+   Storage (Rust/WASM) — strangler-fig adapter
+   Policy: crates/silent-storage (IndexedDB access, schema v3, zero-loss Dexie v2
+           migration with export-backup, durable speaker-name map)
+   Glue:   storage-engine.js → crates/silent-web/pkg/ (shared silent_web.js)
+   This REPLACES the Dexie `db` object: every db.meetings/transcriptChunks/notes/
+   screenshots call (adds/updates/deletes/reads) now routes through `storage`.
+   The Dexie unpkg <script> is removed from the app.
 ═══════════════════════════════════════════ */
-const db = new Dexie('SilentNotetaker');
-db.version(2).stores({
-  meetings: '++id, title, startTime, endTime, duration',
-  transcriptChunks: '++id, meetingId, timestamp, text, isFinal',
-  notes: '++id, meetingId, category, text, timestamp, triggerPhrase',
-  screenshots: '++id, meetingId, timestamp, image, width, height, analyzed, analysis'
-});
+// sharedStorageEngine: the single StorageEngine, loaded once. `storage` below is
+// a thin facade the call sites use (mirrors the old `db.*` ergonomics).
+let sharedStorageEngine = null;
+let _storageEngineReady = false;
+let _storageLoadPromise = null;
+
+async function _ensureStorageLoaded() {
+  if (_storageEngineReady) return sharedStorageEngine;
+  if (_storageLoadPromise) return _storageLoadPromise;
+  _storageLoadPromise = (async () => {
+    const { StorageEngine } = await import('./storage-engine.js');
+    if (!sharedStorageEngine) sharedStorageEngine = new StorageEngine();
+    await sharedStorageEngine.load();
+    _storageEngineReady = true;
+    return sharedStorageEngine;
+  })();
+  return _storageLoadPromise;
+}
+
+// `storage` — the app-wide persistence facade. Every method ensures the engine
+// is loaded, then delegates to the Rust wasm surface. Async (Promises), like the
+// Dexie calls it replaces. The numeric ids returned match what Dexie returned.
+const storage = {
+  async addMeeting(title, startTime) { return (await _ensureStorageLoaded()).addMeeting(title, startTime); },
+  async updateMeetingEnd(id, endTime, duration) { return (await _ensureStorageLoaded()).updateMeetingEnd(id, endTime, duration); },
+  async addTranscriptChunk(meetingId, timestamp, text) { return (await _ensureStorageLoaded()).addTranscriptChunk(meetingId, timestamp, text); },
+  async addNote(meetingId, category, text, timestamp, triggerPhrase) { return (await _ensureStorageLoaded()).addNote(meetingId, category, text, timestamp, triggerPhrase); },
+  async updateNoteText(id, text) { return (await _ensureStorageLoaded()).updateNoteText(id, text); },
+  async updateNoteCategory(id, category) { return (await _ensureStorageLoaded()).updateNoteCategory(id, category); },
+  async deleteNote(id) { return (await _ensureStorageLoaded()).deleteNote(id); },
+  async addScreenshot(meetingId, timestamp, image, width, height) { return (await _ensureStorageLoaded()).addScreenshot(meetingId, timestamp, image, width, height); },
+  async markScreenshotAnalyzed(timestamp, analysis) { return (await _ensureStorageLoaded()).markScreenshotAnalyzed(timestamp, analysis); },
+  async countScreenshots(meetingId) { return (await _ensureStorageLoaded()).countScreenshots(meetingId); },
+  async recentMeetings() { return (await _ensureStorageLoaded()).recentMeetings(); },
+  async meetingDetail(id) { return (await _ensureStorageLoaded()).meetingDetail(id); },
+  async saveSpeakerNames(meetingId, names) { return (await _ensureStorageLoaded()).saveSpeakerNames(meetingId, names); },
+  async loadSpeakerNames(meetingId) { return (await _ensureStorageLoaded()).loadSpeakerNames(meetingId); },
+};
+
+// Add a note `{ meetingId, category, text, timestamp, triggerPhrase }`-shaped
+// object the way the old `db.notes.add({ meetingId, ...note })` did. The trigger
+// note objects carry { category, text, triggerPhrase }; timestamp may be absent
+// (the trigger path didn't set it). Returns the new numeric id.
+function _addNoteObj(meetingId, note) {
+  return storage.addNote(
+    meetingId, note.category, note.text,
+    (typeof note.timestamp === 'number') ? note.timestamp : Date.now(),
+    note.triggerPhrase || '',
+  );
+}
+
+/* ════════════════════════════════════════════
+   Migration on load (Dexie v2 → Rust, zero-loss, export-backup FIRST)
+   An existing Dexie v2 `SilentNotetaker` DB is detected and migrated before any
+   live write. The backup-ready event is offered as a download BEFORE migration
+   writes (PRD Phase 4 exit criterion). One-time (localStorage guard in Rust).
+═══════════════════════════════════════════ */
+let _migrationPromise = null;
+function _runStorageMigration() {
+  if (_migrationPromise) return _migrationPromise;
+  _migrationPromise = (async () => {
+    try {
+      const engine = await _ensureStorageLoaded();
+      const after = await engine.migrateDatabase((ev) => {
+        if (ev.tag === 'backup_ready') {
+          // Offer the backup download FIRST (existing <a download> path). The
+          // migration's write proceeds after; the file is the pre-migration DB.
+          const { object_url, filename, size_bytes, counts } = ev.payload;
+          try {
+            const a = document.createElement('a');
+            a.href = object_url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            // Revoke after a tick so the download has grabbed the blob.
+            setTimeout(() => { try { URL.revokeObjectURL(object_url); } catch (_) {} }, 30000);
+            console.log('[rust-storage] migration backup offered:', filename, size_bytes, 'bytes', counts);
+          } catch (e) {
+            console.warn('[rust-storage] backup download failed', e);
+          }
+        } else if (ev.tag === 'completed') {
+          console.log('[rust-storage] migration complete — zero loss verified', ev.payload);
+        } else if (ev.tag === 'failed') {
+          console.error('[rust-storage] migration FAILED:', ev.payload.message);
+        } else if (ev.tag === 'status_changed') {
+          console.log('[rust-storage] migration status:', ev.payload.status);
+        }
+      });
+      return after;
+    } catch (e) {
+      // A migration failure must be LOUD, not silent — but it must not brick the
+      // app for a fresh user (no DB to migrate). Log and continue; live writes
+      // open the DB fresh at v3.
+      console.error('[rust-storage] migration error:', e);
+      return null;
+    }
+  })();
+  return _migrationPromise;
+}
 
 /* ════════════════════════════════════════════
    SpeakerTracker (Rust/WASM) — strangler-fig adapter
@@ -2783,15 +2884,10 @@ class TranscriptionManager {
         const base64 = reader.result; // data:image/jpeg;base64,...
         const timestamp = Date.now();
 
-        // Store in IndexedDB
-        db.screenshots.add({
-          meetingId: this.currentMeetingId,
-          timestamp,
-          image: base64,
-          width: w,
-          height: h,
-          analyzed: false
-        });
+        // Store in IndexedDB (Rust storage — base64 data-URL string, stored as
+        // UTF-8 bytes with the `base64` encoding marker).
+        storage.addScreenshot(this.currentMeetingId, timestamp, base64, w, h)
+          .catch(err => console.warn('[screenshot] storage add failed', err));
 
         // Notify main app (it will send to Claude if connected)
         if (this.onScreenshot) this.onScreenshot(base64, timestamp);
@@ -3783,7 +3879,7 @@ class ClaudeBridge {
             triggerPhrase: 'screenshot_analysis'
           };
           if (app.meetingId) {
-            db.notes.add({ meetingId: app.meetingId, ...note }).then(id => {
+            _addNoteObj(app.meetingId, note).then(id => {
               app.renderNote({ ...note, id });
             });
           } else {
@@ -3792,7 +3888,8 @@ class ClaudeBridge {
 
           // Also mark screenshot as analyzed
           if (msg.timestamp) {
-            db.screenshots.where('timestamp').equals(msg.timestamp).modify({ analyzed: true, analysis: msg.content });
+            storage.markScreenshotAnalyzed(msg.timestamp, msg.content)
+              .catch(err => console.warn('[screenshot-analyze] storage modify failed', err));
           }
         }
         break;
@@ -4077,12 +4174,14 @@ class App {
       // The start side effect: resume without reload (warm) vs cold load.
       const canResume = out.effects.some(fx => fx.tag === 'resume_capture_no_reload');
 
-      this.meetingId = await db.meetings.add({
-        title: title || 'Untitled Meeting',
-        startTime: this._startEpoch,
-        endTime: null,
-        duration: 0
-      });
+      this.meetingId = await storage.addMeeting(title || 'Untitled Meeting', this._startEpoch);
+
+      // Phase-F: on a warm Continue, re-persist the live tracker's current names
+      // under the new meeting row (the tracker survives across meetings; its
+      // human labels should follow). On a fresh reload the tracker is empty, so
+      // this is a no-op until the user renames. Restore happens via
+      // _restoreSpeakerNames when an existing meeting's names are loaded.
+      if (canResume) _persistSpeakerNames();
 
       await _ensureNotesLoaded();   // Rust notes/questions policy (NoteExtractor + OpenQs + Scheduler)
       SmartQ.reset();    // fresh teleprompter for this meeting
@@ -4199,7 +4298,7 @@ class App {
       // Flush note engine buffer
       const flushed = this.noteEngine.flush();
       for (const note of flushed) {
-        const id = await db.notes.add({ meetingId: this.meetingId, ...note });
+        const id = await _addNoteObj(this.meetingId, note);
         this.renderNote({ ...note, id });
       }
 
@@ -4229,10 +4328,11 @@ class App {
     const hooks = stopFx ? stopFx.payload : { recluster: true, final_notes: false, question_recap: false, auto_summary: false };
 
     if (this.meetingId) {
-      await db.meetings.update(this.meetingId, {
+      await storage.updateMeetingEnd(
+        this.meetingId,
         endTime,
-        duration: this._startEpoch ? endTime - this._startEpoch : 0
-      });
+        this._startEpoch ? endTime - this._startEpoch : 0,
+      );
     }
 
     // Render the machine's stop events (sources_changed → clears Mic/Tab badges,
@@ -4289,7 +4389,7 @@ class App {
         questions: [...document.querySelectorAll('#questionsList .note-text')].map(el => el.textContent),
       };
       // Get screenshot count
-      const screenshotCount = await db.screenshots.where('meetingId').equals(this.meetingId).count();
+      const screenshotCount = await storage.countScreenshots(this.meetingId);
       this.bridge.requestSummary(fullTranscript, notes, screenshotCount);
     }
   }
@@ -4455,12 +4555,7 @@ class App {
       toRemove.forEach(d => d.remove());
     }
 
-    await db.transcriptChunks.add({
-      meetingId: this.meetingId,
-      timestamp,
-      text: text.trim(),
-      isFinal: true
-    });
+    await storage.addTranscriptChunk(this.meetingId, timestamp, text.trim());
 
     // Voxtral and Nemotron promote their own live element to final — skip re-render
     // (rendering here too would duplicate every sentence in the transcript).
@@ -4479,7 +4574,7 @@ class App {
       const noteResults = this.noteEngine.analyze(text);
       OpenQs.consider(text);   // resolve any prior open questions this text answers (before adding new ones)
       for (const note of noteResults) {
-        const id = await db.notes.add({ meetingId: this.meetingId, ...note });
+        const id = await _addNoteObj(this.meetingId, note);
         this.renderNote({ ...note, id });
         if (note.category === 'questions') OpenQs.add(id, note.text);
       }
@@ -4693,7 +4788,7 @@ class App {
       if (newText && newText !== currentText) {
         newTextEl.textContent = newText;
         if (id != null) {
-          try { await db.notes.update(id, { text: newText }); } catch (err) { console.warn('[note-edit] db update failed', err); }
+          try { await storage.updateNoteText(id, newText); } catch (err) { console.warn('[note-edit] storage update failed', err); }
         }
       } else {
         newTextEl.innerHTML = esc(currentText);
@@ -4732,7 +4827,7 @@ class App {
     document.getElementById('noteCount').textContent = `${this.totalNotes} note${this.totalNotes !== 1 ? 's' : ''}`;
 
     if (id != null) {
-      db.notes.delete(id).catch(err => console.warn('[note-delete] db delete failed', err));
+      storage.deleteNote(id).catch(err => console.warn('[note-delete] storage delete failed', err));
     }
   }
 
@@ -4770,7 +4865,7 @@ class App {
 
     // Persist
     if (id != null) {
-      db.notes.update(id, { category: newCategory }).catch(err => console.warn('[note-recat] db update failed', err));
+      storage.updateNoteCategory(id, newCategory).catch(err => console.warn('[note-recat] storage update failed', err));
     }
   }
 
@@ -5246,7 +5341,7 @@ function refreshTimeUI() {
    History modal
 ═══════════════════════════════════════════ */
 async function openHistory() {
-  const meetings = await db.meetings.orderBy('startTime').reverse().limit(50).toArray();
+  const meetings = await storage.recentMeetings();
 
   const container = document.getElementById('modalContainer');
   const overlay   = document.getElementById('modalOverlay');
@@ -5325,29 +5420,23 @@ async function _filterHistory(allMeetings, rawQuery) {
       matched.push(m);
       continue;
     }
-    // Check notes text
-    const notesHit = await db.notes
-      .where('meetingId').equals(m.id)
-      .filter(n => (n.text || '').toLowerCase().includes(q))
-      .count();
-    if (notesHit > 0) { matched.push(m); continue; }
-    // Check transcript chunks
-    const chunkHit = await db.transcriptChunks
-      .where('meetingId').equals(m.id)
-      .filter(c => (c.text || '').toLowerCase().includes(q))
-      .count();
-    if (chunkHit > 0) { matched.push(m); continue; }
+    // Check notes + transcript chunks (one detail read per non-title-match,
+    // N+1 over ≤50 meetings — same behavior as the old Dexie content search).
+    const detail = await storage.meetingDetail(m.id);
+    const notesHit = (detail.notes || []).some(n => (n.text || '').toLowerCase().includes(q));
+    if (notesHit) { matched.push(m); continue; }
+    const chunkHit = (detail.chunks || []).some(c => (c.text || '').toLowerCase().includes(q));
+    if (chunkHit) { matched.push(m); continue; }
   }
 
   listEl.innerHTML = _renderHistoryItems(matched, q);
 }
 
 async function openMeetingDetail(id) {
-  const [meeting, notes, chunks] = await Promise.all([
-    db.meetings.get(id),
-    db.notes.where('meetingId').equals(id).toArray(),
-    db.transcriptChunks.where('meetingId').equals(id).toArray()
-  ]);
+  const detail = await storage.meetingDetail(id);
+  const meeting = detail.meeting;
+  const notes = detail.notes || [];
+  if (!meeting) { showToast('Meeting not found'); return; }
 
   const date = new Date(meeting.startTime).toLocaleString();
   const dur  = meeting.duration ? formatDuration(meeting.duration) : '—';
@@ -6316,6 +6405,7 @@ function applyRecluster(relabel, speakers) {
 
   // Rebuild the speakers bar.
   renderSpeakerTags();
+  _persistSpeakerNames();   // Phase-F: recluster can remap ids that carried names
 }
 
 /* Merge a mis-split speaker into an existing one: fold tracker centroids and
@@ -6332,6 +6422,7 @@ function mergeSpeaker(fromId, toId) {
     el.textContent = to.name || to.id;
   });
   renderSpeakerTags();   // absorbed chip disappears from the bar
+  _persistSpeakerNames();   // Phase-F: a merge changes the rename map
   return true;
 }
 
@@ -6356,9 +6447,12 @@ function maybeMergeOnRename(fromId, value) {
 
 function renameSpeaker(id, name) {
   const nm = name.trim();
-  // Persist to the tracker when one is active; DOM updates happen regardless so
-  // click-to-rename works in every state (live, after Stop, or replay).
-  if (app.tm && app.tm.speakerTracker) app.tm.speakerTracker.rename(id, nm);
+  // Persist to the SHARED diarization engine (it survives across meetings and is
+  // what the durable-name snapshot reads). The per-meeting adapter delegates here
+  // too, but going direct means a rename in any state — live, after Stop, or
+  // replay — reaches the tracker even when `app.tm` is null (e.g. on reload).
+  if (sharedDiarzEngine) sharedDiarzEngine.rename(id, nm);
+  else if (app.tm && app.tm.speakerTracker) app.tm.speakerTracker.rename(id, nm);
 
   // Update all existing transcript tags with this speaker ID
   document.querySelectorAll(`.speaker-tag[data-speaker="${id}"]`).forEach(el => {
@@ -6372,6 +6466,49 @@ function renameSpeaker(id, name) {
       input.value = nm;
     }
   });
+
+  // Phase-F carry-forward: persist the meeting's rename map so renames survive
+  // reload / history replay (the diarization tracker is in-memory only).
+  _persistSpeakerNames();
+}
+
+/* ════════════════════════════════════════════
+   Durable speaker names (Phase-F carry-forward)
+   The diarization tracker holds the human labels (S1 → "Alice") only in memory,
+   so renames were lost on reload. Persist the per-meeting rename map after every
+   rename / merge / recluster, and restore it when a meeting starts/continues.
+═══════════════════════════════════════════ */
+// Snapshot the current speaker rename map (raw id → assigned name; only renamed
+// speakers) and persist it for the active meeting.
+function _persistSpeakerNames() {
+  const mid = app && app.meetingId;
+  if (!mid || !sharedDiarzEngine) return;
+  const names = {};
+  for (const s of (sharedDiarzEngine.speakers || [])) {
+    // A renamed speaker has a name that differs from its raw id (S1, S2, …).
+    if (s.name && s.name !== s.id) names[s.id] = s.name;
+  }
+  storage.saveSpeakerNames(mid, names).catch(err => console.warn('[speaker-names] persist failed', err));
+}
+
+// Restore a meeting's saved rename map into the live tracker + the bar, so the
+// human labels reappear on reload / Continue (called from start()).
+async function _restoreSpeakerNames(meetingId) {
+  if (!meetingId || !sharedDiarzEngine) return;
+  let names = {};
+  try { names = await storage.loadSpeakerNames(meetingId); } catch (err) { console.warn('[speaker-names] restore failed', err); return; }
+  let applied = 0;
+  for (const [id, name] of Object.entries(names || {})) {
+    if (name) { sharedDiarzEngine.rename(id, name); applied++; }
+  }
+  if (applied > 0) {
+    // Reflect the restored names in any existing transcript tags + the bar.
+    for (const [id, name] of Object.entries(names)) {
+      document.querySelectorAll(`.speaker-tag[data-speaker="${id}"]`).forEach(el => { el.textContent = name; });
+    }
+    renderSpeakerTags();
+    console.log('[speaker-names] restored', applied, 'name(s) for meeting', meetingId);
+  }
 }
 
 // Close bridge panel when clicking elsewhere
@@ -6700,11 +6837,14 @@ setInterval(() => {
   }
 }, 1000);
 
-// Verify DB on load
-db.open().then(() => {
-  console.log('[SilentNotetaker] IndexedDB ready');
+// Load storage + run the Dexie v2 → Rust migration on boot. The migration is a
+// one-time no-op once done (localStorage guard in Rust); on an existing v2 DB it
+// offers the export-backup download FIRST, then migrates with zero loss. This
+// runs BEFORE any live write so the migrate-then-write ordering holds.
+_runStorageMigration().then(() => {
+  console.log('[SilentNotetaker] storage ready (Rust/WASM IndexedDB)');
 }).catch(err => {
-  app.handleStatus('IndexedDB error: ' + err.message, null);
+  app.handleStatus('Storage error: ' + (err && err.message ? err.message : err), null);
 });
 
 // ESC to close modal
