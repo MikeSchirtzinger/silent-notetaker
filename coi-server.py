@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 """Dev server that enables cross-origin isolation (→ SharedArrayBuffer → multithreaded WASM).
 
-COEP=credentialless lets cross-origin CDN imports (jsdelivr/HF) still load without
-needing CORP headers on every subresource. Same as require-corp for isolation purposes.
+COEP=require-corp (switched from credentialless 2026-06-05). require-corp is the only
+value WebKit/Safari honors for cross-origin isolation; the spike
+(docs/research/spike-coep.md) proved cross-origin CDN imports (jsdelivr/HF) still load
+under require-corp because their CORS headers are CORP-equivalent under the COEP spec,
+and the ort-web runtime is vendored same-origin. INVARIANT: cross-origin fetches must
+stay CORS-eligible (no no-cors mode). Keep this COEP value byte-identical with
+`_headers` and `server/src/main.rs`.
 """
 import http.server, socketserver, sys
 
@@ -38,7 +43,7 @@ _CSP_REPORT_ONLY = (
 class Handler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
-        self.send_header('Cross-Origin-Embedder-Policy', 'credentialless')
+        self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
         self.send_header('Cache-Control', 'no-cache')
         # Report-only CSP — observe egress violations without blocking anything.
         # See comment block above for tuning and promotion instructions.
@@ -47,5 +52,5 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 socketserver.TCPServer.allow_reuse_address = True
 with socketserver.TCPServer(("", PORT), Handler) as httpd:
-    print(f"COI server on :{PORT} (COOP=same-origin, COEP=credentialless)")
+    print(f"COI server on :{PORT} (COOP=same-origin, COEP=require-corp)")
     httpd.serve_forever()

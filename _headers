@@ -3,12 +3,18 @@
 # Re-generate with: cargo xtask gen-headers --out _headers
 # Check freshness: cargo xtask gen-headers --out _headers --check
 # Rollback to report-only: cargo xtask gen-headers --out _headers --report-only
+# Rollback COEP to credentialless: cargo xtask gen-headers --out _headers --coep credentialless
 #
 # Cross-origin isolation → crossOriginIsolated → SharedArrayBuffer →
 # multithreaded WASM.
 #
-# COEP=credentialless (not require-corp): require-corp breaks HF CDN
-# redirects (decision log 2026-06-04).
+# COEP=require-corp (switched from credentialless 2026-06-05):
+# require-corp is the ONLY value WebKit/Safari honors for cross-origin
+# isolation; credentialless left Safari single-threaded. HF CDN
+# satisfies require-corp via its CORS headers (CORS-eligible responses
+# are CORP-equivalent under the spec) — the earlier "breaks HF CDN"
+# claim was empirically disproven. Evidence: docs/research/spike-coep.md.
+# INVARIANT: cross-origin fetches must stay CORS-eligible (no no-cors).
 #
 # CSP is ENFORCED (Phase 6 / R5 — the privacy keystone, Task j3).
 # Per-extension connect-src relaxations are applied to the extension's
@@ -18,5 +24,5 @@
 # decision log 2026-06-04: localhost is inside the user's trust boundary.
 /*
 Cross-Origin-Opener-Policy: same-origin
-Cross-Origin-Embedder-Policy: credentialless
+Cross-Origin-Embedder-Policy: require-corp
 Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io; worker-src 'self' blob:; connect-src 'self' blob: data: https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co ws://localhost:8765; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'

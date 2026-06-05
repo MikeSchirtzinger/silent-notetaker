@@ -11,8 +11,14 @@
 //! **Preserved from shipping `_headers`:**
 //! - `Cross-Origin-Opener-Policy: same-origin` — required for `SharedArrayBuffer`
 //!   (multi-threaded WASM).
-//! - `Cross-Origin-Embedder-Policy: credentialless` — NOT `require-corp`;
-//!   `require-corp` breaks Hugging Face CDN redirects (decision log 2026-06-04).
+//! - `Cross-Origin-Embedder-Policy: require-corp` — switched from
+//!   `credentialless` on 2026-06-05. The earlier "require-corp breaks HF CDN
+//!   redirects" assessment (decision log 2026-06-04) was empirically disproven by
+//!   `docs/research/spike-coep.md`: HF CDN satisfies require-corp via its CORS
+//!   headers (CORS-eligible responses are CORP-equivalent under the COEP spec),
+//!   and require-corp is the ONLY value WebKit/Safari honors for cross-origin
+//!   isolation (`credentialless` leaves Safari single-threaded). The `--coep`
+//!   flag emits `credentialless` for rollback.
 //! - CSP is now **ENFORCED** (`Content-Security-Policy`) as of Phase 6 / R5
 //!   (Task j3 — "the privacy keystone"). It shipped report-only through Phase 1–5
 //!   so hidden egress could surface in dev-tools without breaking transcription;
@@ -99,6 +105,58 @@ pub struct GenHeadersArgs {
     /// period if a future origin regresses under enforcement (PRD R5 / Task j3).
     #[arg(long)]
     pub report_only: bool,
+
+    /// `Cross-Origin-Embedder-Policy` value. Defaults to `require-corp` — the
+    /// only value WebKit/Safari honors for cross-origin isolation, proven
+    /// HF-CDN-compatible in `docs/research/spike-coep.md`. Pass
+    /// `--coep credentialless` ONLY as an emergency rollback (re-opens the
+    /// Safari single-threaded regression). The COEP invariant: cross-origin
+    /// fetches must remain CORS-eligible (no `no-cors` mode) — see CONTRIBUTING-RUST.md.
+    #[arg(long, value_enum, default_value_t = CoepMode::RequireCorp)]
+    pub coep: CoepMode,
+}
+
+/// `Cross-Origin-Embedder-Policy` value. Both yield `crossOriginIsolated` in
+/// Chrome and Firefox; only `require-corp` does so in WebKit/Safari (spike-coep).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum CoepMode {
+    /// `require-corp` — the default and shipping posture (2026-06-05). Works in
+    /// all three browser engines; satisfied by HF CDN's CORS headers.
+    RequireCorp,
+    /// `credentialless` — the superseded pre-2026-06-05 value, kept ONLY as a
+    /// rollback. Leaves WebKit/Safari single-threaded (`crossOriginIsolated=false`).
+    Credentialless,
+}
+
+impl CoepMode {
+    /// The header value string for this COEP mode.
+    fn header_value(self) -> &'static str {
+        match self {
+            CoepMode::RequireCorp => "require-corp",
+            CoepMode::Credentialless => "credentialless",
+        }
+    }
+
+    /// The explanatory `_headers` comment block for this COEP posture.
+    fn comment_block(self) -> &'static str {
+        match self {
+            CoepMode::RequireCorp => {
+                "# COEP=require-corp (switched from credentialless 2026-06-05):\n\
+                 # require-corp is the ONLY value WebKit/Safari honors for cross-origin\n\
+                 # isolation; credentialless left Safari single-threaded. HF CDN\n\
+                 # satisfies require-corp via its CORS headers (CORS-eligible responses\n\
+                 # are CORP-equivalent under the spec) — the earlier \"breaks HF CDN\"\n\
+                 # claim was empirically disproven. Evidence: docs/research/spike-coep.md.\n\
+                 # INVARIANT: cross-origin fetches must stay CORS-eligible (no no-cors)."
+            }
+            CoepMode::Credentialless => {
+                "# COEP=credentialless (ROLLBACK from require-corp via --coep credentialless):\n\
+                 # this leaves WebKit/Safari single-threaded (crossOriginIsolated=false).\n\
+                 # Only use to recover from an HF-CDN CORS regression. See\n\
+                 # docs/research/spike-coep.md for why require-corp is the default."
+            }
+        }
+    }
 }
 
 /// CSP enforcement posture. The directive *value* is identical in both; only the
@@ -174,9 +232,10 @@ pub fn run(args: GenHeadersArgs) -> Result<()> {
     } else {
         CspMode::Enforced
     };
+    let coep = args.coep;
 
     let registry = load_registry_optional(&registry_path)?;
-    let content = generate_headers_with_mode(&registry, mode);
+    let content = generate_headers_with_mode(&registry, mode, coep);
 
     if args.check {
         // --check mode: compare generated vs on-disk.
@@ -189,9 +248,10 @@ pub fn run(args: GenHeadersArgs) -> Result<()> {
         std::fs::write(out_path, &content)
             .with_context(|| format!("writing _headers to {}", out_path.display()))?;
         eprintln!(
-            "[gen-headers] wrote: {} ({:?} CSP)",
+            "[gen-headers] wrote: {} ({:?} CSP, {:?} COEP)",
             out_path.display(),
-            mode
+            mode,
+            coep
         );
     } else {
         print!("{content}");
@@ -304,30 +364,34 @@ fn build_csp(registry: &Registry) -> String {
     )
 }
 
-/// Generate the full `_headers` file content for the *enforced* CSP posture
-/// (the Phase 6 / R5 default and what ships). `deploy-gate` calls this for its
-/// freshness check, so the shipped `_headers` must be the enforced output.
+/// Generate the full `_headers` file content for the shipping posture: *enforced*
+/// CSP (Phase 6 / R5) + *require-corp* COEP (spike-coep, 2026-06-05). `deploy-gate`
+/// calls this for its freshness check, so the shipped `_headers` must be exactly
+/// this output.
 pub fn generate_headers(registry: &Registry) -> String {
-    generate_headers_with_mode(registry, CspMode::Enforced)
+    generate_headers_with_mode(registry, CspMode::Enforced, CoepMode::RequireCorp)
 }
 
-/// Generate the full `_headers` file content for an explicit [`CspMode`].
-pub fn generate_headers_with_mode(registry: &Registry, mode: CspMode) -> String {
+/// Generate the full `_headers` file content for explicit [`CspMode`] +
+/// [`CoepMode`] postures.
+pub fn generate_headers_with_mode(registry: &Registry, mode: CspMode, coep: CoepMode) -> String {
     let csp = build_csp(registry);
     let header_name = mode.header_name();
     let comment_line = mode.comment_line();
+    let coep_value = coep.header_value();
+    let coep_comment = coep.comment_block();
     format!(
         "# Cloudflare Pages / Netlify response headers.\n\
          # GENERATED by `xtask gen-headers` — do not edit by hand.\n\
          # Re-generate with: cargo xtask gen-headers --out _headers\n\
          # Check freshness: cargo xtask gen-headers --out _headers --check\n\
          # Rollback to report-only: cargo xtask gen-headers --out _headers --report-only\n\
+         # Rollback COEP to credentialless: cargo xtask gen-headers --out _headers --coep credentialless\n\
          #\n\
          # Cross-origin isolation → crossOriginIsolated → SharedArrayBuffer →\n\
          # multithreaded WASM.\n\
          #\n\
-         # COEP=credentialless (not require-corp): require-corp breaks HF CDN\n\
-         # redirects (decision log 2026-06-04).\n\
+         {coep_comment}\n\
          #\n\
          {comment_line}\n\
          # Per-extension connect-src relaxations are applied to the extension's\n\
@@ -337,7 +401,7 @@ pub fn generate_headers_with_mode(registry: &Registry, mode: CspMode) -> String 
          # decision log 2026-06-04: localhost is inside the user's trust boundary.\n\
          /*\n\
            Cross-Origin-Opener-Policy: same-origin\n\
-           Cross-Origin-Embedder-Policy: credentialless\n\
+           Cross-Origin-Embedder-Policy: {coep_value}\n\
            {header_name}: {csp}\n"
     )
 }
@@ -470,9 +534,15 @@ mod tests {
             headers.contains("Cross-Origin-Opener-Policy: same-origin"),
             "missing COOP: {headers}"
         );
+        // COEP is require-corp by default (spike-coep, 2026-06-05) — NOT
+        // credentialless, which left Safari single-threaded.
         assert!(
-            headers.contains("Cross-Origin-Embedder-Policy: credentialless"),
-            "missing COEP: {headers}"
+            headers.contains("Cross-Origin-Embedder-Policy: require-corp"),
+            "missing require-corp COEP: {headers}"
+        );
+        assert!(
+            !headers.contains("Cross-Origin-Embedder-Policy: credentialless"),
+            "default headers must not ship credentialless COEP anymore: {headers}"
         );
 
         // ENFORCED (Phase 6 / R5 / Task j3) — not report-only.
@@ -502,8 +572,10 @@ mod tests {
     #[test]
     fn report_only_mode_emits_legacy_header_same_directives() {
         let registry = make_minimal_registry();
-        let enforced = generate_headers_with_mode(&registry, CspMode::Enforced);
-        let report_only = generate_headers_with_mode(&registry, CspMode::ReportOnly);
+        let enforced =
+            generate_headers_with_mode(&registry, CspMode::Enforced, CoepMode::RequireCorp);
+        let report_only =
+            generate_headers_with_mode(&registry, CspMode::ReportOnly, CoepMode::RequireCorp);
 
         assert!(
             report_only.contains("Content-Security-Policy-Report-Only: "),
@@ -522,6 +594,45 @@ mod tests {
             )),
             "report-only header missing the SAME canonical directive value"
         );
+    }
+
+    #[test]
+    fn coep_default_is_require_corp_rollback_is_credentialless() {
+        let registry = make_minimal_registry();
+        let require_corp =
+            generate_headers_with_mode(&registry, CspMode::Enforced, CoepMode::RequireCorp);
+        let credentialless =
+            generate_headers_with_mode(&registry, CspMode::Enforced, CoepMode::Credentialless);
+
+        // Default (require-corp) — the spike-coep posture; the only value WebKit
+        // honors for cross-origin isolation.
+        assert!(
+            require_corp.contains("Cross-Origin-Embedder-Policy: require-corp"),
+            "default must emit require-corp: {require_corp}"
+        );
+        assert!(
+            !require_corp.contains("Cross-Origin-Embedder-Policy: credentialless"),
+            "require-corp output must not contain credentialless value"
+        );
+
+        // Rollback (credentialless) — still available for an HF-CDN CORS regression.
+        assert!(
+            credentialless.contains("Cross-Origin-Embedder-Policy: credentialless"),
+            "rollback must emit credentialless: {credentialless}"
+        );
+        assert!(
+            !credentialless.contains("Cross-Origin-Embedder-Policy: require-corp"),
+            "credentialless output must not contain require-corp value"
+        );
+
+        // The CSP directive set and COOP are identical across COEP modes — only
+        // the COEP value + its comment block change.
+        assert!(
+            credentialless.contains("Cross-Origin-Opener-Policy: same-origin"),
+            "COOP must be unchanged by the COEP rollback"
+        );
+        let csp = build_csp(&registry);
+        assert!(require_corp.contains(&csp) && credentialless.contains(&csp));
     }
 
     #[test]

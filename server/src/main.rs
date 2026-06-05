@@ -11,9 +11,15 @@
 //!
 //! Usage: notetaker-server [DIR=.] [PORT=8080]
 //!
-//! Note: COEP=credentialless (not require-corp) so cross-origin CDN/HF imports still
-//! load without every subresource needing a CORP header. WebSocket connections
-//! (the Claude bridge on :8765) are not subject to COEP and keep working.
+//! Note: COEP=require-corp (switched from credentialless 2026-06-05). require-corp
+//! is the only value WebKit/Safari honors for cross-origin isolation; the earlier
+//! "credentialless avoids needing CORP on every subresource" reasoning was kept for
+//! Safari compatibility, but the spike (docs/research/spike-coep.md) proved HF CDN
+//! satisfies require-corp via its CORS headers (CORS-eligible == CORP-eligible under
+//! the COEP spec) and the vendored ort-web runtime is same-origin. WebSocket
+//! connections (the Claude bridge on :8765) are not subject to COEP and keep working.
+//! INVARIANT: cross-origin fetches must stay CORS-eligible (no no-cors mode).
+//! This value MUST stay byte-identical with `_headers` and `coi-server.py`.
 
 use std::{env, net::SocketAddr, path::PathBuf};
 
@@ -104,7 +110,7 @@ async fn main() {
         ))
         .layer(SetResponseHeaderLayer::overriding(
             coep,
-            HeaderValue::from_static("credentialless"),
+            HeaderValue::from_static("require-corp"),
         ))
         // Enforced CSP — egress outside the allowlist is BLOCKED (Phase 6 / R5).
         // See comment block above for the source-of-truth + rollback procedure.
@@ -120,7 +126,7 @@ async fn main() {
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let canon = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
     tracing::info!("Notetaker server → http://localhost:{port}   serving {}", canon.display());
-    tracing::info!("cross-origin isolated (COOP=same-origin, COEP=credentialless) → multithreaded WASM enabled");
+    tracing::info!("cross-origin isolated (COOP=same-origin, COEP=require-corp) → multithreaded WASM enabled");
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
