@@ -103,6 +103,52 @@ pub struct Model {
     /// R9 performance budgets enforced as regression gates.
     #[serde(default)]
     pub perf_budget: Option<PerfBudget>,
+
+    /// Settings-picker presentation, when this model is a user-selectable ASR
+    /// engine (PRD Phase 5 / R3; Appendix A row 7). `None` for entries that are
+    /// not directly user-picked in the ASR slot (TitaNet embedder, the Qwen
+    /// notes models — those have their own surfaces). The picker (Task I3 /
+    /// `silent_inference::selection`) renders one option per `Some(ui)`, ordered
+    /// by [`ModelUi::order`]; the label and the persisted `value` come from
+    /// here, so adding a Whisper size is a registry entry — zero code (R3
+    /// acceptance).
+    #[serde(default)]
+    pub ui: Option<ModelUi>,
+
+    /// For a **composite** engine (Dual = Moonshine drafts + SenseVoice refiner),
+    /// the ids of the underlying model entries it reuses, in policy order
+    /// (`[draft, refine]`). Empty for ordinary single-model entries. A composite
+    /// entry carries no own `files`; the selection module resolves artifacts and
+    /// availability by following these ids (Appendix A row 11).
+    #[serde(default)]
+    pub composite_of: Vec<ModelId>,
+}
+
+/// Settings-picker presentation for a user-selectable ASR engine (the `value`
+/// persisted in `localStorage` + the option label shown), kept as registry data
+/// so the picker stays "registry entry = zero code" (PRD R3).
+///
+/// `value` is the stable selection key the UI persists (e.g. `voxtral`,
+/// `nemotron`, an HF repo id for the Whisper/Moonshine families) — it is NOT the
+/// registry [`Model::id`], because the shipping UI and `localStorage` already use
+/// these short keys and that contract must not break (pixel-identical UX).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(test, derive(ts_rs::TS))]
+#[cfg_attr(test, ts(export))]
+pub struct ModelUi {
+    /// The picker option `value` the UI persists in `localStorage` under
+    /// `settings.model` (e.g. `voxtral`, `nemotron`, `dual`, `sensevoice`, or an
+    /// HF repo id like `onnx-community/whisper-small.en`). Load-bearing: the
+    /// shipping `index.html` branches on these exact strings.
+    pub value: String,
+
+    /// The exact option label shown in the picker (must match the shipping
+    /// option text verbatim for pixel-identical UX).
+    pub label: String,
+
+    /// Position in the picker list (ascending). The shipping order is preserved
+    /// by these values; ties fall back to registry order.
+    pub order: u32,
 }
 
 /// The task a model performs.

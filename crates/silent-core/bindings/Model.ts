@@ -5,6 +5,7 @@ import type { ExecutionProvider } from "./ExecutionProvider";
 import type { Host } from "./Host";
 import type { ModelFile } from "./ModelFile";
 import type { ModelId } from "./ModelId";
+import type { ModelUi } from "./ModelUi";
 import type { PerfBudget } from "./PerfBudget";
 import type { Provider } from "./Provider";
 import type { Task } from "./Task";
@@ -88,4 +89,23 @@ validation: Validation | null,
 /**
  * R9 performance budgets enforced as regression gates.
  */
-perf_budget: PerfBudget | null, };
+perf_budget: PerfBudget | null, 
+/**
+ * Settings-picker presentation, when this model is a user-selectable ASR
+ * engine (PRD Phase 5 / R3; Appendix A row 7). `None` for entries that are
+ * not directly user-picked in the ASR slot (TitaNet embedder, the Qwen
+ * notes models — those have their own surfaces). The picker (Task I3 /
+ * `silent_inference::selection`) renders one option per `Some(ui)`, ordered
+ * by [`ModelUi::order`]; the label and the persisted `value` come from
+ * here, so adding a Whisper size is a registry entry — zero code (R3
+ * acceptance).
+ */
+ui: ModelUi | null, 
+/**
+ * For a **composite** engine (Dual = Moonshine drafts + SenseVoice refiner),
+ * the ids of the underlying model entries it reuses, in policy order
+ * (`[draft, refine]`). Empty for ordinary single-model entries. A composite
+ * entry carries no own `files`; the selection module resolves artifacts and
+ * availability by following these ids (Appendix A row 11).
+ */
+composite_of: Array<ModelId>, };

@@ -137,8 +137,8 @@ mod ts_bindings {
     use crate::notes::{NoteCategory, NoteCommand, NoteCounters, NoteEvent};
     use crate::questions::{QuestionCommand, QuestionEvent, QuestionType, QwenNote, RecapGroup};
     use crate::registry::{
-        Cache, CacheStore, DeviceTier, ExecutionProvider, Host, Model, ModelFile, PerfBudget,
-        Provider, Registry, Task, Validation,
+        Cache, CacheStore, DeviceTier, ExecutionProvider, Host, Model, ModelFile, ModelUi,
+        PerfBudget, Provider, Registry, Task, Validation,
     };
     use crate::storage::{
         ImageEncoding, Meeting, MigrationStatus, Note, Screenshot, SpeakerName, StorageCounts,
@@ -201,6 +201,7 @@ mod ts_bindings {
             Registry,
             Model,
             ModelFile,
+            ModelUi,
             Cache,
             CacheStore,
             DeviceTier,
@@ -255,6 +256,7 @@ mod ts_bindings {
             "AsrError.ts",
             "Registry.ts",
             "Model.ts",
+            "ModelUi.ts",
             "ModelId.ts",
             "Meeting.ts",
             "TranscriptChunk.ts",

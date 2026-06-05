@@ -101,6 +101,14 @@ network_origins = ["https://huggingface.co", "https://cdn-lfs.huggingface.co"]
   [model.device_tiers.webgpu_low]
   default_for_tier = true
 
+  # Settings picker (Appendix A row 7). `value` is the load-bearing localStorage
+  # key index.html branches on (`settings.model === 'nemotron'`); `label` matches
+  # the shipping option text verbatim; `order` is the shipping list position.
+  [model.ui]
+  value = "nemotron"
+  label = "Nemotron Streaming 0.6B (WASM/CPU, ~917MB, streaming · frees GPU for AI notes)"
+  order = 2
+
   [model.validation]
   golden_fixtures = ["nemotron/test_16k"]
   expected = "100% word accuracy on the golden clip (6.03 s, say-synthesized)"
@@ -198,6 +206,12 @@ network_origins = ["https://huggingface.co", "https://cdn-lfs.huggingface.co"]
   min_memory_gb = 16
   requires_webgpu = true
 
+  # Settings picker (Appendix A row 7) — the first/default option.
+  [model.ui]
+  value = "voxtral"
+  label = "Voxtral Realtime 4B (WebGPU, ~2.7GB, streaming)"
+  order = 1
+
   [model.perf_budget]
   flat_memory_10min = true   # two-cap recycle policy; DEVICE-LOST detection preserved
 
@@ -253,6 +267,13 @@ network_origins = ["https://huggingface.co", "https://cdn-lfs.huggingface.co"]
   default_for_tier = false
   requires_webgpu = true
 
+  # Settings picker (Appendix A row 7). `value` is the HF repo id the shipping
+  # UI persists for the Whisper/Moonshine families.
+  [model.ui]
+  value = "onnx-community/whisper-large-v3-turbo"
+  label = "Whisper Large v3 Turbo (~563MB, WebGPU)"
+  order = 5
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 4. Whisper small.en — lightweight English ASR
 #    PRD host: js-transformers  execution: cpu  precision: int8
@@ -301,6 +322,12 @@ network_origins = ["https://huggingface.co", "https://cdn-lfs.huggingface.co"]
   [model.device_tiers.wasm_only]
   default_for_tier = false
 
+  # Settings picker (Appendix A row 7).
+  [model.ui]
+  value = "onnx-community/whisper-small.en"
+  label = "Whisper Small EN (good accuracy, ~500MB)"
+  order = 6
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. Whisper base.en — very lightweight English ASR
 #    PRD host: js-transformers  execution: cpu  precision: int8
@@ -346,6 +373,12 @@ network_origins = ["https://huggingface.co", "https://cdn-lfs.huggingface.co"]
   [model.device_tiers.wasm_only]
   default_for_tier = false
 
+  # Settings picker (Appendix A row 7).
+  [model.ui]
+  value = "onnx-community/whisper-base.en"
+  label = "Whisper Base EN (~200MB)"
+  order = 7
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. Whisper tiny.en — minimal English ASR (ultra-low memory)
 #    PRD host: js-transformers  execution: cpu  precision: int8
@@ -390,6 +423,12 @@ network_origins = ["https://huggingface.co", "https://cdn-lfs.huggingface.co"]
 
   [model.device_tiers.wasm_only]
   default_for_tier = false
+
+  # Settings picker (Appendix A row 7) — the last option in the shipping list.
+  [model.ui]
+  value = "onnx-community/whisper-tiny.en"
+  label = "Whisper Tiny EN (~100MB)"
+  order = 9
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 7. Moonshine base — fast ASR for Dual mode drafts
@@ -439,6 +478,14 @@ network_origins = ["https://huggingface.co", "https://cdn-lfs.huggingface.co"]
 
   [model.device_tiers.webgpu_low]
   default_for_tier = false
+
+  # Settings picker (Appendix A row 7). Moonshine appears both as a solo engine
+  # here AND as the draft leg of the Dual composite entry below — distinct picker
+  # options, distinct `value`s.
+  [model.ui]
+  value = "onnx-community/moonshine-base-ONNX"
+  label = "Moonshine Base (fastest, ~150MB)"
+  order = 8
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 8. TitaNet-small ONNX — speaker embeddings (diarization)
@@ -703,3 +750,63 @@ network_origins = ["https://huggingface.co", "https://cdn-lfs.huggingface.co"]
 
   [model.device_tiers.webgpu_low]
   default_for_tier = false
+
+  # Settings picker (Appendix A row 7) — SenseVoice solo.
+  [model.ui]
+  value = "sensevoice"
+  label = "SenseVoice only (~253MB, no 30s window)"
+  order = 4
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 12. Dual — composite ASR: Moonshine instant drafts + SenseVoice refined finals
+#     PRD host: js-sherpa (the refiner leg owns the host) execution: cpu
+#     Appendix A row 11. This is a COMPOSITE engine: it has no own weights — it
+#     reuses the Moonshine (`asr.moonshine.base`) and SenseVoice
+#     (`asr.sensevoice.sherpa_small`) artifacts. The entry exists so the picker
+#     (Appendix A row 7) is fully registry-driven: every selectable engine,
+#     including Dual, is a registry entry. The `silent_inference::engine::DualMode`
+#     policy composes the two legs (Moonshine `WhisperStream` + SenseVoice
+#     segmentation). `device_tiers` mirror the CPU-only legs.
+#
+#   No own files: artifact resolution is delegated to the two underlying entries
+#   (the composite_of pointer below names them; the selection module follows it).
+#   `network_origins` mirror the underlying HF CDN origins so CSP generation and
+#   the `all_network_origins_non_empty` registry invariant hold.
+#
+#   license: inherits the stricter of the two legs (SenseVoice's FunASR license)
+#   for display purposes; the underlying entries carry the authoritative terms.
+# ─────────────────────────────────────────────────────────────────────────────
+[[model]]
+id = "asr.dual.moonshine_sensevoice"
+task = "asr"
+provider = "huggingface"
+# Composite: no own repo. Points at the refiner leg's repo for provenance; the
+# actual artifacts resolve from the two `composite_of` entries.
+repo = "FluffyBunnies/sensevoice-sherpa-onnx"
+revision = "BLOCKED-ON-USER-GATE"   # inherits SenseVoice's gate (its refiner leg)
+host = "js-sherpa"
+execution_provider = "cpu"
+precision = ["int8"]
+memory_budget_mb = 650       # Moonshine (~300) + SenseVoice (~350) loaded together
+license = "funasr-model-license"   # inherits the stricter leg (SenseVoice) for display
+license_verified = false     # gated by the SenseVoice leg's CONDITIONAL GO
+network_origins = ["https://huggingface.co", "https://cdn-lfs.huggingface.co"]
+# Composite legs (draft, refine). The selection module resolves artifacts and
+# availability by following these ids; no own [[model.files]].
+composite_of = ["asr.moonshine.base", "asr.sensevoice.sherpa_small"]
+
+  [model.cache]
+  store = "cache-api"
+  verify_once_per_revision = true
+
+  [model.device_tiers.wasm_only]
+  default_for_tier = false
+
+  [model.device_tiers.webgpu_low]
+  default_for_tier = false
+
+  # Settings picker (Appendix A row 7) — the Dual composite option.
+  [model.ui]
+  value = "dual"
+  label = "Dual: Moonshine (instant) + SenseVoice (refined)"
+  order = 3

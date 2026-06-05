@@ -505,6 +505,8 @@ mod tests {
             device_tiers: std::collections::BTreeMap::default(),
             validation: None,
             perf_budget: None,
+            ui: None,
+            composite_of: Vec::new(),
         };
         let registry = silent_core::registry::Registry {
             models: vec![model],
