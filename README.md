@@ -12,15 +12,23 @@ The entire application is a **single HTML file**. There is no build step, no ser
 
 Every mainstream AI notetaker works the same way: it joins your call, **streams your audio to someone else's servers**, runs the AI there, and sends a summary back. The good ones are careful about it — encryption, SOC 2, "we delete the audio after transcription," contractual no-training clauses. Even the privacy-marketed ones (Granola, for instance, reportedly valued around $1.5B) still send your meeting to cloud LLMs and store it on their infrastructure. Their privacy is a **promise**, backed by a company.
 
-Silent Notetaker makes the promise structurally unnecessary. The audio is captured, fed to the models, and consumed **in-process**. It is never serialized into a network request. And you don't have to take that on faith — here is the *complete* list of servers the app ever talks to:
+Silent Notetaker makes the promise structurally unnecessary. The audio is captured, fed to the models, and consumed **in-process**. It is never serialized into a network request. And you don't have to take that on faith — here is the *complete* list of origins the app ever contacts:
 
-| Destination | Why it's contacted | Receives your audio? |
+| Destination | Why | Receives your audio? |
 |---|---|---|
-| `cdn.jsdelivr.net`, `unpkg.com` | JavaScript libraries | **No** |
-| `huggingface.co` (+ model CDN) | Model **weights**, downloaded once, then cached | **No** |
+| `cdn.jsdelivr.net` | Transformers.js runtime library | No |
+| `unpkg.com` | Dexie IndexedDB library | No |
+| `cdn.pyke.io` | onnxruntime-web runtime loader | No |
+| `huggingface.co`, `*.hf.co`, `cdn-lfs.huggingface.co`, `cdn-lfs-us-1.huggingface.co` | Model **weights**, downloaded once and cached in your browser | No |
 | `ws://localhost:8765` | *Optional* Claude bridge — a server **you** run, off by default | Only transcript text, only if you enable it, only to your own machine |
 
-That's it. Open your browser's network panel and watch: your audio goes **nowhere**. (See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how this is enforced and where it's headed.)
+That's it. There is no analytics endpoint, no telemetry host, no crash-reporting
+origin. The egress list above is generated from `registry/models.toml` by
+`cargo xtask gen-headers` and enforced as a `Content-Security-Policy` `connect-src`
+directive — the browser refuses connections to anything not on this list. Open your
+browser's network panel and watch.
+
+(See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how this is generated and enforced, and [`SECURITY.md`](SECURITY.md) for what counts as a privacy-boundary vulnerability.)
 
 There are whole categories of conversation — legal, medical, hiring, finance, M&A, journalism with sources — where "the audio left the building" is simply a non-starter. This is built for those.
 
