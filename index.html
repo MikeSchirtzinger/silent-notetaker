@@ -3920,12 +3920,141 @@ class App {
     this.noteEngine = new NoteEngine();
     this.tm = null;
     this.meetingId = null;
-    this.startTime = null;
-    this.timerInterval = null;
+    // The recording-session state machine (Rust policy: start/stop/continue/
+    // new-meeting, sources, timer, stop-hooks). It OWNS the timer values
+    // (start time, last duration) and the cold-vs-warm decision — the JS
+    // `startTime` / `_lastDuration` / `canResume` flags this used to keep are
+    // gone. `_startEpoch` is kept ONLY for the numeric `db.meetings` duration
+    // write (the machine returns display strings, the DB stores ms).
+    //
+    // session-engine.js is an ES module; this script is a classic script, so the
+    // class is dynamically imported. Until it resolves, `this.session` is a
+    // null-safe stub returning Idle/empty values so the boot-time timer render
+    // never throws. `_sessionReady` resolves once the real machine is loaded.
+    this.session = this._makeNullSession();
+    this._sessionReady = this._initSession();
+    this._startEpoch = null;
+    this.timerInterval = null;   // the host's 1 s tick handle (machine has no clock)
     this.totalNotes = 0;
     this.totalWords = 0;
     this.bridge = new ClaudeBridge();
     this.bridge.connect(); // Auto-connect on page load, reconnects silently
+  }
+
+  // Dynamically import + load the SessionEngine, then swap it in for the stub
+  // and push the current settings. Resolves _sessionReady (start()/cycle await it).
+  async _initSession() {
+    try {
+      const { SessionEngine } = await import('./session-engine.js');
+      const engine = new SessionEngine();
+      await engine.load();
+      this.session = engine;
+      this._syncSessionConfig();
+    } catch (e) {
+      console.error('[rust-session] load failed:', e);
+    }
+  }
+
+  // A null-safe synchronous stub matching the SessionEngine surface, used only
+  // during the pre-load window so the boot-time timer render never throws. Every
+  // command returns an empty outcome; the accessors return the Idle defaults.
+  _makeNullSession() {
+    const empty = () => ({ events: [], effects: [] });
+    return {
+      ready: false,
+      setConfig() {}, start: empty, resume: empty, stop: empty,
+      newMeeting: empty, setTitle: empty, addTabAudio: empty, removeTabAudio: empty,
+      cycleTimestampMode: empty,
+      timerText: () => '00:00', currentDurationStr: () => '00:00', formatStamp: () => '00:00',
+      title: '', timestampMode: 'elapsed', state: 'idle',
+      engineLoaded: false, micActive: false, tabActive: false,
+    };
+  }
+
+  // Push the current settings booleans into the session machine so its
+  // stop-time hooks (recluster / final notes / question recap / auto summary —
+  // Appendix A rows 18-21, 31) match the user's settings. Called on load and
+  // before each Stop (the app reads settings fresh inside stop()).
+  _syncSessionConfig() {
+    const s = (typeof loadSettings === 'function') ? loadSettings() : {};
+    this.session.setConfig({
+      aiFinalNotes:   s.aiFinalNotes,
+      smartQuestions: s.smartQuestions,
+      smartqRecap:    s.smartqRecap,
+      autoSummary:    s.autoSummary,
+      notesModelOff:  notesModelOff(),
+    });
+  }
+
+  // Apply a SessionEngine outcome: render every event to the DOM, then run the
+  // session-machine SIDE EFFECTS that this app owns (tab audio + the stop-hooks
+  // gating). Engine load/resume and capture are driven inline in start() from
+  // the start-effect, since they carry app-specific async setup. Returns the
+  // outcome for callers that need to read a specific effect.
+  _applySession(outcome) {
+    for (const ev of outcome.events) this._renderSessionEvent(ev);
+    for (const fx of outcome.effects) this._runSessionEffect(fx);
+    return outcome;
+  }
+
+  // Render one SessionEvent (core → UI). DOM only; no policy.
+  _renderSessionEvent(ev) {
+    switch (ev.tag) {
+      case 'sources_changed': {
+        // Appendix A row 6: the Mic / Tab Audio badges, fed by the machine.
+        document.getElementById('sourceMic').style.display = ev.payload.mic ? 'inline-flex' : 'none';
+        this._renderTabBadge(ev.payload.tab);
+        break;
+      }
+      case 'title_changed': {
+        // The clamped (≤120-char) title — write it into the input.
+        document.getElementById('meetingTitle').value = ev.payload.title;
+        break;
+      }
+      case 'timestamp_mode_changed':
+        // The cycle button + stamps re-render via refreshTimeUI (caller-driven).
+        break;
+      case 'state_changed':
+      case 'stop_hooks':
+        // state_changed button visibility + stop_hooks gating are handled
+        // inline at the call sites (start/stop own their app-specific UI).
+        break;
+      case 'notice':
+        showToast(ev.payload.message);
+        break;
+      default:
+        // #[non_exhaustive]: an unknown future event is ignored (A3 escape hatch).
+        break;
+    }
+  }
+
+  // Run one SideEffect (the app's "hands"). Tab audio + stop hooks live here;
+  // the start/stop capture effects are consumed inline in start()/stop().
+  _runSessionEffect(fx) {
+    switch (fx.tag) {
+      case 'add_tab_audio':
+      case 'remove_tab_audio':
+        // shareTab() drives the actual addSystemAudio/removeSystemAudio (it owns
+        // the getDisplayMedia prompt + button text); nothing extra to do here.
+        break;
+      default:
+        break;
+    }
+  }
+
+  // Show/hide the Tab Audio badge + sync the share button chrome (updateTabUI).
+  _renderTabBadge(active) {
+    const btn = document.getElementById('shareTabBtn');
+    const badge = document.getElementById('sourceTab');
+    if (active) {
+      btn.classList.add('active');
+      btn.textContent = '✓ Tab Audio';
+      badge.style.display = 'inline-flex';
+    } else {
+      btn.classList.remove('active');
+      btn.textContent = '+ Tab Audio';
+      badge.style.display = 'none';
+    }
   }
 
   async start() {
@@ -3935,10 +4064,22 @@ class App {
     startBtn.textContent = 'Starting...';
 
     try {
-      this.startTime = Date.now();
+      // Drive the recording-session state machine. It decides cold-vs-warm from
+      // its loaded-engine flag and freezes the start time — the host no longer
+      // derives `canResume` by hand (Appendix A rows 1-2). `_startEpoch` is the
+      // numeric start used for the db.meetings record + screenshot stamps.
+      await this._sessionReady;
+      this._startEpoch = Date.now();
+      const titleInput = document.getElementById('meetingTitle').value;
+      const out = this.session.start(titleInput, this._startEpoch);
+      // The machine's resolved title (trim → default-if-empty → 120-char clamp).
+      const title = this.session.title;
+      // The start side effect: resume without reload (warm) vs cold load.
+      const canResume = out.effects.some(fx => fx.tag === 'resume_capture_no_reload');
+
       this.meetingId = await db.meetings.add({
-        title: document.getElementById('meetingTitle').value.trim() || 'Untitled Meeting',
-        startTime: this.startTime,
+        title: title || 'Untitled Meeting',
+        startTime: this._startEpoch,
         endTime: null,
         duration: 0
       });
@@ -3953,9 +4094,6 @@ class App {
         configureLiveQuestionsDevice();  // CPU ASR (Nemotron) → GPU is free → run live Qwen on WebGPU
         SmartQ.prewarm();  // warm Qwen off-thread so the first question is ready fast
       }
-
-      // Reuse existing TranscriptionManager if models already loaded (e.g. New Meeting → Start)
-      const canResume = this.tm && !this.tm.isRecording && (this.tm.worker || this.tm.senseVoice || this.tm.voxtralModel || this.tm.nemotron);
 
       if (!canResume) {
         this.tm = new TranscriptionManager(
@@ -3974,7 +4112,7 @@ class App {
         this.addScreenshotThumbnail(base64, timestamp);
         if (s.claudeBridge) this.bridge.sendScreenshot(base64, timestamp);
       };
-      this.tm.onSystemAudioEnded = () => this.updateTabUI(false);
+      this.tm.onSystemAudioEnded = () => this.onTabStreamEnded();
 
       if (canResume) {
         // Models loaded — re-create audio pipeline and resume
@@ -4031,20 +4169,21 @@ class App {
         }
       }
 
-      // Start timer
+      // Start timer — the host owns the 1 s tick; the machine owns the value.
       document.getElementById('timer').classList.add('running');
       this.timerInterval = setInterval(() => this.tickTimer(), 1000);
       PerfMonitor.start();   // [perf] heap/ASR/Qwen line every 5 s while recording
 
-      // UI
+      // UI: render the machine's start events (Mic badge via sources_changed —
+      // Appendix A row 6), then the recording chrome (dot, buttons).
+      this._applySession(out);
       document.getElementById('recordingDot').classList.add('active');
       startBtn.style.display = 'none';
       stopBtn.style.display  = 'inline-flex';
-      document.getElementById('sourceMic').style.display = 'inline-flex';
       document.getElementById('shareTabBtn').style.display = 'inline-flex';
 
       // Wire system audio ended callback
-      this.tm.onSystemAudioEnded = () => this.updateTabUI(false);
+      this.tm.onSystemAudioEnded = () => this.onTabStreamEnded();
 
     } catch (err) {
       this.handleStatus('Failed to start: ' + err.message, null);
@@ -4077,24 +4216,33 @@ class App {
     clearInterval(this.timerInterval);
     this.timerInterval = null;
 
+    // Drive the session machine to Stopped. It freezes the last duration and
+    // computes the stop-time hooks from the current settings (push them first so
+    // the gating matches — Appendix A rows 18-21, 31). `_startEpoch` is the
+    // numeric start for the db.meetings duration write.
+    this._syncSessionConfig();
     const endTime = Date.now();
-    this._lastDuration = this.startTime ? endTime - this.startTime : null;
+    const out = this.session.stop(endTime);
+    // The stop-hook decision (the run_stop_hooks side effect): which on-device
+    // passes the orchestrator authorized. The summary MODAL always opens below.
+    const stopFx = out.effects.find(fx => fx.tag === 'run_stop_hooks');
+    const hooks = stopFx ? stopFx.payload : { recluster: true, final_notes: false, question_recap: false, auto_summary: false };
+
     if (this.meetingId) {
       await db.meetings.update(this.meetingId, {
         endTime,
-        duration: endTime - this.startTime
+        duration: this._startEpoch ? endTime - this._startEpoch : 0
       });
     }
 
+    // Render the machine's stop events (sources_changed → clears Mic/Tab badges,
+    // Appendix A row 6) + run the tab-teardown effect, then the stop chrome.
+    this._applySession(out);
     document.getElementById('recordingDot').classList.remove('active');
     document.getElementById('timer').classList.remove('running');
     document.getElementById('startBtn').style.display  = 'inline-flex';
     document.getElementById('startBtn').disabled = false;
     document.getElementById('shareTabBtn').style.display = 'none';
-    document.getElementById('shareTabBtn').classList.remove('active');
-    document.getElementById('shareTabBtn').textContent = '+ Tab Audio';
-    document.getElementById('sourceMic').style.display = 'none';
-    this.updateTabUI(false);
     document.getElementById('startBtn').innerHTML = '&#9679; Continue';
     document.getElementById('stopBtn').style.display   = 'none';
     document.getElementById('newMeetingBtn').style.display = 'inline-flex';
@@ -4102,10 +4250,10 @@ class App {
     this.handleStatus('Recording stopped', null);
 
     // Stop-time global re-clustering (Appendix A row 15, docs/DIARIZATION.md §2).
-    // Merges phantom speakers created by online leader clustering, preserving any
-    // manual renames. ADDITIVE — the live path is untouched. Runs only when
-    // sharedDiarzEngine is loaded (at least one identify() call happened).
-    if (this.tm && this.tm.speakerTracker && sharedDiarzEngine &&
+    // Gated by the machine's `recluster` hook AND the diarization runtime guard
+    // (sharedDiarzEngine loaded with > 1 speaker). Merges phantom speakers from
+    // online leader clustering, preserving manual renames. ADDITIVE.
+    if (hooks.recluster && this.tm && this.tm.speakerTracker && sharedDiarzEngine &&
         sharedDiarzEngine.speakers.length > 1) {
       try {
         const { relabel, speakers } = sharedDiarzEngine.globalRecluster();
@@ -4117,18 +4265,19 @@ class App {
       }
     }
 
-    this.showSummary();
+    // Auto-summary modal at Stop (Appendix A row 31), triggered via the
+    // run_stop_hooks side effect. The modal ALWAYS opens at Stop (parity with the
+    // shipping app); `hooks.auto_summary` is the on-device/bridge summary-pass
+    // gate, carried for the bridge request below.
+    if (stopFx) this.showSummary();
 
-    // Stop-time on-device passes (WebGPU — GPU is free now) — inject into the open summary modal.
-    // Transcript-only mode (notes model = Off) is authoritative over the per-pass
-    // flags: with no notes model loaded, neither Qwen pass can run. This mirrors
-    // silent-core SessionMachine::stop_hooks (notes_model_off ⇒ final_notes &&
-    // question_recap forced false). The summary modal already opened above.
-    const sq = loadSettings();
-    const notesModel = !notesModelOff();
-    // Final Meeting Notes: additive Qwen note set (does NOT replace the live regex notes above).
-    if (notesModel && sq.aiFinalNotes !== false) this.generateFinalNotes();
-    if (notesModel && sq.smartQuestions !== false && sq.smartqRecap !== false) this.generateQuestionRecap();
+    // Stop-time on-device passes (WebGPU — GPU is free now) — inject into the open
+    // summary modal. The gating is now the Rust machine's decision: transcript-only
+    // mode (notes model = Off) is authoritative over the per-pass flags
+    // (silent-core SessionMachine::stop_hooks forces final_notes && question_recap
+    // false when notes_model_off). The summary modal already opened above.
+    if (hooks.final_notes) this.generateFinalNotes();
+    if (hooks.question_recap) this.generateQuestionRecap();
 
     // Request enhanced summary from Claude if connected
     if (this.bridge.connected) {
@@ -4146,13 +4295,16 @@ class App {
   }
 
   newMeeting() {
-    // Reset all state for a fresh meeting
+    // Reset all state for a fresh meeting. The session machine resets its own
+    // timer/source/title/engine-loaded state (it emits title_changed →
+    // "Untitled Meeting" + sources_changed → false/false, rendered below); the
+    // host then installs the locale auto-title via session.setTitle.
+    const reset = this.session.newMeeting();
     this.noteEngine = new NoteEngine();
     SmartQ.reset();
     OpenQs.reset();
     this.meetingId = null;
-    this.startTime = null;
-    this._lastDuration = null;
+    this._startEpoch = null;
     this.totalNotes = 0;
     this.totalWords = 0;
 
@@ -4193,13 +4345,20 @@ class App {
     const speakersList = document.getElementById('speakersList');
     if (speakersList) speakersList.innerHTML = '';
 
-    // Fresh title with current time
+    // Render the machine's reset events (sources_changed clears the badges).
+    this._applySession(reset);
+
+    // Fresh title with current time (Appendix A row 3). The host owns the locale
+    // string; install it via the machine (setTitle clamps to 120 + writes the
+    // input through the title_changed event), so the title flows through one
+    // owner — no direct DOM write here.
     const now = new Date();
-    document.getElementById('meetingTitle').value = now.toLocaleDateString('en-US', {
+    const autoTitle = now.toLocaleDateString('en-US', {
       weekday: 'short', month: 'short', day: 'numeric'
     }) + ' ' + now.toLocaleTimeString('en-US', {
       hour: 'numeric', minute: '2-digit', hour12: true
     });
+    this._applySession(this.session.setTitle(autoTitle));
 
     showToast('Ready for new meeting');
   }
@@ -4230,10 +4389,11 @@ class App {
 
     const btn = document.getElementById('shareTabBtn');
 
-    // If already sharing, remove it
+    // If already sharing, remove it. The machine drops the Tab source (row 6)
+    // and emits sources_changed → the badge clears via _applySession.
     if (this.tm.systemStream) {
       this.tm.removeSystemAudio();
-      this.updateTabUI(false);
+      this._applySession(this.session.removeTabAudio(Date.now()));
       this.handleStatus('Tab audio removed', null);
       return;
     }
@@ -4242,28 +4402,23 @@ class App {
       btn.disabled = true;
       btn.textContent = 'Sharing...';
       await this.tm.addSystemAudio();
-      this.updateTabUI(true);
+      // The machine adds the Tab source → sources_changed raises the badge.
+      this._applySession(this.session.addTabAudio(Date.now()));
       this.handleStatus('Tab audio mixed in — both mic + tab are being transcribed', null);
     } catch (err) {
       showToast(err.message);
-      this.updateTabUI(false);
+      this._applySession(this.session.removeTabAudio(Date.now()));
     } finally {
       btn.disabled = false;
     }
   }
 
-  updateTabUI(active) {
-    const btn = document.getElementById('shareTabBtn');
-    const badge = document.getElementById('sourceTab');
-    if (active) {
-      btn.classList.add('active');
-      btn.textContent = '✓ Tab Audio';
-      badge.style.display = 'inline-flex';
-    } else {
-      btn.classList.remove('active');
-      btn.textContent = '+ Tab Audio';
-      badge.style.display = 'none';
-    }
+  // The tab stream ended (the user stopped sharing from the browser's native
+  // UI). Route the Tab source removal through the machine (row 6) so the badge
+  // and the machine's source set stay in sync; the sources_changed event clears
+  // the badge via _applySession.
+  onTabStreamEnded() {
+    this._applySession(this.session.removeTabAudio(Date.now()));
   }
 
   handlePartial(text) {
@@ -4622,13 +4777,15 @@ class App {
   tickTimer() {
     const el = document.getElementById('timer');
     if (!el) return;
-    // In clock mode the header shows wall-clock time even before recording starts.
-    if ((loadSettings().timeFormat || 'elapsed') === 'clock') {
-      el.textContent = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-      return;
-    }
-    if (!this.startTime) return;
-    el.textContent = this.formatMs(Date.now() - this.startTime);
+    // The machine owns the value (elapsed since its frozen start / last duration,
+    // or wall-clock when in clock mode). The host supplies the locale clock string
+    // (the machine has no Intl); in elapsed/ago modes pass null. In clock mode the
+    // header shows wall-clock even before recording starts (parity).
+    const fmt = loadSettings().timeFormat || 'elapsed';
+    const clock = (fmt === 'clock')
+      ? new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+      : null;
+    el.textContent = this.session.timerText(Date.now(), clock);
   }
 
   formatMs(ms) {
@@ -4638,29 +4795,21 @@ class App {
     return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
   }
 
-  // Format a per-line timestamp (epoch ms) according to the active timeFormat setting.
+  // Format a per-line timestamp (epoch ms) according to the active mode. The
+  // machine owns the elapsed/ago arithmetic + the elapsed base (its frozen
+  // start); the host supplies the locale wall-clock string for clock mode.
   formatStamp(tsMs) {
     const fmt = loadSettings().timeFormat || 'elapsed';
-    if (fmt === 'clock') {
-      return new Date(tsMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-    }
-    if (fmt === 'ago') {
-      const sec = Math.max(0, Math.floor((Date.now() - tsMs) / 1000));
-      if (sec < 60) return `${sec}s ago`;
-      const m = Math.floor(sec / 60);
-      if (m < 60) return `${m}m ago`;
-      return `${Math.floor(m / 60)}h ago`;
-    }
-    // elapsed since recording start (default)
-    return this.formatMs(tsMs - (this.startTime || tsMs));
+    const clock = (fmt === 'clock')
+      ? new Date(tsMs).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+      : null;
+    return this.session.formatStamp(tsMs, Date.now(), clock);
   }
 
   // Always a duration string (mm:ss), independent of the header's display mode.
+  // The machine owns the elapsed/frozen-duration value.
   currentDurationStr() {
-    if (this.startTime && this.timerInterval) return this.formatMs(Date.now() - this.startTime);
-    if (this._lastDuration != null) return this.formatMs(this._lastDuration);
-    if (this.startTime) return this.formatMs(Date.now() - this.startTime);
-    return '00:00';
+    return this.session.currentDurationStr(Date.now());
   }
 
   // Returns structured notes as markdown
@@ -4890,7 +5039,8 @@ class App {
 
     const thumb = document.createElement('div');
     thumb.className = 'screenshot-thumb fade-in';
-    const time = this.formatMs(timestamp - this.startTime);
+    // Elapsed mm:ss from the meeting start (the numeric epoch kept for db writes).
+    const time = this.formatMs(timestamp - (this._startEpoch || timestamp));
     thumb.innerHTML = `<img src="${base64}" alt="Screenshot at ${time}"><span class="screenshot-time">${time}</span>`;
     container.appendChild(thumb);
     container.scrollLeft = container.scrollWidth;
@@ -5059,11 +5209,25 @@ function applySpeakerLabelVisibility() {
 }
 
 function cycleTimeFormat() {
+  // The machine owns the elapsed → clock → ago rotation (Appendix A row 24).
+  // Persist the resulting mode to localStorage for the other readers (settings,
+  // history, the per-line stamp re-render).
+  const out = app.session.cycleTimestampMode();
+  const ev = out.events.find(e => e.tag === 'timestamp_mode_changed');
   const s = loadSettings();
-  const i = TIME_FORMATS.indexOf(s.timeFormat || 'elapsed');
-  s.timeFormat = TIME_FORMATS[(i + 1) % TIME_FORMATS.length];
+  s.timeFormat = ev ? ev.payload.mode : (TIME_FORMATS[(TIME_FORMATS.indexOf(s.timeFormat || 'elapsed') + 1) % TIME_FORMATS.length]);
   saveSettings(s);
   refreshTimeUI();
+}
+
+// Seed the machine's timestamp mode from the persisted timeFormat so its
+// timer/stamp formatting matches the setting (it boots in 'elapsed'). Cycles the
+// machine forward until its mode equals the saved one — at most two steps.
+function syncSessionTimestampMode() {
+  const want = loadSettings().timeFormat || 'elapsed';
+  for (let i = 0; i < TIME_FORMATS.length && app.session.timestampMode !== want; i++) {
+    app.session.cycleTimestampMode();
+  }
 }
 
 // Re-render the format button label, all existing per-line stamps, and the header timer.
@@ -6463,12 +6627,38 @@ const app = new App();
 // the Settings hint are resolved before anyone records or opens Settings.
 GpuCaps.probe();
 
-// Auto-fill meeting title with current date/time
+// Auto-fill meeting title with current date/time (Appendix A row 3).
 const now = new Date();
-document.getElementById('meetingTitle').value = now.toLocaleDateString('en-US', {
+const _bootTitle = now.toLocaleDateString('en-US', {
   weekday: 'short', month: 'short', day: 'numeric'
 }) + ' ' + now.toLocaleTimeString('en-US', {
   hour: 'numeric', minute: '2-digit', hour12: true
+});
+document.getElementById('meetingTitle').value = _bootTitle;
+
+// Once the session machine is loaded, seed it with the boot auto-title (so a
+// Start with an unedited input resolves the right title) and the persisted
+// timestamp mode (so the machine's timer/stamp formatting matches the setting),
+// then re-render the time UI through the machine.
+app._sessionReady.then(() => {
+  app.session.setTitle(_bootTitle);
+  syncSessionTimestampMode();
+  refreshTimeUI();
+});
+
+// Title input → machine (Appendix A row 3). The machine clamps to 120 chars
+// (the HTML maxlength enforces the same cap visually); on each edit we sync the
+// machine's pending title so Start resolves the user's value. If the machine
+// clamps (a paste exceeding 120), reflect the clamped value back into the input.
+document.getElementById('meetingTitle').addEventListener('input', (e) => {
+  if (!app.session.ready) return;
+  const out = app.session.setTitle(e.target.value);
+  const ev = out.events.find(x => x.tag === 'title_changed');
+  if (ev && ev.payload.title !== e.target.value) {
+    const pos = e.target.selectionStart;
+    e.target.value = ev.payload.title;
+    try { e.target.setSelectionRange(pos, pos); } catch (_) {}
+  }
 });
 
 // Initialize time-display controls from saved settings

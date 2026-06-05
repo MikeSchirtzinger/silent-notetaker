@@ -54,6 +54,7 @@ cp question-worker.js "$DIST/"
 cp nemotron-engine.js "$DIST/"
 cp diarization-engine.js "$DIST/"
 cp notes-engine.js "$DIST/"
+cp session-engine.js "$DIST/"
 
 # Cloudflare Pages response headers (COOP/COEP + CSP)
 cp _headers "$DIST/"
