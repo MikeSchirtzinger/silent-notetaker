@@ -1902,109 +1902,84 @@ self.onmessage = async (e) => {
 'use strict';
 
 /* ════════════════════════════════════════════
-   DIAG — crash-surviving RAM/loop diagnostic sampler
+   DIAG — crash-surviving RAM/loop diagnostic sampler (Rust/WASM)
    Flip DIAG=false to disable all diagnostics (zero behavior change).
    Goal: get GROUND TRUTH about the ~5-min Voxtral lock-up. Samples on a TIMER
    only (never per-token) into a bounded localStorage ring so the trail SURVIVES
    a freeze+reload. Inspect after a crash with window.dumpDiag().
+
+   STRANGLER-FIG (Appendix A rows 34 + 35): the sampler state machine, the
+   bounded `notetakerDiag` ring, the `toFixed(1)`/`JSON.stringify` row
+   normalization, the prior-trail strings, and the PerfMonitor stats snapshot now
+   live in Rust (`silent-core::diag` policy + `silent-web::diag::DiagLayer`
+   subscriber, surfaced as `WasmDiag`). `diag-engine.js` drives that policy over
+   the `silent.diag` `tracing` schema; THIS file keeps only the ~3s timer epoch,
+   the DOM/ring sample context, and the engine-loop hook call sites. The row
+   format is byte-identical to the prior JS (proven in the diag golden fixture),
+   so a trail written by the old JS and one written by Rust are interchangeable.
 ═══════════════════════════════════════════ */
 const DIAG = true;
 const DIAG_KEY = 'notetakerDiag';
-const DIAG_MAX_ROWS = 200;        // bounded ring — never grows unbounded
-const DIAG_INTERVAL_MS = 3000;    // ~3s cadence; no per-token work
+const DIAG_INTERVAL_MS = 3000;    // ~3s cadence; no per-token work (mirror of the Rust const)
 
-const Diag = (() => {
-  let startMs = null;
-  let timer = null;
-  // Counters the Voxtral loop increments; the sampler only READS them.
-  const c = {
-    loopIter: 0,        // # of fresh generate() contexts started (outer while)
-    recycleCount: 0,    // # of generate() returns that hit the cap (recycle event)
-    genStepsTotal: 0,   // total streamer put() calls across the whole session
-    ctxLen: 0,          // token count emitted in the CURRENT generate context
-    lastStepMs: 0,      // wall ms of the most recent put()-to-put() gap
-    lastPutAt: 0,       // internal: timestamp of last put()
-    inputTokens: 0,     // input_ids length of the current context (prompt size)
-    deviceLost: '',     // set if a WebGPU device-lost / OOM error is observed
-  };
+// The Rust-backed diagnostics engine (diag-engine.js → WasmDiag). It is an ES
+// module dynamically imported (this is a classic script); until it resolves,
+// `Diag` is a null-safe shim so the engine-loop hooks never throw at boot. The
+// hooks are no-ops before load (the sampler only starts at Voxtral-session
+// start, well after the wasm has loaded — the diarization/notes engines load on
+// the same boot, so the shared wasm module is warm).
+let diagEngine = null;
+const Diag = {
+  start() { diagEngine && diagEngine.start(); },
+  stop() { diagEngine && diagEngine.stop(); },
+  onLoopIter(inputTokens) { diagEngine && diagEngine.onLoopIter(inputTokens); },
+  onRecycle() { diagEngine && diagEngine.onRecycle(); },
+  onPut(nTokens) { diagEngine && diagEngine.onPut(nTokens); },
+  onDeviceLost(msg) { diagEngine && diagEngine.onDeviceLost(msg); },
+  // PerfMonitor (row 35): record an EngineStats snapshot on the same tracing
+  // target. The engine stashes it for the PerfMonitor's `take` poll.
+  recordStats(stats) { diagEngine && diagEngine.recordStats(stats); },
+};
 
-  function read(key) {
-    try { return JSON.parse(localStorage.getItem(key) || '[]'); } catch (_) { return []; }
-  }
-  function write(key, rows) {
-    try { localStorage.setItem(key, JSON.stringify(rows)); } catch (_) { /* quota — drop silently */ }
-  }
-
-  function sample() {
-    const now = Date.now();
-    const mem = (performance && performance.memory) ? performance.memory : null;
-    const row = {
-      iso: new Date(now).toISOString(),
-      elapsedSec: startMs ? Math.round((now - startMs) / 1000) : 0,
-      heapUsedMB: mem ? +(mem.usedJSHeapSize / 1048576).toFixed(1) : null,
-      heapTotalMB: mem ? +(mem.totalJSHeapSize / 1048576).toFixed(1) : null,
-      heapLimitMB: mem ? +(mem.jsHeapSizeLimit / 1048576).toFixed(1) : null,
+// Kick off the diag engine load. The sample context (live DOM counts + Voxtral
+// ring write cursor) is supplied per-tick — the wasm sampler has no DOM/ring,
+// so the host feeds those exactly as the JS `sample()` read them inline.
+(async () => {
+  if (!DIAG) return;
+  try {
+    const { DiagEngine } = await import('./diag-engine.js');
+    const eng = new DiagEngine({ enabled: () => DIAG });
+    eng.sampleContext = () => ({
       items: document.querySelectorAll('.transcript-item').length,
       words: document.querySelectorAll('.transcript-word').length,
-      loopIter: c.loopIter,
-      recycle: c.recycleCount,
-      ctxLen: c.ctxLen,
-      genStepsTotal: c.genStepsTotal,
-      inputTokens: c.inputTokens,
-      lastStepMs: c.lastStepMs,
-      deviceLost: c.deviceLost,
-      writeAbs: (app && app.tm && app.tm.voxtralRing) ? app.tm.voxtralRing.writeAbs : null,
-    };
-    const rows = read(DIAG_KEY);
-    rows.push(row);
-    while (rows.length > DIAG_MAX_ROWS) rows.shift();   // bounded ring
-    write(DIAG_KEY, rows);
-    console.log('[DIAG]', row);
-    return row;
+      writeAbs: (typeof app !== 'undefined' && app && app.tm && app.tm.voxtralRing) ? app.tm.voxtralRing.writeAbs : null,
+    });
+    await eng.load();
+    diagEngine = eng;
+    // Surface the prior trail now that the engine is ready (after a non-clean
+    // shutdown the load-time block below may have run before the wasm loaded;
+    // re-render the banner from the byte-pinned Rust strings).
+    try { window.__renderPriorTrailBanner && window.__renderPriorTrailBanner(); } catch (_) {}
+  } catch (e) {
+    console.warn('[DIAG] diag engine failed to load; diagnostics disabled this session', e);
   }
-
-  return {
-    counters: c,
-    // Begin a fresh trail (called when a Voxtral session starts).
-    start() {
-      if (!DIAG) return;
-      startMs = Date.now();
-      c.loopIter = 0; c.recycleCount = 0; c.genStepsTotal = 0;
-      c.ctxLen = 0; c.lastStepMs = 0; c.lastPutAt = 0; c.inputTokens = 0; c.deviceLost = '';
-      write(DIAG_KEY, []);  // clear prior trail so the next crash trail is clean
-      if (timer) clearInterval(timer);
-      timer = setInterval(sample, DIAG_INTERVAL_MS);
-      sample(); // baseline row at t=0
-      console.log('[DIAG] sampler started; window.dumpDiag() to inspect after a freeze.');
-    },
-    stop() {
-      if (timer) { clearInterval(timer); timer = null; }
-      if (DIAG) { sample(); console.log('[DIAG] sampler stopped.'); }
-    },
-    // Loop-side hooks (cheap; no allocation):
-    onLoopIter(inputTokens) { c.loopIter++; c.ctxLen = 0; c.inputTokens = inputTokens || 0; },
-    onRecycle() { c.recycleCount++; },
-    onPut(nTokens) {
-      const now = (performance && performance.now) ? performance.now() : Date.now();
-      if (c.lastPutAt) c.lastStepMs = +(now - c.lastPutAt).toFixed(1);
-      c.lastPutAt = now;
-      c.ctxLen += (nTokens || 1);
-      c.genStepsTotal++;
-    },
-    onDeviceLost(msg) { c.deviceLost = String(msg || 'device-lost').slice(0, 120); sample(); },
-  };
 })();
 
 // Foolproof retrieval after a freeze+reload: console.table the stored trail.
 window.dumpDiag = function () {
   let rows = [];
-  try { rows = JSON.parse(localStorage.getItem(DIAG_KEY) || '[]'); } catch (_) {}
+  try {
+    rows = diagEngine ? diagEngine.rows() : JSON.parse(localStorage.getItem(DIAG_KEY) || '[]');
+  } catch (_) {}
   if (!rows.length) { console.log('[DIAG] no trail stored.'); return rows; }
   console.log(`[DIAG] ${rows.length} rows; first=${rows[0].iso} last=${rows[rows.length-1].iso}`);
   console.table(rows);
   return rows;
 };
-window.clearDiag = function () { try { localStorage.removeItem(DIAG_KEY); } catch (_) {} console.log('[DIAG] cleared.'); };
+window.clearDiag = function () {
+  if (diagEngine) { diagEngine.clear(); } else { try { localStorage.removeItem(DIAG_KEY); } catch (_) {} }
+  console.log('[DIAG] cleared.');
+};
 
 /* ════════════════════════════════════════════
    Inlined Transcription Worker → Blob URL
@@ -3484,7 +3459,10 @@ class TranscriptionManager {
     // `VoxtralRecyclePolicy` in Rust (WasmVoxtralRecycle); the ring/mel/generate
     // host loop below executes. Build a fresh policy per run.
     {
-      const pkgUrl = (typeof window !== 'undefined' && (window.__SILENT_WEB_PKG_URL || window.__DIARIZATION_PKG_URL)) || new URL('./crates/silent-web/pkg/silent_web.js', import.meta.url).href;
+      // NOTE: this is a CLASSIC <script>, so `import.meta` is a SyntaxError that
+      // would break the whole script — resolve the pkg URL against `document.baseURI`
+      // (the same idiom the corrections loader at the bottom of this script uses).
+      const pkgUrl = (typeof window !== 'undefined' && (window.__SILENT_WEB_PKG_URL || window.__DIARIZATION_PKG_URL)) || new URL('./crates/silent-web/pkg/silent_web.js', document.baseURI).href;
       const mod = await (async () => {
         const w = (typeof window !== 'undefined') ? window : globalThis;
         const cache = (w.__silentWebModulePromises ||= new Map());
@@ -4187,6 +4165,10 @@ const PerfMonitor = {
       const m = performance.memory || {};
       const n = app.tm && app.tm.nemotron;
       const q = (typeof sharedQuestionGenerator !== 'undefined') ? sharedQuestionGenerator : null;
+      const asrStats = n ? n.stats() : null;
+      // PerfMonitor (row 35): ride the EngineStats snapshot on the SAME `silent.diag`
+      // tracing target so the crash trail and the perf telemetry are one subscriber.
+      if (asrStats) Diag.recordStats(asrStats);
       const row = {
         t: new Date().toISOString().slice(11, 19),
         heapMB: m.usedJSHeapSize ? Math.round(m.usedJSHeapSize / 1048576) : null,
@@ -4197,7 +4179,7 @@ const PerfMonitor = {
         pageMB: this._totalMB,
         buckets: this._buckets,         // >50 MB page-attributable consumers
         engine: app.tm ? app.tm.engine : null,
-        asr: n ? (s => ({ rtf: s.rtf, avgMs: s.avgChunkMs, lastMs: s.lastChunkMs, backlog: s.pendingSamples, chunks: s.chunks }))(n.stats()) : null,
+        asr: asrStats ? (s => ({ rtf: s.rtf, avgMs: s.avgChunkMs, lastMs: s.lastChunkMs, backlog: s.pendingSamples, chunks: s.chunks }))(asrStats) : null,
         qwen: q ? { device: q.config.device, dtype: q.config.dtype, ready: q.ready, lastGenMs: q.lastGenMs || null, gens: q.genCount || 0 } : null,
       };
       window.__perfLog.push(row);
@@ -7014,28 +6996,51 @@ applyTeleprompterVisibility();   // hide the Ask-Now bar on load in transcript-o
 // DIAG: if a prior session left a trail (e.g. it froze last time), surface the
 // final rows in the engine-status area on load so Mike sees the crash evidence
 // immediately without opening DevTools. window.dumpDiag() shows the full table.
-if (DIAG) {
+//
+// The headline + per-row summary strings are byte-pinned by the Rust
+// `silent_core::diag::prior_trail` (the `diagEngine.priorTrailBanner()` shape
+// `{ headline, summaryLines }`); only the surrounding banner HTML stays in the
+// host. When the wasm engine has not finished loading at this load-time check
+// (a non-clean shutdown reloads mid-recording), the inline fallback reproduces
+// the EXACT same strings from the raw localStorage trail, and the engine-load
+// callback re-renders from the Rust strings — identical output either way.
+window.__renderPriorTrailBanner = function () {
+  if (!DIAG) return;
   try {
-    const trail = JSON.parse(localStorage.getItem(DIAG_KEY) || '[]');
-    if (trail.length) {
-      const last = trail.slice(-5);
-      const peakHeap = Math.max(...trail.map(r => r.heapUsedMB || 0));
-      const lines = last.map(r =>
-        `t+${r.elapsedSec}s heap=${r.heapUsedMB}MB ctxLen=${r.ctxLen} recycle=${r.recycle} items=${r.items} words=${r.words} stepMs=${r.lastStepMs}${r.deviceLost ? ' DEVICE-LOST:' + r.deviceLost : ''}`
-      );
-      const statusText = document.getElementById('engineStatusText');
-      const statusBar  = document.getElementById('engineStatus');
-      if (statusText && statusBar) {
-        statusText.innerHTML =
-          `<strong>[DIAG] prior trail: ${trail.length} rows, last t+${trail[trail.length-1].elapsedSec}s, peak heap ${peakHeap.toFixed(0)}MB.</strong> ` +
-          `console: dumpDiag()<br><small style="opacity:.8">` + lines.join('<br>') + `</small>`;
-        statusBar.style.display = 'flex';
+    let headline = '';
+    let summaryLines = [];
+    if (diagEngine) {
+      const banner = diagEngine.priorTrailBanner();
+      headline = banner.headline || '';
+      summaryLines = banner.summaryLines || [];
+    } else {
+      // Pre-load fallback: same strings the Rust prior_trail produces.
+      const trail = JSON.parse(localStorage.getItem(DIAG_KEY) || '[]');
+      if (trail.length) {
+        const peakHeap = Math.max(...trail.map(r => r.heapUsedMB || 0));
+        headline = `[DIAG] prior trail: ${trail.length} rows, last t+${trail[trail.length-1].elapsedSec}s, peak heap ${peakHeap.toFixed(0)}MB.`;
+        summaryLines = trail.slice(-5).map(r =>
+          `t+${r.elapsedSec}s heap=${r.heapUsedMB}MB ctxLen=${r.ctxLen} recycle=${r.recycle} items=${r.items} words=${r.words} stepMs=${r.lastStepMs}${r.deviceLost ? ' DEVICE-LOST:' + r.deviceLost : ''}`
+        );
       }
+    }
+    if (!headline) return;
+    const statusText = document.getElementById('engineStatusText');
+    const statusBar  = document.getElementById('engineStatus');
+    if (statusText && statusBar) {
+      statusText.innerHTML =
+        `<strong>${headline}</strong> ` +
+        `console: dumpDiag()<br><small style="opacity:.8">` + summaryLines.join('<br>') + `</small>`;
+      statusBar.style.display = 'flex';
+    }
+    if (!window.__priorTrailLogged) {
       console.log('[DIAG] prior trail detected — run window.dumpDiag() for the full table.');
       window.dumpDiag();
+      window.__priorTrailLogged = true;
     }
   } catch (_) {}
-}
+};
+window.__renderPriorTrailBanner();
 
 // Keep clock mode ticking even when not recording (the recording timer handles the rest)
 setInterval(() => {

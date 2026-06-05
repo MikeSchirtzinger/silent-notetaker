@@ -66,6 +66,10 @@ cp whisper-engine.js "$DIST/"
 cp voxtral-engine.js "$DIST/"
 cp sensevoice-engine.js "$DIST/"
 cp dual-engine.js "$DIST/"
+# Phase 5 (step y3-diag-wiring; Appendix A rows 34, 35): the crash-diagnostics +
+# PerfMonitor loader that drives the silent_web `WasmDiag` sampler (REPLACED the
+# inline index.html `Diag` IIFE + dumpDiag/clearDiag + prior-trail banner).
+cp diag-engine.js "$DIST/"
 
 # Cloudflare Pages response headers (COOP/COEP + CSP)
 cp _headers "$DIST/"
