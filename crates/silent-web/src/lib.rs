@@ -43,6 +43,16 @@
 //! unchanged — the wrapper only adds the event glue. The thin loader
 //! (`nemotron-engine.js`) drives it.
 //!
+//! The `engine` module (wasm32 only, Phase 5, step y2-engine-paths; Appendix A
+//! rows 10, 11) wraps the four `silent_inference` engine policies behind the
+//! typed `EngineEvent` / `HostCommand` JSON boundary: [`engine::WasmWhisperStream`]
+//! (Whisper family + Moonshine solo loop), [`engine::WasmVoxtralRecycle`]
+//! (Voxtral's two-cap recycle), [`engine::WasmSenseVoice`] (SenseVoice VAD
+//! segmentation), and [`engine::WasmDual`] (the draft/refine coordinator). The
+//! transformers.js worker / sherpa-onnx harness execute; the policy is Rust law.
+//! The JS glue (`whisper-engine.js`, `voxtral-engine.js`, `sensevoice-engine.js`,
+//! `dual-engine.js`) drives them, REPLACING the inline index.html engine loops.
+//!
 //! The `selection` module (wasm32 only, Phase 5, Task I3) wraps
 //! `silent_inference::selection` behind a typed surface: the registry-driven ASR
 //! picker option list (Appendix A rows 7, 8 — every engine sourced from the
@@ -120,6 +130,18 @@ pub mod nemotron;
 #[cfg(target_arch = "wasm32")]
 pub mod selection;
 
+/// Wasm-bindgen js-host engine surfaces (Phase 5, step y2-engine-paths; Appendix
+/// A rows 10, 11). Wasm32 only. Wraps the four `silent_inference` engine
+/// policies — Whisper/Moonshine streaming, Voxtral two-cap recycle, SenseVoice
+/// VAD segmentation, and the Dual draft/refine coordinator — behind the typed
+/// `EngineEvent` / `HostCommand` JSON boundary. The transformers.js worker /
+/// sherpa-onnx harness are the executors; the policy is Rust law. The JS glue
+/// (`whisper-engine.js`, `voxtral-engine.js`, `sensevoice-engine.js`,
+/// `dual-engine.js`) drives these surfaces, REPLACING the inline index.html
+/// engine loops (the strangler-fig).
+#[cfg(target_arch = "wasm32")]
+pub mod engine;
+
 /// Wasm-bindgen Claude-bridge reconnect surface (Phase 4, Task x4). Wasm32 only.
 /// Wraps `silent_core::bridge::ReconnectPolicy` — the deterministic
 /// reconnect/backoff + status state machine. The JS executor (`bridge-engine.js`
@@ -142,3 +164,6 @@ pub use session::WasmSession;
 
 #[cfg(target_arch = "wasm32")]
 pub use bridge::WasmBridgeReconnect;
+
+#[cfg(target_arch = "wasm32")]
+pub use engine::{WasmDual, WasmSenseVoice, WasmVoxtralRecycle, WasmWhisperStream};
