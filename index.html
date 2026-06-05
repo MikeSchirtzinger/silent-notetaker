@@ -2110,6 +2110,38 @@ const exportsEngine = {
   },
 };
 
+// sharedSelectionEngine: the single SelectionEngine, preloaded at boot. The
+// settings ASR model picker is now REGISTRY-DRIVEN (PRD Phase 5, Task I3;
+// Appendix A rows 7, 8): the option list, the row-8 backend/precision data, and
+// the per-engine availability verdict all come from the embedded
+// `registry/models.toml` via the Rust `silent_inference::selection` policy — not
+// the hand-maintained JS table. The device-tier mapping moves into Rust too
+// (resolveTier); GpuCaps stays only as the raw navigator reader.
+//
+// `openSettings()` builds its HTML SYNCHRONOUSLY, so the registry-sourced option
+// list is cached on boot (after the async device probe) into
+// `_asrPickerOptions`. Until that resolves the picker falls back to the legacy
+// `MODEL_OPTIONS` literal (same labels/values) so the modal is never empty — the
+// boot preload makes the registry list ready well before a user opens settings.
+let sharedSelectionEngine = null;
+let _selectionLoadPromise = null;
+let _asrPickerOptions = null;   // cached registry-driven option list (populated on boot)
+
+function _ensureSelectionLoaded() {
+  if (_selectionLoadPromise) return _selectionLoadPromise;
+  _selectionLoadPromise = (async () => {
+    const { SelectionEngine } = await import('./selection-engine.js');
+    if (!sharedSelectionEngine) sharedSelectionEngine = new SelectionEngine();
+    await sharedSelectionEngine.load();
+    // Populate the synchronous picker-options cache (registry-driven, with
+    // availability for THIS device). openSettings() reads this.
+    try { _asrPickerOptions = await sharedSelectionEngine.asrPickerOptions(); }
+    catch (e) { console.error('[rust-selection] picker options failed:', e); }
+    return sharedSelectionEngine;
+  })();
+  return _selectionLoadPromise;
+}
+
 // sharedBridgeReconnect: the single BridgeReconnect policy, preloaded at boot.
 // The inline `ClaudeBridge` WebSocket executor drives it for the reconnect/
 // backoff decision (Appendix A row 28). The socket stays in JS; only the policy
@@ -6653,6 +6685,14 @@ function saveSettings(s) {
 // Expose to App
 App.prototype.getSettings = function() { return loadSettings(); };
 
+// LEGACY FALLBACK ONLY. The model picker is now REGISTRY-DRIVEN (PRD Phase 5,
+// Task I3; Appendix A row 7): the option list, labels, values, precision and
+// backend are sourced from the embedded `registry/models.toml` via the Rust
+// `silent_inference::selection` policy (cached on boot into `_asrPickerOptions`).
+// This literal is kept ONLY as the boot-race fallback so the modal is never
+// empty if a user opens Settings before the registry options resolve — its
+// labels/values match the registry's `ui` entries exactly. Adding a model is now
+// a registry entry, zero code: it appears here automatically.
 const MODEL_OPTIONS = [
   { value: 'voxtral', label: 'Voxtral Realtime 4B (WebGPU, ~2.7GB, streaming)', accuracy: 'highest' },
   { value: 'nemotron', label: 'Nemotron Streaming 0.6B (WASM/CPU, ~917MB, streaming · frees GPU for AI notes)', accuracy: 'high' },
@@ -6664,6 +6704,29 @@ const MODEL_OPTIONS = [
   { value: 'onnx-community/moonshine-base-ONNX', label: 'Moonshine Base (fastest, ~150MB)', accuracy: 'good' },
   { value: 'onnx-community/whisper-tiny.en', label: 'Whisper Tiny EN (~100MB)', accuracy: 'fair' },
 ];
+
+/* Build the <option> HTML for the ASR model picker (Appendix A row 7).
+   REGISTRY-DRIVEN: when the Rust selection engine's options are cached
+   (`_asrPickerOptions`), map over THOSE — every engine sourced from the embedded
+   registry's `ui` entries, with the per-engine availability verdict for this
+   device. An unavailable engine (e.g. Voxtral with no WebGPU) is shown with its
+   reason appended and a `data-unavailable` flag (selectable but clearly flagged;
+   the persisted user choice always wins per R3 — we never silently drop it). The
+   currently-persisted choice stays `selected`. Falls back to the legacy
+   `MODEL_OPTIONS` literal only during the boot race. */
+function _renderModelOptions(s) {
+  const opts = Array.isArray(_asrPickerOptions) && _asrPickerOptions.length
+    ? _asrPickerOptions
+    : MODEL_OPTIONS;
+  return opts.map(m => {
+    const avail = m.availability;
+    const unavailable = avail && avail.status === 'unavailable';
+    const reason = unavailable && avail.reason ? ` — unavailable: ${avail.reason}` : '';
+    const sel = s.model === m.value ? 'selected' : '';
+    const flag = unavailable ? ' data-unavailable="1"' : '';
+    return `<option value="${esc(m.value)}" ${sel}${flag}>${esc(m.label)}${esc(reason)}</option>`;
+  }).join('');
+}
 
 function openSettings() {
   const s = loadSettings();
@@ -6683,9 +6746,7 @@ function openSettings() {
         <label class="settings-row">
           <span class="settings-label">Model</span>
           <select id="settingModel" class="settings-select">
-            ${MODEL_OPTIONS.map(m =>
-              `<option value="${m.value}" ${s.model === m.value ? 'selected' : ''}>${m.label}</option>`
-            ).join('')}
+            ${_renderModelOptions(s)}
           </select>
         </label>
 
@@ -6792,6 +6853,9 @@ function openSettings() {
 }
 
 function applySettings() {
+  // Capture the previously-persisted ASR engine so we can detect a CHANGE and
+  // route the user-facing notice through the Rust queued-switch policy (R3).
+  const _prevModel = (loadSettings() || {}).model;
   const s = {
     model: document.getElementById('settingModel').value,
     dtype: document.getElementById('settingDtype').value,
@@ -6833,7 +6897,28 @@ function applySettings() {
     }
   }
 
-  showToast('Settings saved — model changes take effect on next recording');
+  // Engine-selection change notice — REGISTRY/POLICY-DRIVEN (PRD Phase 5, Task
+  // I3; R3 decision log). The persisted choice is ALREADY saved above (user
+  // choice always wins). The Rust `applySelection` policy decides the notice:
+  //   - not recording → applies at the next recording start (the normal path);
+  //   - recording      → the change is QUEUED for the next meeting with a
+  //     friendly "takes effect next meeting" notice — never silently dropped,
+  //     never hard-rejected. This recording continues on its current engine.
+  // Only fire the engine-specific notice when the engine actually changed; an
+  // unchanged engine keeps the generic "saved" toast.
+  if (s.model !== _prevModel && sharedSelectionEngine && sharedSelectionEngine.ready) {
+    sharedSelectionEngine.applySelection(s.model, !!app.isRecording).then(out => {
+      if (out && out.outcome === 'queued_for_next_meeting') {
+        showToast(out.notice || 'Engine change takes effect for your next meeting', 4000);
+      } else {
+        showToast('Settings saved — model change takes effect on next recording');
+      }
+    }).catch(() => {
+      showToast('Settings saved — model changes take effect on next recording');
+    });
+  } else {
+    showToast('Settings saved — model changes take effect on next recording');
+  }
   closeModal();
 }
 
@@ -6941,6 +7026,16 @@ _ensureExportsLoaded().then(() => {
   console.log('[SilentNotetaker] exports ready (Rust/WASM formatters)');
 }).catch(err => {
   console.warn('[rust-exports] preload failed', err);
+});
+
+// Preload the registry-driven engine-selection engine so the settings model
+// picker option list (sourced from the embedded registry's `ui` entries, with
+// per-engine availability for this device) is cached before the user opens
+// Settings (PRD Phase 5, Task I3; Appendix A rows 7, 8).
+_ensureSelectionLoaded().then(() => {
+  console.log('[SilentNotetaker] selection ready (registry-driven picker + device tiers)');
+}).catch(err => {
+  console.warn('[rust-selection] preload failed', err);
 });
 
 // Preload the Claude-bridge reconnect/backoff policy so the inline ClaudeBridge
