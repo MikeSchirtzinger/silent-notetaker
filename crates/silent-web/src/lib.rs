@@ -150,6 +150,17 @@ pub mod engine;
 #[cfg(target_arch = "wasm32")]
 pub mod bridge;
 
+/// Wasm-bindgen extension-host surface (Phase 6, Task J2; R7). Wasm32 only.
+/// Wraps the j1 `silent-extension-sdk`: install-time manifest validation
+/// (verbatim `ManifestError`s to the consent UI), grant-set persistence via
+/// `silent-storage` (the `extensionGrants` store, schema v4), the per-extension
+/// data/UI/network boundary checks (ungranted data silently omitted), and the
+/// versioned `postMessage` envelope (a version-mismatched inbound envelope is
+/// refused). The JS glue (`extension-host.js`) runs each extension in a
+/// sandboxed iframe and drives this object.
+#[cfg(target_arch = "wasm32")]
+pub mod extension_host;
+
 #[cfg(target_arch = "wasm32")]
 pub use diarization::WasmDiarization;
 

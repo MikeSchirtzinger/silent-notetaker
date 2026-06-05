@@ -82,3 +82,10 @@ nemotron-asr = { path = "../nemotron-asr" }
 # links it — the same "one wasm binary, many surfaces" pattern as the other
 # modules. Wasm32-only: silent-storage's IDB runtime never enters the native build.
 silent-storage = { path = "../silent-storage" }
+# The extension SDK policy core (Phase 6, Task J2; R7). The `extension_host`
+# surface wraps it: install-time manifest validation, grant-set persistence (via
+# silent-storage), per-extension data/UI/network boundary checks, and the
+# versioned postMessage envelope. Wasm32-only — the SDK is browser-free and is
+# fully unit-tested natively inside its own crate, so the native `cargo check`
+# stays free of the wasm-bindgen host glue.
+silent-extension-sdk = { path = "../silent-extension-sdk" }
