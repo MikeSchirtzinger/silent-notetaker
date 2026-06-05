@@ -1,11 +1,14 @@
-# Stub crate (Phase 1 scaffold). Implemented in Phase 6 (Tasks J1–J3): the
-# manifest schema, capability enforcement (raw audio / embeddings / mel tensors
-# are NOT grantable), the sandboxed worker/iframe host, and the report-only →
-# enforced CSP transition.
+# Phase 6 (Task J1): the extension SDK core — the manifest schema, the closed
+# capability vocabulary (raw audio / embeddings / mel tensors / model
+# activations are NOT grantable: they are not variants of any capability enum,
+# so they cannot be requested), manifest validation with precise errors, the
+# versioned host<->extension message protocol, and the persisted, revocable
+# permission-grant model. The sandboxed worker/iframe host + CSP enforcement is
+# the j2/j3 wiring layer and is intentionally NOT here.
 [package]
 name = "silent-extension-sdk"
 version = "0.1.0"
-description = "Capability-based, network-denied-by-default extension SDK for Silent Notetaker: manifests, capabilities, host messages. Stub pending Phase 6."
+description = "Capability-based, network-denied-by-default extension SDK for Silent Notetaker: manifest schema, closed capability vocabulary (no raw audio/embeddings/mel/activations), manifest validation, versioned host<->extension protocol, and the revocable permission-grant model."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -16,4 +19,18 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-silent-core = { path = "../silent-core" }
+# silent-core is intentionally NOT a dependency: the extension boundary is a
+# distinct, isolated subsystem with its own narrowed vocabulary. It must not be
+# able to name core engine/audio/embedding types (that is the whole point of the
+# privacy floor), so it does not import them. Only serde + thiserror are needed.
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+# ts-rs is a DEV dependency only, mirroring silent-core: the `TS` derive is
+# applied via `#[cfg_attr(test, derive(ts_rs::TS))]`, so it compiles only in
+# test builds (where `export_bindings` runs) and never enters the production or
+# wasm32-unknown-unknown build.
+ts-rs = { workspace = true }
+serde_json = { workspace = true }
