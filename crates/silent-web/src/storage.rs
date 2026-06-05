@@ -38,6 +38,24 @@ fn err(e: impl std::fmt::Display) -> JsValue {
     JsValue::from_str(&e.to_string())
 }
 
+/// `Meeting.start_time` (epoch-ms `f64`) → `i64` ms for the search policy's
+/// integer `MeetingRecord::start_time`. The recording path always writes an
+/// integer epoch-ms; a non-finite value is clamped to 0 rather than panicking
+/// the read path.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "start_time is a Date.now() epoch-millisecond timestamp (finite, far \
+              below i64::MAX); the guarded f64 → i64 cast is exact for it. \
+              Non-finite inputs clamp to 0"
+)]
+fn start_ms(start_time: f64) -> i64 {
+    if start_time.is_finite() {
+        start_time as i64
+    } else {
+        0
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Migration + readback (productionized H2 — re-exposed through silent-web's pkg)
 // ---------------------------------------------------------------------------
@@ -245,22 +263,122 @@ pub async fn count_screenshots(meeting_id: u32) -> Result<JsValue, JsValue> {
 /// Read all meetings newest-first, capped at the history limit (50). Returns a
 /// JS array of `{ id, title, startTime, endTime, duration }`.
 ///
+/// The newest-first/limit ranking is the [`silent_storage::search`] policy
+/// (Appendix A row 29) — the SAME function the fuzzy search filters on — so the
+/// initial list and the filtered list rank identically.
+///
 /// # Errors
 /// Rejects with a string on a read failure.
 #[wasm_bindgen]
 pub async fn recent_meetings() -> Result<JsValue, JsValue> {
     let db = silent_storage::writer::open_db().await.map_err(err)?;
-    let mut meetings = silent_storage::reader::read_all(&db)
+    let meetings = silent_storage::reader::read_all(&db)
         .await
         .map_err(err)?
         .meetings;
-    meetings.sort_by(|a, b| {
-        b.start_time
-            .partial_cmp(&a.start_time)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-    meetings.truncate(silent_storage::search::HISTORY_LIMIT);
-    silent_storage::summary::meetings_to_js(&meetings).map_err(|e| err(format!("{e:?}")))
+    let ranked = recent_meetings_ranked(&meetings);
+    silent_storage::summary::meetings_to_js(&ranked).map_err(|e| err(format!("{e:?}")))
+}
+
+/// Search the meeting history (Appendix A row 29): case-insensitive substring
+/// across title → notes → transcript chunks, within the last-50 newest-first
+/// window. Returns a JS array of the matched meetings in display order — the
+/// SAME `{ id, title, startTime, endTime, duration }` shape as
+/// [`recent_meetings`], so the UI renders the filtered list with its existing
+/// row renderer.
+///
+/// This runs the [`silent_storage::search::search_history`] policy in ONE DB
+/// read (vs. the old JS N+1 per-meeting detail reads), with byte-identical
+/// results: an empty/whitespace query returns the full recent list in order.
+///
+/// # Errors
+/// Rejects with a string on a read failure.
+#[wasm_bindgen]
+pub async fn search_history(query: String) -> Result<JsValue, JsValue> {
+    use silent_storage::search::{TextRow, search_history as run_search};
+
+    let db = silent_storage::writer::open_db().await.map_err(err)?;
+    let snap = silent_storage::reader::read_all(&db).await.map_err(err)?;
+
+    // Project meetings onto the search policy's DTOs (ids coerce u32 → i64,
+    // start_time f64 → i64 ms — the recording path always writes integer epoch-ms).
+    let records = meeting_records(&snap.meetings);
+    // Notes ++ transcript chunks are BOTH searched as `TextRow`s — the predicate
+    // is identical (the JS checks notes then chunks; membership is the result).
+    let text_rows: Vec<TextRow> = snap
+        .notes
+        .iter()
+        .map(|n| TextRow {
+            meeting_id: i64::from(n.meeting_id),
+            text: n.text.clone(),
+        })
+        .chain(snap.transcript_chunks.iter().map(|c| TextRow {
+            meeting_id: i64::from(c.meeting_id),
+            text: c.text.clone(),
+        }))
+        .collect();
+
+    let matched_ids = run_search(
+        &records,
+        &text_rows,
+        &query,
+        silent_storage::search::HISTORY_LIMIT,
+    );
+
+    // Re-materialize the matched meetings (full Meeting rows) in the policy's
+    // returned order, so the UI's row renderer gets the same fields.
+    let by_id: std::collections::HashMap<u32, &silent_storage::Meeting> =
+        snap.meetings.iter().map(|m| (m.id, m)).collect();
+    let out: Vec<silent_storage::Meeting> = matched_ids
+        .iter()
+        .filter_map(|id| {
+            u32::try_from(*id)
+                .ok()
+                .and_then(|id| by_id.get(&id))
+                .copied()
+        })
+        .cloned()
+        .collect();
+    silent_storage::summary::meetings_to_js(&out).map_err(|e| err(format!("{e:?}")))
+}
+
+/// Project storage `Meeting` rows onto the search policy's `MeetingRecord` DTOs
+/// (id u32 → i64, `start_time` f64 → i64 ms).
+fn meeting_records(
+    meetings: &[silent_storage::Meeting],
+) -> Vec<silent_storage::search::MeetingRecord> {
+    meetings
+        .iter()
+        .map(|m| silent_storage::search::MeetingRecord {
+            id: i64::from(m.id),
+            title: m.title.clone(),
+            start_time: start_ms(m.start_time),
+        })
+        .collect()
+}
+
+/// The newest-first, last-`HISTORY_LIMIT` candidate window, reusing the
+/// [`silent_storage::search::recent_meetings`] policy (so the list ranking and
+/// the search candidate set are the ONE function — they cannot drift). Returns
+/// owned `Meeting` rows in display order for [`silent_storage::summary::meetings_to_js`].
+fn recent_meetings_ranked(meetings: &[silent_storage::Meeting]) -> Vec<silent_storage::Meeting> {
+    let records = meeting_records(meetings);
+    let ranked =
+        silent_storage::search::recent_meetings(&records, silent_storage::search::HISTORY_LIMIT);
+    // Map the ranked records back to the full Meeting rows by id, preserving the
+    // policy's order.
+    let by_id: std::collections::HashMap<u32, &silent_storage::Meeting> =
+        meetings.iter().map(|m| (m.id, m)).collect();
+    ranked
+        .iter()
+        .filter_map(|r| {
+            u32::try_from(r.id)
+                .ok()
+                .and_then(|id| by_id.get(&id))
+                .copied()
+        })
+        .cloned()
+        .collect()
 }
 
 /// Read one meeting's notes + transcript chunks for the history-detail replay

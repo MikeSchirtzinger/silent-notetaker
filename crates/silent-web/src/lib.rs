@@ -74,6 +74,14 @@ pub mod session;
 #[cfg(target_arch = "wasm32")]
 pub mod storage;
 
+/// Wasm-bindgen export + history-duration formatting surface (Phase 4, Task
+/// h3/x3). Wasm32 only. Wraps `silent_core::export` + `silent_core::timestamp`
+/// (notes Markdown, timestamp-aware transcript text, summary AI-notes append,
+/// history-replay markdown, executive line, `Nm Ns` duration — Appendix A
+/// rows 24, 30).
+#[cfg(target_arch = "wasm32")]
+pub mod exports;
+
 /// Wasm-bindgen Nemotron ASR surface (Phase 3, Task w4). Wasm32 only. Wraps
 /// `nemotron-asr`'s `WasmAsr` behind the typed `EngineEvent` boundary.
 #[cfg(target_arch = "wasm32")]
