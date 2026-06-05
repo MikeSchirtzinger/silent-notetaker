@@ -167,3 +167,6 @@ pub use bridge::WasmBridgeReconnect;
 
 #[cfg(target_arch = "wasm32")]
 pub use engine::{WasmDual, WasmSenseVoice, WasmVoxtralRecycle, WasmWhisperStream};
+
+#[cfg(target_arch = "wasm32")]
+pub use diag::WasmDiag;

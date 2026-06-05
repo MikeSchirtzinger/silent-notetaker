@@ -519,3 +519,330 @@ mod browser {
 
 #[cfg(target_arch = "wasm32")]
 pub use browser::{LocalStorageSink, now_ms, read_heap_bytes};
+
+// ===========================================================================
+// WasmDiag — the wasm-bindgen surface (wasm32 only) that REPLACES the JS `Diag`
+// sampler in index.html. It installs `DiagLayer` as the global `tracing`
+// subscriber and emits the `silent.diag` schema events so the trail is folded
+// through the REAL tracing dispatch — the "crash diag on tracing" the PRD names
+// (Phase 5, Appendix A row 34). The JS glue (`diag-engine.js`) drives it; the
+// `window.dumpDiag` / `clearDiag` / prior-trail banner glue stays in the UI but
+// reads its strings from here (the byte-pinned `silent-core` policy).
+// ===========================================================================
+#[cfg(target_arch = "wasm32")]
+mod wasm_surface {
+    use std::cell::RefCell;
+
+    use silent_core::diag::{DIAG_KEY, prior_trail, schema};
+    use tracing_subscriber::layer::SubscriberExt;
+    use wasm_bindgen::prelude::*;
+
+    use super::browser::{LocalStorageSink, now_ms, read_heap_bytes};
+    use super::{DiagLayer, JsonSink};
+
+    /// The concrete layer the browser installs: a `DiagLayer` over a
+    /// `localStorage`-backed JSON sink.
+    type WebDiagLayer = DiagLayer<JsonSink<LocalStorageSink>>;
+
+    thread_local! {
+        /// The shared handle to the installed [`DiagLayer`]. wasm is
+        /// single-threaded, so a `thread_local` is the natural global: the FIRST
+        /// [`WasmDiag::new`] installs the layer as the `tracing` global default
+        /// and stashes its handle here; any later construction reuses it. The
+        /// handle shares the SAME sampler + sink (the layer is `Clone` by
+        /// refcount), so `dumpDiag()` and the engine hooks all see one trail.
+        static DIAG_HANDLE: RefCell<Option<WebDiagLayer>> = const { RefCell::new(None) };
+    }
+
+    /// Install the global `tracing` subscriber wrapping a `DiagLayer` exactly
+    /// once, returning the shared handle. The subscriber is set with
+    /// `set_global_default`; a second call (it returns `Err` once a global is
+    /// set) is fine — we keep the first handle. Diagnostics must never throw, so
+    /// an install failure degrades to a detached layer whose trail simply will
+    /// not receive events (the app keeps running).
+    fn install() -> WebDiagLayer {
+        DIAG_HANDLE.with(|cell| {
+            if let Some(h) = cell.borrow().as_ref() {
+                return h.clone();
+            }
+            let layer = DiagLayer::new(JsonSink::new(LocalStorageSink));
+            let handle = layer.handle();
+            let subscriber = tracing_subscriber::registry().with(layer);
+            // First install wins the process-global slot. If something already
+            // set a global subscriber, the diag events would not reach our layer;
+            // that is acceptable (the app must not crash over telemetry).
+            let _ = tracing::subscriber::set_global_default(subscriber);
+            *cell.borrow_mut() = Some(handle.clone());
+            handle
+        })
+    }
+
+    /// The prior-trail banner shape (`{ headline, summaryLines }`) the UI renders
+    /// on load after a non-clean shutdown. Both fields are byte-pinned by
+    /// `silent-core`'s [`prior_trail`].
+    #[derive(serde::Serialize)]
+    struct Banner {
+        headline: String,
+        #[serde(rename = "summaryLines")]
+        summary_lines: Vec<String>,
+    }
+
+    /// The crash-diagnostics surface the UI drives, REPLACING the JS `Diag` IIFE.
+    ///
+    /// Construction installs the global `tracing` subscriber (idempotent). Every
+    /// method below is a thin emitter of a `silent.diag` schema event: the
+    /// installed [`DiagLayer`] folds it into the `silent_core::Diag` sampler and
+    /// writes the bounded `notetakerDiag` ring through `localStorage`. So the
+    /// sampler, the ring, the row format, and the prior-trail strings are all the
+    /// byte-pinned Rust policy; this is only the browser seam.
+    #[wasm_bindgen(js_name = WasmDiag)]
+    pub struct WasmDiag {
+        handle: WebDiagLayer,
+    }
+
+    impl Default for WasmDiag {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    #[wasm_bindgen(js_class = WasmDiag)]
+    impl WasmDiag {
+        /// Build the surface, installing the global subscriber on first call.
+        #[wasm_bindgen(constructor)]
+        #[must_use]
+        pub fn new() -> Self {
+            Self { handle: install() }
+        }
+
+        /// Begin a fresh trail (the JS `Diag.start()`): zero the counters and
+        /// clear the stored trail so the next crash trail is clean. The host then
+        /// schedules the ~3 s timer and takes the baseline [`Self::sample`] at
+        /// t=0 (the JS `start()` did the baseline sample itself; here the host
+        /// supplies the clock, so it calls `sample` explicitly after `start`).
+        pub fn start(&self) {
+            self.handle.reset();
+        }
+
+        /// Stop sampling. The host clears its timer and takes one final
+        /// [`Self::sample`] (the JS `stop()` did a final sample to catch
+        /// post-stop drift); this exists for call-site symmetry with the JS.
+        #[allow(
+            clippy::unused_self,
+            reason = "kept as an instance method so the JS call site reads \
+                      `diag.stop()` exactly as the prior `Diag.stop()`; the final \
+                      sample is host-clocked via `sample`."
+        )]
+        pub fn stop(&self) {}
+
+        /// Loop hook: a NEW `generate()` context is starting (the JS
+        /// `Diag.onLoopIter(inputTokens)`). Emits a `loop_iter` event.
+        #[wasm_bindgen(js_name = onLoopIter)]
+        pub fn on_loop_iter(&self, input_tokens: u64) {
+            tracing::info!(
+                target: "silent.diag",
+                diag_kind = schema::KIND_LOOP_ITER,
+                input_tokens = input_tokens,
+            );
+        }
+
+        /// Loop hook: a `generate()` return hit the recycle cap (the JS
+        /// `Diag.onRecycle()`). Emits a `recycle` event.
+        #[wasm_bindgen(js_name = onRecycle)]
+        pub fn on_recycle(&self) {
+            tracing::info!(
+                target: "silent.diag",
+                diag_kind = schema::KIND_RECYCLE,
+            );
+        }
+
+        /// Loop hook: one streamer `put()` happened (the JS
+        /// `Diag.onPut(nTokens)`). Reads the monotonic `performance.now()` here
+        /// (the core has no clock) and emits a `put` event carrying it; the
+        /// layer derives `lastStepMs` from the put-to-put gap.
+        #[wasm_bindgen(js_name = onPut)]
+        pub fn on_put(&self, n_tokens: u64) {
+            tracing::info!(
+                target: "silent.diag",
+                diag_kind = schema::KIND_PUT,
+                now_ms = now_ms(),
+                n_tokens = n_tokens,
+            );
+        }
+
+        /// Loop hook: a WebGPU device-lost / OOM error was observed (the JS
+        /// `Diag.onDeviceLost(msg)`). Emits a `device_lost` event that ALSO
+        /// carries the host-clocked sample fields, so the layer records the
+        /// message AND takes the immediate out-of-band sample the JS did — in one
+        /// event. `iso`/`elapsed_sec` are supplied by the host (it owns the
+        /// clock + the trail-start epoch); the DOM counts + ring cursor too.
+        #[wasm_bindgen(js_name = onDeviceLost)]
+        pub fn on_device_lost(
+            &self,
+            msg: &str,
+            iso: &str,
+            elapsed_sec: u64,
+            items: u64,
+            words: u64,
+            write_abs: i64,
+        ) {
+            let (present, used, total, limit) = match read_heap_bytes() {
+                Some(h) => (true, h.used, h.total, h.limit),
+                None => (false, 0.0, 0.0, 0.0),
+            };
+            tracing::warn!(
+                target: "silent.diag",
+                diag_kind = schema::KIND_DEVICE_LOST,
+                message = msg,
+                iso = iso,
+                elapsed_sec = elapsed_sec,
+                heap_present = present,
+                heap_used_bytes = used,
+                heap_total_bytes = total,
+                heap_limit_bytes = limit,
+                items = items,
+                words = words,
+                write_abs = write_abs,
+            );
+        }
+
+        /// The ~3 s sampler tick (the JS `sample()`), driven by the host timer.
+        /// The host supplies the values the core cannot produce — the wall-clock
+        /// `iso`, whole `elapsed_sec`, the DOM `.transcript-item` / `.transcript
+        /// -word` counts, and the Voxtral ring `write_abs` (`-1` ⇒ no ring) — and
+        /// the `performance.memory` heap is read HERE (the genuinely browser-bound
+        /// part). Emits a `sample` event; the layer builds the row, pushes it onto
+        /// the bounded ring, and writes the ring to `localStorage`.
+        pub fn sample(&self, iso: &str, elapsed_sec: u64, items: u64, words: u64, write_abs: i64) {
+            let (present, used, total, limit) = match read_heap_bytes() {
+                Some(h) => (true, h.used, h.total, h.limit),
+                None => (false, 0.0, 0.0, 0.0),
+            };
+            tracing::info!(
+                target: "silent.diag",
+                diag_kind = schema::KIND_SAMPLE,
+                iso = iso,
+                elapsed_sec = elapsed_sec,
+                heap_present = present,
+                heap_used_bytes = used,
+                heap_total_bytes = total,
+                heap_limit_bytes = limit,
+                items = items,
+                words = words,
+                write_abs = write_abs,
+            );
+        }
+
+        /// PerfMonitor (row 35): record an [`silent_core::EngineStats`] snapshot
+        /// on the SAME `silent.diag` target. The layer stashes it for
+        /// [`Self::take_stats`]; it does NOT write a diag row (telemetry, not a
+        /// crash sample). The fields mirror `nemotron-engine.js`'s `stats()`.
+        #[wasm_bindgen(js_name = recordStats)]
+        #[allow(
+            clippy::too_many_arguments,
+            reason = "the EngineStats wire is eight flat scalars (the tracing \
+                      event records primitives, not a struct); grouping them \
+                      would only add a parse hop. The JS glue passes them \
+                      positionally from `nemotron.stats()`."
+        )]
+        pub fn record_stats(
+            &self,
+            load_ms: u64,
+            chunks: u64,
+            avg_chunk_ms: u64,
+            last_chunk_ms: u64,
+            audio_secs: f64,
+            rtf: f64,
+            ttft_ms: u64,
+            pending_samples: u64,
+        ) {
+            tracing::info!(
+                target: "silent.diag",
+                diag_kind = schema::KIND_STATS,
+                load_ms = load_ms,
+                chunks = chunks,
+                avg_chunk_ms = avg_chunk_ms,
+                last_chunk_ms = last_chunk_ms,
+                audio_secs = audio_secs,
+                rtf = rtf,
+                ttft_ms = ttft_ms,
+                pending_samples = pending_samples,
+            );
+        }
+
+        /// The latest PerfMonitor [`silent_core::EngineStats`] as JSON (or JSON
+        /// `null` if none seen since the last poll). The PerfMonitor surface
+        /// polls this to render the tracing-fed stats path (row 35). Taking it
+        /// leaves `None` behind.
+        ///
+        /// # Errors
+        ///
+        /// Returns a `JsError` only if the stats fail to serialize (it cannot in
+        /// practice; the `Result` keeps the surface uniform with the other glue).
+        #[wasm_bindgen(js_name = takeStats)]
+        pub fn take_stats(&self) -> Result<JsValue, JsError> {
+            let s = serde_json::to_string(&self.handle.take_stats())
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            Ok(JsValue::from_str(&s))
+        }
+
+        /// The stored trail rows as a JSON string — the EXACT `notetakerDiag`
+        /// bytes (`JSON.stringify(rows)`). `window.dumpDiag()` returns the parsed
+        /// array of this; a captured shipping-JS row is byte-comparable against
+        /// an element of it. Reads through the same `localStorage` sink the trail
+        /// is written to, so a trail written by a prior (JS or Rust) session is
+        /// read back identically.
+        ///
+        /// # Errors
+        ///
+        /// Returns a `JsError` only if the rows fail to serialize (cannot happen
+        /// for `DiagRow`; uniform with the rest of the glue).
+        #[wasm_bindgen(js_name = rowsJson)]
+        pub fn rows_json(&self) -> Result<String, JsError> {
+            serde_json::to_string(&self.handle.rows()).map_err(|e| JsError::new(&e.to_string()))
+        }
+
+        /// The prior-trail banner the UI shows on load after a non-clean shutdown
+        /// (`index.html` ~6480-6504), as a JSON object
+        /// `{ headline, summaryLines }` — both byte-pinned by `silent-core`'s
+        /// [`prior_trail`]. Empty trail ⇒ an empty `headline` and `[]` lines (the
+        /// UI then shows nothing, matching the JS `if (trail.length)` guard).
+        /// Reads the LAST 5 summary lines (the JS `trail.slice(-5)`), oldest
+        /// first.
+        ///
+        /// # Errors
+        ///
+        /// Returns a `JsError` only if the banner fails to serialize (cannot
+        /// happen; uniform with the rest of the glue).
+        #[wasm_bindgen(js_name = priorTrailBanner)]
+        pub fn prior_trail_banner(&self) -> Result<JsValue, JsError> {
+            let rows = self.handle.rows();
+            let banner = Banner {
+                headline: prior_trail::headline(&rows),
+                summary_lines: prior_trail::last_summary_lines(&rows, 5),
+            };
+            let s = serde_json::to_string(&banner).map_err(|e| JsError::new(&e.to_string()))?;
+            Ok(JsValue::from_str(&s))
+        }
+
+        /// Clear the stored trail (`window.clearDiag()`). Maps to the JS
+        /// `localStorage.removeItem(KEY)` by overwriting with an empty ring via
+        /// the layer reset (a parsed-empty trail and a missing key are
+        /// indistinguishable to the prior-trail banner — both surface nothing).
+        #[wasm_bindgen(js_name = clear)]
+        pub fn clear(&self) {
+            self.handle.reset();
+        }
+
+        /// The `notetakerDiag` localStorage key, exposed so the UI references one
+        /// constant (it never hard-codes the string).
+        #[wasm_bindgen(js_name = storageKey)]
+        #[must_use]
+        pub fn storage_key() -> String {
+            DIAG_KEY.to_owned()
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub use wasm_surface::WasmDiag;
