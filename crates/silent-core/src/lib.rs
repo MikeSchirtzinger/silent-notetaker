@@ -26,6 +26,11 @@
 //!   (core → UI) for the Phase 3 word-corrections policy (Appendix A row 25):
 //!   the add/remove/set commands and the changed-map event. The application
 //!   policy lives in `silent-notes`.
+//! - [`bridge`] — `ReconnectPolicy`, the Claude-bridge WebSocket reconnect/
+//!   backoff policy (PRD Phase 4, Appendix A row 28): the deterministic
+//!   status/backoff state machine the JS WebSocket executor (`bridge-client.js`)
+//!   drives. The socket stays in JS; the *decision* to reconnect (and after how
+//!   long) is Rust law.
 //! - [`registry`] — the Hugging Face model registry types (PRD R4): the repo
 //!   stores typed model metadata, never weights. The registry drives engine
 //!   selection, CSP generation, the egress manifest, license display, and cache
@@ -50,6 +55,7 @@
 //! the A3 spike, `#[ts(transparent)]` is applied alongside `#[serde(transparent)]`
 //! wherever a newtype is transparent, so ts-rs emits the correct alias.
 
+pub mod bridge;
 pub mod commands;
 pub mod corrections;
 pub mod diarization;
@@ -65,6 +71,7 @@ pub mod session;
 pub mod storage;
 pub mod timestamp;
 
+pub use bridge::{Action as BridgeAction, BridgeStatus, ReconnectPolicy};
 pub use commands::TimestampMode;
 pub use error::{AsrError, ModelResolveError};
 pub use events::{EngineEvent, EngineStats};
@@ -105,6 +112,7 @@ pub const BOUNDARY_CONTRACT_VERSION: u32 = 1;
               config allows this in tests"
 )]
 mod ts_bindings {
+    use crate::bridge::{Action as BridgeAction, BridgeStatus};
     use crate::commands::{SessionEvent, SessionState, StopHooks, TimestampMode, UiCommand};
     use crate::corrections::{Correction, CorrectionCommand, CorrectionEvent};
     use crate::diarization::{
@@ -127,6 +135,13 @@ mod ts_bindings {
     use ts_rs::TS;
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "this is the single boundary-contract manifest: one flat export! \
+                  list of every type plus the expected-files assertion list. \
+                  Splitting it would scatter the contract across helpers and hide \
+                  the one place a reviewer reads to see the whole boundary"
+    )]
     fn export_bindings() {
         // `export_all` on each top-level type also exports every type it
         // references transitively, writing one `.ts` per type into the crate's
@@ -162,6 +177,8 @@ mod ts_bindings {
             Correction,
             CorrectionCommand,
             CorrectionEvent,
+            BridgeStatus,
+            BridgeAction,
             QuestionCommand,
             QuestionEvent,
             QuestionType,
@@ -213,6 +230,8 @@ mod ts_bindings {
             "Correction.ts",
             "CorrectionCommand.ts",
             "CorrectionEvent.ts",
+            "BridgeStatus.ts",
+            "BridgeAction.ts",
             "QuestionCommand.ts",
             "QuestionEvent.ts",
             "QuestionType.ts",
