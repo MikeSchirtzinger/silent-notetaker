@@ -1,0 +1,12 @@
+{
+  "name": "test-network-probe",
+  "displayName": "Test: Network Probe",
+  "version": "0.1.0",
+  "description": "j2b acceptance fixture: declares a single network origin and probes whether a granted-origin fetch and an UNgranted-origin fetch behave per the per-extension CSP. Not a shipping extension.",
+  "entrypoint": "index.js",
+  "capabilities": {
+    "data": ["transcript.text"],
+    "ui": ["panel"],
+    "network": ["https://httpbin.org"]
+  }
+}

@@ -147,19 +147,29 @@ the per-extension CSP before the next Worker restart.
 
 ### Execution context
 
-> **Implemented (Phase 6 / J2): the sandboxed iframe, not the bare Worker.**
+> **Implemented (Phase 6 / J2 + J2b): the sandboxed iframe, served from a
+> distinct per-extension document.**
 > The host (`extension-host.js` + `silent-web`'s `extension_host` surface) runs
-> each extension in a **null-origin sandboxed iframe** (`sandbox="allow-scripts"`,
+> each extension in a **sandboxed iframe** (`sandbox="allow-scripts"`,
 > deliberately *without* `allow-same-origin`). The Worker was the original
 > preference, but the `panel` UI capability (§1.2, §5 `render.panel`) requires a
 > render surface, and a bare Worker has no DOM — a Worker-only design would force
 > the host to inject extension-authored HTML into the main page, exactly what §5
 > forbids. A sandboxed iframe gives true origin isolation *and* a render surface
-> the extension owns, in one primitive. Because a null-origin (opaque) `srcdoc`
-> document cannot `import()` a cross-origin module under COEP=credentialless, the
-> host fetches the entrypoint **source** same-origin and *inlines* it into the
-> sandbox bootstrap, rather than loading it by URL. The single `postMessage`
-> channel and the versioned envelope are unchanged.
+> the extension owns, in one primitive.
+>
+> **J2b serving change (the network-grant fix):** each extension's iframe is
+> loaded from a distinct same-origin route `/ext/<name>/` (axum
+> `server/src/ext_route.rs`; hosted equivalent `apps/cloudflare/`) that serves a
+> fixed host-authored bootstrap shell with a **per-extension response-header CSP**.
+> The `sandbox` attribute forces an **opaque origin regardless of the URL**, so the
+> iframe still cannot reach the host window/DOM/IndexedDB/localStorage (witnessed:
+> `window.origin === "null"`, `SecurityError` on storage). Because an opaque-origin
+> document still cannot `import()` a cross-origin module, the host fetches the
+> entrypoint **source** same-origin and posts it (`__silentExtInit`) for the shell
+> to inject as an inline module. The single `postMessage` channel and the versioned
+> envelope are unchanged. See §7.1 for *why* a route replaced the earlier
+> `srcdoc`+`<meta>` design.
 
 An extension runs in a **Web Worker** (preferred) or a **sandboxed iframe**
 (`sandbox="allow-scripts"`, no `allow-same-origin`). It has:
@@ -441,9 +451,9 @@ function bulletBlock(prefix, text) {
 | Item | Status |
 |---|---|
 | Single-file monolith | Split (Phase 1) |
-| CSP enforcement | **ENFORCED** (J3) — base page CSP is `Content-Security-Policy` (no longer report-only), `script-src` includes `'wasm-unsafe-eval'` for the wasm-pack engines; `--report-only` flag retained for rollback. The per-extension `connect-src` is derived from grants (`GrantSet::connect_src`) and applied as a `<meta>` CSP inside each extension's sandboxed iframe. **Network DENY-by-default is fully enforced** (an undeclared fetch is blocked by CSP and logged to `ExtensionHost.cspViolations`). **Known limitation (J3 finding):** a `srcdoc`/`blob:` iframe *inherits the embedder's CSP* in Chromium, and CSP combines by intersection — so a child can only *tighten*, never *widen*, the base page `connect-src`. The per-extension network *grant* (relaxing `connect-src` to an approved origin) therefore does NOT take effect while extensions run in `srcdoc` iframes: a granted origin is still blocked by the inherited base policy. Making grants functional requires serving each extension from a distinct same-origin document whose *response header* carries only that extension's CSP (no inheritance) — a change to the J2 isolation/serving primitive, tracked for a follow-up. The privacy-critical guarantee (deny-by-default; base page never relaxed) is met today; grants are effectively still deny. |
+| CSP enforcement | **ENFORCED + GRANTS FUNCTIONAL** (J3 enforce + J2b grant fix). Base page CSP is `Content-Security-Policy` (no longer report-only), `script-src` includes `'wasm-unsafe-eval'` for the wasm-pack engines, `frame-src 'self'` authorizes framing the per-extension route; `--report-only` flag retained for rollback. The per-extension `connect-src` is derived from grants (`GrantSet::connect_src`) and applied as the **response-header CSP** of each extension's own `/ext/<name>/` document (NOT a `<meta>` CSP — see §7.1). **Network DENY-by-default is fully enforced AND grants now take effect** — both witnessed (§7.2). |
 | Extension manifest format | **Implemented** — `silent-extension-sdk` (J1) |
-| Worker/iframe sandbox | **Implemented** — null-origin sandboxed iframe, inlined source (J2) |
+| Worker/iframe sandbox | **Implemented** — opaque-origin sandboxed iframe served from the per-extension `/ext/<name>/` route, source posted in (J2 + J2b) |
 | postMessage API + versioned envelope | **Implemented** — `extension_host` surface + `extension-host.js` (J2); version-mismatched envelopes refused |
 | Grant-set persistence | **Implemented** — `extensionGrants` IndexedDB store, schema v4 (J2) |
 | Install consent + manager UI | **Implemented** — consent screen (capabilities + network verbatim) + Settings manager (J2) |
@@ -456,5 +466,69 @@ for the full sequence and validation requirements.
 
 The CSP `connect-src` floor described in [ARCHITECTURE.md §3](ARCHITECTURE.md#3-the-keystone-enforce-the-boundary-with-csp)
 is the non-negotiable baseline that must be in place before any extension can be
-installed. Extensions can only add hosts to their own Worker/iframe CSP; they
-cannot relax the main page CSP.
+installed. Extensions can only add hosts to their own iframe CSP; they cannot
+relax the main page CSP.
+
+### 7.1 Why grants need a distinct document, not a `<meta>` CSP (J2b)
+
+The first cut (J2/J3) booted each extension from a `srcdoc` iframe carrying a
+`<meta http-equiv="Content-Security-Policy">` whose `connect-src` was the granted
+origins. That enforced **deny-by-default** perfectly but made **grants inert**, for
+a precise reason:
+
+> A `srcdoc` (and `blob:`) iframe **inherits the embedder's CSP** in Chromium, and
+> CSP combines by **intersection** — a child policy can only *tighten*, never
+> *widen*, the parent's `connect-src`. The base page `connect-src` (by design)
+> carries no extension origins, so a granted origin — which is *broader* than the
+> base policy — was intersected back to blocked. The `<meta>` CSP could deny, but
+> could not grant.
+
+The fix (J2b) is to serve each extension from a **distinct same-origin document**
+(`/ext/<name>/`) whose **response-header** CSP carries only that extension's
+policy. A response-header CSP is the document's own policy — it is **not**
+intersected with the embedder — so a granted `connect-src` origin actually takes
+effect.
+
+**Isolation is preserved, and that was the open security question.** The worry was
+that serving the extension from a *real same-origin URL* would, combined with the
+loss of a null `srcdoc` origin, hand the extension same-origin access to the host's
+storage. It does not: `sandbox="allow-scripts"` (without `allow-same-origin`)
+forces the document to an **opaque origin regardless of the URL it loads from**.
+The served document therefore still has `window.origin === "null"` and throws
+`SecurityError` on `localStorage`/`indexedDB` — it cannot read the app's
+`SilentNotetaker` IndexedDB or its localStorage. We keep `allow-scripts`, keep
+opaque-origin isolation, and need **no** distinct port and **no** `credentialless`
+iframe. The base page CSP is never relaxed; it only gains `frame-src 'self'` to
+authorize framing the same-origin route.
+
+Header-injection guard: the static server has no IndexedDB and cannot read grant
+sets, so the in-page host (which *does*, via the wasm `connectSrc`) passes the
+granted origins as repeated `o=<origin>` query params on the iframe `src`. The
+server (`ext_route::sanitize_origin`) **re-validates** each as a strict
+`scheme://host[:port]` token and reflects only the survivors into `connect-src`;
+anything malformed (a wildcard, a quoted CSP keyword, a path, userinfo, a
+semicolon/space/CRLF) is dropped, and an empty set yields `connect-src 'none'`. The
+worst a crafted URL can do is widen *its own* sandbox to another well-formed
+origin — no worse than declaring it in the manifest, and it can never inject a
+header or a second directive. The hosted equivalent is the Cloudflare Pages
+Function sketch in `apps/cloudflare/functions/ext/[[path]].ts` (committed,
+not deployed); its sanitizer is kept byte-parity with the Rust one.
+
+### 7.2 Witnessed acceptance (J2b)
+
+Run against the real axum server (`server/`) with the real `extension-host.js` +
+`silent-web` wasm, two extensions installed via the normal consent flow:
+
+| Witness | Result |
+|---|---|
+| `crossOriginIsolated` (base page) | `true` (COI/threaded-WASM preserved) |
+| Base page → granted origin (httpbin) | **BLOCKED** (base CSP never widened — keystone holds) |
+| `test-network-probe` (granted `https://httpbin.org`) → that origin | **fetch SUCCEEDS, HTTP 200** (grant functional) |
+| `test-network-probe` → ungranted origin (`example.com`) | **BLOCKED**, logged to `ExtensionHost.cspViolations` |
+| `test-network-probe` `window.origin` / `localStorage` / `indexedDB` | `null` / `SecurityError` / `SecurityError` (isolation real) |
+| `reference-notes-export` (network `[]`) served route CSP | `connect-src 'none'` (ungranted extension fully denied) |
+| `reference-notes-export` panel | renders normally (no regression) |
+
+`extensions/test-network-probe/` is a committed acceptance fixture (clearly marked
+NOT a shipping extension); it is excluded from the deploy bundle (only
+`reference-notes-export` ships).
