@@ -31,10 +31,26 @@
  *     extension HTML into the main page (the panel is the extension's own
  *     sandboxed DOM — the host only sizes the slot).
  *
- * The iframe is `srcdoc`-booted with a fixed bootstrap that (a) wires the single
- * `postMessage` channel and (b) `import()`s the extension's entrypoint as a
- * module. No `allow-same-origin` ⇒ the iframe cannot reach back into the host.
- * The ONLY channel is `postMessage`, exactly as §3 requires.
+ * The iframe is loaded from the same-origin `/ext/<name>/` route (the axum
+ * `server/`'s `ext_route`; on Cloudflare the equivalent Pages Function in
+ * `apps/cloudflare/`), which serves a FIXED host-authored bootstrap shell with a
+ * per-extension **response-header** CSP. The shell wires the single `postMessage`
+ * channel and injects the extension's entrypoint source (which the host fetches
+ * same-origin and posts in `__silentExtInit`). No `allow-same-origin` ⇒ the iframe
+ * is an opaque origin and cannot reach back into the host; the ONLY channel is
+ * `postMessage`, exactly as §3 requires.
+ *
+ * # Why a route, not `srcdoc` (the j2b/j3 network-grant fix)
+ *
+ * A `srcdoc` (and `blob:`) iframe INHERITS the embedder's CSP by intersection in
+ * Chromium — a child may only tighten, never widen, the base page `connect-src`.
+ * So the old `<meta>`-CSP-in-srcdoc design enforced deny-by-default perfectly but
+ * made network GRANTS inert: a granted origin was still blocked by the inherited
+ * base policy. A document served from a real URL with its OWN response-header CSP
+ * is NOT inherited — its `connect-src` is authoritative — so a granted origin
+ * actually takes effect. The `sandbox="allow-scripts"` attribute still forces an
+ * opaque origin regardless of the URL, so isolation (no host window/DOM/storage)
+ * is preserved. Witnessed in `docs/EXTENSIONS.md` §7 + the j2b spike.
  *
  * # The data boundary is enforced in Rust, not here
  *
@@ -78,188 +94,46 @@ function _loadModule(pkgUrl) {
 }
 
 /**
- * The iframe bootstrap. Runs INSIDE the null-origin sandbox. It is the ONLY
- * scaffolding the host injects; the extension's real logic (`entrypointSource`)
- * is INLINED as a second module so the sandbox never has to fetch a cross-origin
- * module — a null-origin (opaque) `srcdoc` document cannot `import()` a
- * cross-origin URL under COEP=credentialless, so the host fetches the source
- * (same-origin, which it is allowed to) and embeds it here. The bootstrap:
- *   - listens on the single `postMessage` channel from the host,
- *   - exposes a minimal `silent` API the extension uses to post messages back,
- *   - forwards host messages to the extension's `onHostMessage` handler,
- *   - then runs the inlined extension module, with `globalThis.silent` ready.
+ * Build the same-origin `/ext/<name>/` route URL that serves THIS extension's
+ * sandboxed document, encoding its granted network origins as repeated `o=`
+ * query params (the j2b network-grant keystone).
  *
- * The extension cannot reach the host (no allow-same-origin); it can only post
- * messages, which the host validates.
- */
-function _escapeScript(src) {
-  // Prevent the inlined source from breaking out of its <script> element.
-  return String(src).replace(/<\/script/gi, '<\\/script').replace(/<!--/g, '<\\!--');
-}
-
-/**
- * Build the per-extension `connect-src` directive value for the iframe's own
- * CSP. This is the NETWORK half of the keystone (PRD R7 / j3):
- *
- *   - The base page CSP (from `_headers` / the axum server) is NOT relaxed for
- *     extensions — it never contains an extension origin.
- *   - Each extension's sandboxed iframe carries its OWN enforced CSP via a
- *     `<meta http-equiv="Content-Security-Policy">`, whose `connect-src` is
- *     EXACTLY the origins the user granted (`GrantSet::connect_src`, computed in
- *     Rust) and nothing else.
- *   - An extension with NO network grant gets `connect-src 'none'` → it cannot
- *     reach ANY host. An undeclared `fetch()` (e.g. https://example.com) is
- *     BLOCKED by the iframe's CSP and emits a `securitypolicyviolation` event,
- *     which the bootstrap reports back to the host for logging (R7 acceptance).
- *   - An extension WITH a declared origin grant gets that origin in its
- *     `connect-src`. NOTE (J3 finding): a `srcdoc` iframe INHERITS the embedder's
- *     CSP in Chromium, and CSP combines by intersection — a child may only
- *     tighten, never widen, the base page `connect-src`. So while this meta CSP
- *     correctly DENIES everything by default (the privacy-critical case, fully
- *     enforced + witnessed), a GRANTED origin is still blocked by the inherited
- *     base policy unless it is also in the base page CSP (which by design it is
- *     not). Functional grants require serving each extension from a distinct
- *     same-origin document whose RESPONSE-HEADER CSP carries only that
- *     extension's policy (no inheritance) — a J2 isolation/serving change tracked
- *     as a follow-up (see docs/EXTENSIONS.md §7). This meta CSP is the deny-floor
- *     and the ready-to-use grant plumbing; the serving primitive is the gap.
+ * The server (axum `ext_route`; Cloudflare `apps/cloudflare/`) reflects the
+ * SANITIZED origins into the served document's RESPONSE-HEADER `connect-src`.
+ * Because a response-header CSP is NOT inherited by the embedder (unlike a
+ * `srcdoc`/`<meta>` CSP, which Chromium intersects with the base page — the j3
+ * finding that made grants inert), a granted origin actually takes effect there.
+ * The base page CSP is NEVER relaxed; it only authorizes framing this same-origin
+ * route (`frame-src 'self'`).
  *
  * `connectSrcOrigins` is the verbatim `GrantSet::connect_src()` output (already
- * validated full origins, no wildcards — the manifest validator rejects those).
+ * validated full origins, no wildcards — the manifest validator rejects those;
+ * the server re-validates each, so a malformed entry is simply dropped server-side
+ * and the egress floor stays `'none'`). An empty grant set yields a bare route URL
+ * → the server emits `connect-src 'none'` (deny by default).
+ *
+ * The route is resolved against the page ORIGIN (not `manifestDir`) so it always
+ * points at the server root regardless of where the extension's code lives.
  */
-function _extensionCspMeta(connectSrcOrigins) {
+function _extRouteUrl(extensionName, connectSrcOrigins) {
   const origins = Array.isArray(connectSrcOrigins) ? connectSrcOrigins : [];
-  // Deny-by-default: an empty grant set yields `connect-src 'none'`.
-  const connectSrc = origins.length ? origins.join(' ') : "'none'";
-  // The iframe runs inlined extension code + inline styles it writes itself, so
-  // script/style 'unsafe-inline' are required for the sandbox to function; but
-  // network egress is locked to exactly the granted origins. No `default-src`
-  // fallthrough to network: connect-src is explicit, and img/media/font are
-  // pinned to self+data so an extension cannot beacon via an <img> either.
-  const directives = [
-    "default-src 'none'",
-    "script-src 'unsafe-inline'",
-    "style-src 'unsafe-inline'",
-    "img-src data:",
-    "font-src data:",
-    `connect-src ${connectSrc}`,
-  ];
-  return directives.join('; ');
-}
-
-function _bootstrapHtml(extensionId, entrypointSource, connectSrcOrigins) {
-  // NOTE: this string is the iframe's whole document. It contains NO host data.
-  // The extension source is inlined; it never sees host globals or the host DOM.
-  //
-  // The <meta> CSP below is the per-extension network boundary: connect-src is
-  // exactly the granted origins (or 'none'). This is enforced by the browser
-  // INSIDE the sandbox, independent of (and never relaxing) the base page CSP.
-  const cspMeta = _extensionCspMeta(connectSrcOrigins);
-  return `<!DOCTYPE html><html><head><meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="${String(cspMeta).replace(/"/g, '&quot;')}">
-<style>
-  :root { color-scheme: dark; }
-  html,body { margin:0; padding:0; background:#12121a; color:#e0e0e8;
-    font:13px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif; }
-  #ext-root { padding:10px 12px; }
-  a { color:#00d4aa; }
-</style></head>
-<body><div id="ext-root"></div>
-<script>
-  // Bootstrap (classic script so it runs synchronously BEFORE the extension
-  // module below). Defines globalThis.silent and the single host channel, and
-  // BUFFERS host messages until the extension registers its handler — so the
-  // extension never misses a message regardless of module-eval timing.
-  (function () {
-    var EXT_ID = ${JSON.stringify(extensionId)};
-    var _handler = null;
-    var _buffer = [];   // host messages received before onHostMessage()
-    function _deliver(message) {
-      if (typeof _handler === 'function') {
-        try { _handler(message); }
-        catch (err) { console.error('[ext:' + EXT_ID + '] handler error', err); }
-      } else {
-        _buffer.push(message);
-      }
-    }
-    globalThis.silent = {
-      extensionId: EXT_ID,
-      // Register the host→extension handler; flush any buffered messages into it.
-      onHostMessage: function (fn) {
-        _handler = fn;
-        var pending = _buffer; _buffer = [];
-        for (var i = 0; i < pending.length; i++) _deliver(pending[i]);
-      },
-      // Send an ExtensionMessage to the host (render.panel / render.notification /
-      // export.request). The host wraps + validates each one.
-      post: function (message) { parent.postMessage({ __silentExt: true, message: message }, '*'); },
-      // Render HTML into OUR OWN sandbox document (never the host page).
-      renderLocal: function (html) {
-        var root = document.getElementById('ext-root');
-        if (root) root.innerHTML = String(html);
-      },
-    };
-    // R7 keystone: report this sandbox's OWN CSP violations back to the host so
-    // an undeclared/blocked fetch is LOGGED (not silently swallowed). The
-    // browser fires this on every connect-src (and other) violation inside the
-    // iframe; the host records it to its violation log + console.
-    window.addEventListener('securitypolicyviolation', function (ev) {
-      try {
-        parent.postMessage({
-          __silentExtCsp: true,
-          extensionId: EXT_ID,
-          violation: {
-            directive: ev.effectiveDirective || ev.violatedDirective || '',
-            blockedURI: ev.blockedURI || '',
-            disposition: ev.disposition || 'enforce',
-          },
-        }, '*');
-      } catch (e) { /* never let reporting throw inside the sandbox */ }
-    });
-    window.addEventListener('message', function (ev) {
-      var data = ev.data;
-      if (!data) return;
-      // Host-echoed panel HTML (validated against the panel grant): render it
-      // into our OWN sandbox document.
-      if (data.__silentHostRender) {
-        var root = document.getElementById('ext-root');
-        if (root) root.innerHTML = String(data.html || '');
-        return;
-      }
-      // A versioned host→extension envelope { protocolVersion, extensionId,
-      // message }: deliver (or buffer) the INNER message body to the extension.
-      if (data.__silentHost) {
-        var env = data.message;
-        _deliver(env && env.message ? env.message : env);
-      }
-    });
-    // Ready immediately: the buffer guarantees no message is lost before the
-    // extension module (below) registers its handler.
-    parent.postMessage({ __silentExtReady: true, extensionId: EXT_ID }, '*');
-  })();
-</script>
-<!-- The extension's own module, inlined (no cross-origin import from this
-     opaque-origin sandbox). It sees globalThis.silent but no host globals. -->
-<script type="module">
-try {
-${_escapeScript(entrypointSource)}
-} catch (err) {
-  console.error('[ext] entrypoint threw', err);
-  var root = document.getElementById('ext-root');
-  if (root) root.textContent = 'Extension failed to run: ' + (err && err.message || err);
-}
-</script></body></html>`;
+  // encodeURIComponent each origin name segment + each granted origin so the
+  // query is well-formed; the server percent-decodes + re-validates.
+  const url = new URL('/ext/' + encodeURIComponent(extensionName) + '/', window.location.origin);
+  for (const o of origins) url.searchParams.append('o', o);
+  return url.href;
 }
 
 /**
  * One installed, running extension: its grant set + its sandboxed iframe.
  */
 class ExtensionInstance {
-  constructor(grantSet, iframe) {
+  constructor(grantSet, iframe, entrypointSource) {
     this.grantSet = grantSet;              // the parsed GrantSet (from wasm)
     this.grantJson = JSON.stringify(grantSet);
     this.iframe = iframe;                  // the sandboxed <iframe> element
-    this.ready = false;                    // set true on __silentExtReady
+    this.entrypointSource = entrypointSource; // host-fetched code, injected on shell-ready
+    this.ready = false;                    // set true once the shell is initialised
     this._pending = [];                    // host messages queued until ready
   }
   get name() { return this.grantSet.extension; }
@@ -414,9 +288,10 @@ export class ExtensionHost {
       this.instances.delete(name);
     }
 
-    // Fetch the entrypoint SOURCE same-origin (the host is allowed to), to inline
-    // it into the sandbox. A null-origin srcdoc iframe cannot import() a
-    // cross-origin module under COEP, so we embed the code rather than load it.
+    // Fetch the entrypoint SOURCE same-origin (the host is allowed to). The
+    // opaque-origin sandbox cannot import() a cross-origin module, so the host
+    // posts this source into the shell (`__silentExtInit`) for it to inject as an
+    // inline module under the served document's `script-src 'unsafe-inline'`.
     const entrypointUrl = new URL(manifest.entrypoint, manifestDir).href;
     const res = await fetch(entrypointUrl);
     if (!res.ok) throw new Error('entrypoint ' + manifest.entrypoint + ' HTTP ' + res.status);
@@ -424,19 +299,26 @@ export class ExtensionHost {
 
     // The NETWORK boundary: ask the Rust policy for THIS extension's exact
     // connect-src origins (GrantSet::connect_src). Empty ⇒ network-denied. These
-    // — and only these — go into the iframe's own CSP (the base page CSP is never
-    // relaxed; PRD R7 / docs/EXTENSIONS.md §1.3, §2).
+    // — and only these — are encoded into the `/ext/<name>/` route URL, which the
+    // server reflects (sanitized) into the served document's RESPONSE-HEADER
+    // connect-src. The base page CSP is NEVER relaxed (PRD R7 / docs/EXTENSIONS.md
+    // §1.3, §2, §7).
     const connectSrcOrigins = this.connectSrc(grantSet);
+    const routeUrl = _extRouteUrl(name, connectSrcOrigins);
 
     const iframe = document.createElement('iframe');
-    // The hard isolation: allow-scripts but NOT allow-same-origin → null origin.
+    // The hard isolation: allow-scripts but NOT allow-same-origin → the iframe is
+    // an OPAQUE origin even though it loads from a real same-origin URL, so it
+    // cannot reach the host window/DOM/IndexedDB/localStorage. The per-extension
+    // network CSP rides on the route's RESPONSE header (not inherited), so grants
+    // function — the j2b fix for the j3 srcdoc-inheritance gap.
     iframe.setAttribute('sandbox', 'allow-scripts');
     iframe.setAttribute('title', 'Extension: ' + (manifest.displayName || name));
     iframe.className = 'ext-panel-frame';
     iframe.dataset.extension = name;
-    iframe.srcdoc = _bootstrapHtml(name, entrypointSource, connectSrcOrigins);
+    iframe.src = routeUrl;
 
-    const inst = new ExtensionInstance(grantSet, iframe);
+    const inst = new ExtensionInstance(grantSet, iframe, entrypointSource);
     this.instances.set(name, inst);
     if (this.panelSlot) this.panelSlot.appendChild(iframe);
     return inst;
@@ -515,10 +397,20 @@ export class ExtensionHost {
       return;
     }
 
-    // An extension iframe announcing it is ready: flush any queued host messages.
-    if (data.__silentExtReady) {
-      const inst = this.instances.get(data.extensionId);
+    // The server-served bootstrap shell announcing it is ready (it does NOT yet
+    // know its extension id — the shell is generic). Match it by source window,
+    // hand it the extension id + the host-fetched entrypoint SOURCE to inject
+    // (`__silentExtInit`), then mark the instance ready and flush queued host
+    // messages. The shell carries no id in this message, so we identify by source.
+    if (data.__silentExtShellReady) {
+      let inst = null;
+      for (const candidate of this.instances.values()) {
+        if (candidate.iframe.contentWindow === ev.source) { inst = candidate; break; }
+      }
       if (inst && ev.source === inst.iframe.contentWindow) {
+        // Deliver the id + module source for the shell to inject.
+        inst.iframe.contentWindow.postMessage(
+          { __silentExtInit: true, extensionId: inst.name, source: inst.entrypointSource }, '*');
         inst.ready = true;
         const q = inst._pending.splice(0);
         for (const fn of q) fn();
