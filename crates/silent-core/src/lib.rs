@@ -18,6 +18,13 @@
 //! - [`engine`] — the async-first [`engine::AsrEngine`] trait, the named
 //!   [`engine::AnyAsrEngine`] enum-dispatch strategy, and the notes/question
 //!   trait shapes.
+//! - [`diag`] — the crash-diagnostics ring buffer (PRD Phase 5, Appendix A
+//!   row 34): the `notetakerDiag` row shape + key order, the
+//!   `+(x).toFixed(1)`/`JSON.stringify` numeric normalization, the bounded ring,
+//!   the loop-counter hooks, and the prior-trail surfacing strings — all
+//!   byte-identical to the `index.html` `Diag` sampler. The localStorage sink
+//!   and `window.dumpDiag` glue are wiring; the wasm `tracing` subscriber that
+//!   drives this lives in `silent-web`.
 //! - [`notes`] — `NoteCommand` (UI → core) and `NoteEvent` (core → UI) for the
 //!   Phase 3 trigger-extraction policy: categorized live notes, the four section
 //!   counters, and open-question resolution (Appendix A rows 16, 18). The policy
@@ -58,6 +65,7 @@
 pub mod bridge;
 pub mod commands;
 pub mod corrections;
+pub mod diag;
 pub mod diarization;
 pub mod engine;
 pub mod error;
@@ -73,6 +81,10 @@ pub mod timestamp;
 
 pub use bridge::{Action as BridgeAction, BridgeStatus, ReconnectPolicy};
 pub use commands::TimestampMode;
+pub use diag::{
+    DIAG_KEY, DIAG_MAX_ROWS, Diag, DiagRow, HeapBytes, MemSink, OneDecimal, SampleInput,
+    StorageSink, push_bounded,
+};
 pub use error::{AsrError, ModelResolveError};
 pub use events::{EngineEvent, EngineStats};
 pub use export::{
@@ -115,6 +127,7 @@ mod ts_bindings {
     use crate::bridge::{Action as BridgeAction, BridgeStatus};
     use crate::commands::{SessionEvent, SessionState, StopHooks, TimestampMode, UiCommand};
     use crate::corrections::{Correction, CorrectionCommand, CorrectionEvent};
+    use crate::diag::DiagRow;
     use crate::diarization::{
         DiarizationCommand, DiarizationEvent, RelabelEntry, SpeakerDescriptor,
     };
@@ -158,6 +171,7 @@ mod ts_bindings {
             TimeRange,
             EngineEvent,
             EngineStats,
+            DiagRow,
             AsrCapabilities,
             AsrError,
             ModelResolveError,
@@ -215,6 +229,7 @@ mod ts_bindings {
         );
         for expected in [
             "EngineEvent.ts",
+            "DiagRow.ts",
             "UiCommand.ts",
             "SessionEvent.ts",
             "TimestampMode.ts",

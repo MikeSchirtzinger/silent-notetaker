@@ -33,6 +33,19 @@ silent-diarization = { path = "../silent-diarization" }
 silent-notes = { path = "../silent-notes" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Crash-diagnostics subscriber (PRD Phase 5, Appendix A row 34). `tracing` +
+# `tracing-subscriber` are browser-free, so the `DiagLayer` translation logic
+# compiles and is unit-tested on the NATIVE target (driving an in-memory
+# `StorageSink`); only the `LocalStorageSink` (web-sys Storage) is wasm32-only.
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+# Native tests drive the DiagLayer through a tracing dispatch and read back the
+# rows; serde_json serializes them to assert byte-identity vs the silent-core
+# golden fixture.
+serde_json = { workspace = true }
+tracing = { workspace = true }
 
 # ---------------------------------------------------------------------------
 # wasm32 — wasm-bindgen surface. Only needed for the browser target.
@@ -41,7 +54,17 @@ serde_json = { workspace = true }
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["console"] }
+# `Storage`/`Window` back the `LocalStorageSink` (the real `notetakerDiag`
+# read/write); `Performance` gives `performance.now()` for the `put` event clock.
+# `performance.memory` is read via `js_sys::Reflect` (it is a non-standard
+# Chromium field) so we do not need the `Memory` web-sys feature, which would
+# force a web-sys/js-sys minor bump that conflicts with the ort-web pin.
+web-sys = { version = "0.3", features = [
+    "console",
+    "Window",
+    "Storage",
+    "Performance",
+] }
 console_error_panic_hook = "0.1"
 # The Nemotron ASR engine (ort-web RNN-T). Wasm32-only: the `nemotron` module
 # wraps `WasmAsr` behind the typed `EngineEvent` boundary (Task w4). nemotron-asr

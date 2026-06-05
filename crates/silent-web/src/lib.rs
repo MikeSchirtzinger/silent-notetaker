@@ -2,6 +2,15 @@
 //!
 //! # What this crate provides
 //!
+//! The `diag` module (Phase 5, Appendix A row 34) is the crash-diagnostics
+//! `tracing` subscriber: [`diag::DiagLayer`] folds the `silent.diag` tracing
+//! events the engine emits into a `silent_core::Diag` sampler and writes the
+//! bounded `notetakerDiag` ring through a `StorageSink`. The translation logic
+//! is browser-free (native-testable); only its `LocalStorageSink` and the
+//! `performance.memory` / `performance.now()` readers are `wasm32`-only. The
+//! `window.dumpDiag` and prior-trail banner glue stay in the UI (wiring); the
+//! row format and prior-trail strings are owned and byte-pinned by `silent-core`.
+//!
 //! The `diarization` module (wasm32 only) wraps `silent-diarization` behind a
 //! typed wasm-bindgen surface: commands in (embed+track, rename, merge,
 //! recluster), typed events out (JSON-serialized, matching the `DiarizationEvent`
@@ -51,6 +60,12 @@
 #![forbid(unsafe_code)]
 
 pub use silent_core;
+
+/// Crash-diagnostics `tracing` subscriber (Phase 5, Appendix A row 34). The
+/// [`DiagLayer`](diag::DiagLayer) translation logic is browser-free and
+/// available on ALL targets (native-testable against an in-memory store); only
+/// its `LocalStorageSink` + `performance.memory` readers are `wasm32`-only.
+pub mod diag;
 
 /// Wasm-bindgen diarization surface (Phase 2). Wasm32 only.
 #[cfg(target_arch = "wasm32")]
