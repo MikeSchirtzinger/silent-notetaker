@@ -366,6 +366,54 @@
     @keyframes smartq-pulse { 0%,100%{opacity:.35} 50%{opacity:1} }
     @keyframes smartq-spin { to { transform: rotate(360deg); } }
 
+    /* Extensions — sandboxed-iframe panels (PRD Phase 6 / R7). Docked above the
+       teleprompter; matches the panel design language (accent header, collapsible). */
+    .ext-panel {
+      flex: 0 0 auto;
+      border-top: 1px solid var(--border);
+      background: linear-gradient(0deg, var(--accent-glow), transparent);
+    }
+    .ext-panel-head {
+      display: flex; align-items: center; gap: 8px;
+      padding: 9px 20px; cursor: pointer; user-select: none;
+    }
+    .ext-panel-icon { font-size: 13px; line-height: 1; }
+    .ext-panel-title {
+      font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+      text-transform: uppercase; color: var(--accent);
+    }
+    .ext-panel-count {
+      font-size: 10px; font-weight: 600; color: var(--accent);
+      background: var(--accent-dim); padding: 1px 7px; border-radius: 999px;
+    }
+    .ext-panel-spacer { flex: 1; }
+    .ext-panel-chevron { color: var(--text-muted); transition: transform 0.18s ease; pointer-events: none; }
+    .ext-panel.minimized .ext-panel-chevron { transform: rotate(180deg); }
+    .ext-panel-body { padding: 0 16px 14px; display: flex; flex-direction: column; gap: 10px; }
+    .ext-panel.minimized .ext-panel-body { display: none; }
+    .ext-panel-frame {
+      width: 100%; min-height: 120px; border: 1px solid var(--border);
+      border-radius: var(--radius); background: var(--surface); display: block;
+    }
+    /* Extension manager rows in the settings modal */
+    .ext-mgr-row {
+      display: flex; align-items: center; gap: 10px; padding: 10px 0;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .ext-mgr-meta { flex: 1; min-width: 0; }
+    .ext-mgr-name { font-size: 13px; color: var(--text); font-weight: 600; }
+    .ext-mgr-caps { font-size: 11px; color: var(--text-muted); margin-top: 2px; word-break: break-word; }
+    .ext-mgr-empty { font-size: 12px; color: var(--text-faint); font-style: italic; padding: 6px 0; }
+    /* Consent screen */
+    .ext-consent-list { margin: 10px 0; padding-left: 18px; }
+    .ext-consent-list li { margin-bottom: 6px; font-size: 13px; color: var(--text); }
+    .ext-consent-net { color: var(--actions); }
+    .ext-consent-err {
+      background: var(--actions-dim); border: 1px solid var(--actions);
+      border-radius: var(--radius); padding: 10px 12px; color: var(--text);
+      font-size: 12px; font-family: var(--font-mono); white-space: pre-wrap; word-break: break-word;
+    }
+
     /* Open-question resolution: answered questions dim + strike through */
     .note-item.q-resolved .note-text { text-decoration: line-through; color: var(--text-faint); }
     .note-item.q-resolved::after {
@@ -1489,6 +1537,21 @@
           <p class="empty-hint">Notes are automatically categorized into decisions, action items, key points, and open questions</p>
         </div>
 
+      </div>
+
+      <!-- Extensions — sandboxed-iframe panels (PRD Phase 6 / R7). Each installed
+           extension renders into its own null-origin iframe inside this slot; the
+           host injects no extension HTML into the main page. Hidden until at least
+           one extension is installed. -->
+      <div class="ext-panel" id="extPanel" style="display:none">
+        <div class="ext-panel-head" onclick="toggleExtPanel()">
+          <span class="ext-panel-icon">&#129513;</span>
+          <span class="ext-panel-title">Extensions</span>
+          <span class="ext-panel-count" id="extPanelCount">0</span>
+          <span class="ext-panel-spacer"></span>
+          <span class="ext-panel-chevron" id="extPanelChevron">&#9662;</span>
+        </div>
+        <div class="ext-panel-body" id="extPanelBody"></div>
       </div>
 
       <!-- Smart Questions — minimizable teleprompter (Qwen3-0.6B, WASM, off-thread) -->
@@ -4356,6 +4419,14 @@ class App {
 
       this.meetingId = await storage.addMeeting(title || 'Untitled Meeting', this._startEpoch);
 
+      // PRD Phase 6 / R7: notify installed extensions that a meeting started
+      // (gated per-extension on meeting.metadata; ungranted extensions get
+      // nothing). Carries title + ids only — never audio.
+      emitToExtensions({
+        type: 'meeting.start',
+        payload: { meetingId: String(this.meetingId), title: title || 'Untitled Meeting', startMs: this._startEpoch },
+      });
+
       // Phase-F: on a warm Continue, re-persist the live tracker's current names
       // under the new meeting row (the tracker survives across meetings; its
       // human labels should follow). On a fresh reload the tracker is empty, so
@@ -4507,6 +4578,13 @@ class App {
         endTime,
         this._startEpoch ? endTime - this._startEpoch : 0,
       );
+      // PRD Phase 6 / R7: notify extensions the meeting stopped (gated on
+      // meeting.metadata). The reference extension uses this to pull a full
+      // snapshot via export.request and produce its Markdown.
+      emitToExtensions({
+        type: 'meeting.stop',
+        payload: { meetingId: String(this.meetingId), durationMs: this._startEpoch ? endTime - this._startEpoch : 0 },
+      });
     }
 
     // Render the machine's stop events (sources_changed → clears Mic/Tab badges,
@@ -4720,6 +4798,13 @@ class App {
 
     await storage.addTranscriptChunk(this.meetingId, timestamp, text.trim());
 
+    // PRD Phase 6 / R7: push the committed transcript segment to extensions
+    // (gated on transcript.text). Plain text + timing only — no audio.
+    emitToExtensions({
+      type: 'transcript.update',
+      payload: { segmentId: 'seg-' + timestamp, text: text.trim(), startMs: timestamp, endMs: timestamp },
+    });
+
     // Self-rendering engines promote/render their own transcript items, so
     // handleFinal must NOT re-render (it would duplicate every sentence):
     //  - voxtral / nemotron promote their live in-place element to final;
@@ -4743,6 +4828,15 @@ class App {
         const id = await _addNoteObj(this.meetingId, note);
         this.renderNote({ ...note, id });
         if (note.category === 'questions') OpenQs.add(id, note.text);
+        // PRD Phase 6 / R7: push the extracted note to extensions (gated
+        // per-category on the matching notes.* capability). Text only.
+        const extCat = _NOTE_CATEGORY_TO_EXT[note.category];
+        if (extCat) {
+          emitToExtensions({
+            type: 'notes.update',
+            payload: { noteId: 'note-' + id, category: extCat, text: note.text, timestampMs: timestamp },
+          });
+        }
       }
     }
 
@@ -6606,6 +6700,9 @@ function renameSpeaker(id, name) {
   // Phase-F carry-forward: persist the meeting's rename map so renames survive
   // reload / history replay (the diarization tracker is in-memory only).
   _persistSpeakerNames();
+
+  // PRD Phase 6 / R7: notify extensions of the rename (gated on speaker.labels).
+  emitToExtensions({ type: 'speaker.rename', payload: { raw: id, display: nm } });
 }
 
 /* ════════════════════════════════════════════
@@ -6857,6 +6954,12 @@ function openSettings() {
         </label>
       </div>
 
+      <div class="settings-section">
+        <div class="settings-section-title">Extensions</div>
+        <p class="settings-hint" style="margin-bottom:8px">Sandboxed extensions run in isolated iframes with no access to your audio or model data. Each declares the meeting data and network access it needs; you approve it at install and can revoke any time.</p>
+        <div id="extManagerSlot"><div class="ext-mgr-empty">Loading…</div></div>
+      </div>
+
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="resetSettings()">Reset Defaults</button>
@@ -6866,6 +6969,11 @@ function openSettings() {
     </div>
   `;
   overlay.style.display = 'flex';
+  // Populate the installed-extensions manager (async; the slot shows "Loading…"
+  // until the host + persisted grant sets resolve).
+  if (typeof _renderExtManager === 'function') {
+    _renderExtManager().catch(err => console.warn('[rust-ext] manager render failed', err));
+  }
 }
 
 function applySettings() {
@@ -7084,6 +7192,279 @@ _ensureBridgeReconnectLoaded().then(() => {
   console.log('[SilentNotetaker] bridge reconnect policy ready (Rust/WASM)');
 }).catch(err => {
   console.warn('[rust-bridge] preload failed', err);
+});
+
+/* ════════════════════════════════════════════
+   Extension host (PRD Phase 6 / R7) — sandboxed-iframe extensions.
+
+   The host runs each installed extension in a null-origin sandboxed iframe and
+   speaks the versioned postMessage protocol. The Rust core (silent-web's
+   extension_host surface) owns ALL policy: manifest validation, grant-set
+   persistence, the per-extension data/UI/network boundary checks, and the
+   protocol-version refusal. This block is the thin host wiring: load the engine,
+   re-hydrate installed extensions on boot, emit HostMessages at the meeting
+   lifecycle / notes / transcript points, and drive the install + manager UI.
+
+   PRIVACY: only the transcript text / notes / speaker labels / meeting metadata
+   the user already sees crosses this surface — never audio, embeddings, or
+   tensors (not representable in the capability vocabulary OR the protocol).
+═══════════════════════════════════════════ */
+
+// The bundled reference extension (the R7 acceptance vehicle). Adding more here
+// (or a future "load from folder" flow) is the only registry the host needs.
+const EXT_REGISTRY_URLS = {
+  'reference-notes-export': new URL('./extensions/reference-notes-export/', document.baseURI).href,
+};
+
+let sharedExtHost = null;
+let _extHostReady = null;
+// Cache of name → { manifestJson, dir } for re-hydration (filled as manifests load).
+const _extManifestCache = {};
+
+async function _fetchExtManifest(dir) {
+  const res = await fetch(new URL('manifest.json', dir).href);
+  if (!res.ok) throw new Error('manifest.json HTTP ' + res.status);
+  return await res.text();   // raw text — the Rust validator parses + checks it
+}
+
+async function _ensureExtHostLoaded() {
+  if (_extHostReady) return _extHostReady;
+  _extHostReady = (async () => {
+    const { ExtensionHost } = await import('./extension-host.js');
+    if (!sharedExtHost) {
+      sharedExtHost = new ExtensionHost({
+        panelSlot: document.getElementById('extPanelBody'),
+        onNotification: (text) => showToast(text, 3500),
+        // The host owns the live data; the wasm policy says WHICH surfaces an
+        // extension may receive. We fill ONLY those surfaces from the DOM/notes.
+        fillExport: (surfaces /* Array<DataCapability token> */) => _fillExportSnapshot(surfaces),
+      });
+      await sharedExtHost.load();
+    }
+    return sharedExtHost;
+  })();
+  return _extHostReady;
+}
+
+/* Build the export.response snapshot the host is willing to share, limited to the
+   granted surfaces the Rust policy returned. We read the LIVE notes/transcript
+   from the DOM (the same data the user sees) — nothing else. */
+function _fillExportSnapshot(grantedSurfaces) {
+  const snapshot = {};
+  const has = (tok) => Array.isArray(grantedSurfaces) && grantedSurfaces.includes(tok);
+
+  // Notes: walk the four rendered note lists.
+  const wantNotes = has('notes.decisions') || has('notes.actions') ||
+                    has('notes.keypoints') || has('notes.questions');
+  if (wantNotes) {
+    const notes = [];
+    const catMap = [
+      ['decisionsList', 'decision', 'notes.decisions'],
+      ['actionsList',   'action',   'notes.actions'],
+      ['keypointsList', 'keypoint', 'notes.keypoints'],
+      ['questionsList', 'question', 'notes.questions'],
+    ];
+    let idx = 0;
+    for (const [listId, category, tok] of catMap) {
+      if (!has(tok)) continue;
+      const list = document.getElementById(listId);
+      if (!list) continue;
+      for (const el of list.querySelectorAll('.note-text')) {
+        notes.push({ noteId: 'note-' + (idx++), category, text: el.textContent.trim(), timestampMs: 0 });
+      }
+    }
+    snapshot.notes = notes;
+  }
+
+  // Transcript text: walk the rendered transcript items.
+  if (has('transcript.text') || has('transcript.segments')) {
+    const segs = [];
+    let i = 0;
+    for (const el of document.querySelectorAll('#transcriptContent .transcript-text')) {
+      segs.push({ segmentId: 'seg-' + (i++), text: el.textContent.trim(), startMs: 0, endMs: 0 });
+    }
+    snapshot.transcript = segs;
+  }
+
+  return snapshot;
+}
+
+/* Map the app's plural note category to the protocol's singular snake_case
+   NoteCategory ('decisions' → 'decision', …). An unmapped category is dropped. */
+const _NOTE_CATEGORY_TO_EXT = {
+  decisions: 'decision',
+  actions: 'action',
+  keypoints: 'keypoint',
+  questions: 'question',
+};
+
+/* Emit one HostMessage to every installed extension (gated per-extension in Rust).
+   A no-op (and never throws) if the host is not loaded / no extensions installed. */
+function emitToExtensions(message) {
+  if (!sharedExtHost || !sharedExtHost.ready) return;
+  try { sharedExtHost.broadcast(message); }
+  catch (err) { console.warn('[rust-ext] broadcast failed', err); }
+}
+
+/* Refresh the Extensions panel visibility + count from the host's instances. */
+function _refreshExtPanel() {
+  const panel = document.getElementById('extPanel');
+  const count = sharedExtHost ? sharedExtHost.instances.size : 0;
+  document.getElementById('extPanelCount').textContent = String(count);
+  panel.style.display = count > 0 ? 'block' : 'none';
+}
+
+function toggleExtPanel() {
+  document.getElementById('extPanel').classList.toggle('minimized');
+}
+
+/* ── Install / consent / manager UI ──────────────────────────────────────── */
+
+/* Open the install consent screen for an extension by registry name. Fetches its
+   manifest, validates via the Rust SDK, and renders the requested capabilities +
+   network grants VERBATIM. A validation failure (unknown capability, wildcard
+   origin, oversize, bad entrypoint) shows the precise ManifestError string and
+   blocks install. */
+async function openInstallConsent(name) {
+  const dir = EXT_REGISTRY_URLS[name];
+  if (!dir) { showToast('Unknown extension: ' + name); return; }
+  const host = await _ensureExtHostLoaded();
+  const container = document.getElementById('modalContainer');
+  const overlay = document.getElementById('modalOverlay');
+
+  let manifestJson, manifest;
+  try {
+    manifestJson = await _fetchExtManifest(dir);
+    manifest = host.validateManifest(manifestJson);   // THROWS verbatim ManifestError
+  } catch (err) {
+    // Rejected at validation — surface the precise error verbatim, no install.
+    container.innerHTML = `
+      <div class="modal-header">
+        <span class="modal-title">Extension Rejected</span>
+        <button class="modal-close" onclick="closeModal()">&#x2715;</button>
+      </div>
+      <div class="modal-body settings-body">
+        <p style="margin-bottom:10px;color:var(--text-muted)">This extension was rejected at manifest validation and was NOT installed:</p>
+        <div class="ext-consent-err" id="extConsentErr">${esc(err && err.message ? err.message : String(err))}</div>
+      </div>
+      <div class="modal-footer">
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost" onclick="closeModal()">Close</button>
+      </div>`;
+    overlay.style.display = 'flex';
+    return;
+  }
+
+  _extManifestCache[manifest.name] = { manifestJson, dir };
+
+  const caps = manifest.capabilities || {};
+  const dataItems = (caps.data || []).map(d => `<li>Read your <b>${esc(d)}</b></li>`).join('');
+  const uiItems = (caps.ui || []).map(u => `<li>Show a <b>${esc(u)}</b></li>`).join('');
+  const netItems = (caps.network || []).length
+    ? (caps.network || []).map(n => `<li class="ext-consent-net">Send data to <b>${esc(n)}</b></li>`).join('')
+    : `<li style="color:var(--keypoints)">No network access (cannot send your data anywhere)</li>`;
+
+  container.innerHTML = `
+    <div class="modal-header">
+      <span class="modal-title">Install "${esc(manifest.displayName || manifest.name)}"?</span>
+      <button class="modal-close" onclick="closeModal()">&#x2715;</button>
+    </div>
+    <div class="modal-body settings-body">
+      <p style="margin-bottom:4px;color:var(--text-muted)">${esc(manifest.description || '')}</p>
+      <p style="margin-bottom:6px;font-size:11px;color:var(--text-faint)">v${esc(manifest.version)} &middot; runs in a sandboxed iframe (no access to your page, audio, or model data)</p>
+      <p style="margin:10px 0 2px;font-weight:600">This extension wants to:</p>
+      <ul class="ext-consent-list">
+        ${dataItems}
+        ${uiItems}
+        ${netItems}
+      </ul>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal()">Deny</button>
+      <div style="flex:1"></div>
+      <button class="btn btn-start" onclick="confirmInstallExtension('${esc(manifest.name)}')">Allow</button>
+    </div>`;
+  overlay.style.display = 'flex';
+}
+
+async function confirmInstallExtension(name) {
+  const entry = _extManifestCache[name];
+  if (!entry) { showToast('Install state lost — reopen the consent screen'); return; }
+  try {
+    const host = await _ensureExtHostLoaded();
+    await host.install(entry.manifestJson, entry.dir);
+    _refreshExtPanel();
+    document.getElementById('extPanel').classList.remove('minimized');
+    showToast('Installed "' + name + '"');
+    closeModal();
+  } catch (err) {
+    showToast('Install failed: ' + (err && err.message ? err.message : err));
+  }
+}
+
+/* Render the installed-extensions manager rows inside the Settings modal. */
+async function _renderExtManager() {
+  const slot = document.getElementById('extManagerSlot');
+  if (!slot) return;
+  const host = await _ensureExtHostLoaded();
+  const sets = await host.loadAllGrantSets();
+  if (!sets.length) {
+    slot.innerHTML = `<div class="ext-mgr-empty">No extensions installed.</div>`;
+  } else {
+    slot.innerHTML = sets.map(gs => {
+      const data = (gs.data || []).join(', ') || 'none';
+      const net = (gs.network || []).length ? (gs.network || []).join(', ') : 'no network';
+      return `<div class="ext-mgr-row">
+        <div class="ext-mgr-meta">
+          <div class="ext-mgr-name">${esc(gs.extension)}</div>
+          <div class="ext-mgr-caps">data: ${esc(data)} &middot; ${esc(net)}</div>
+        </div>
+        <button class="btn btn-ghost" style="font-size:11px;padding:3px 10px" onclick="revokeExtensionUi('${esc(gs.extension)}')">Remove</button>
+      </div>`;
+    }).join('');
+  }
+  // The install button for the bundled reference extension (only if not installed).
+  const installed = new Set(sets.map(s => s.extension));
+  const installable = Object.keys(EXT_REGISTRY_URLS).filter(n => !installed.has(n));
+  const installBtns = installable.map(n =>
+    `<button class="btn btn-ghost" style="font-size:11px;padding:4px 10px;margin-top:8px" onclick="openInstallConsent('${esc(n)}')">Install "${esc(n)}"…</button>`
+  ).join(' ');
+  if (installBtns) slot.innerHTML += `<div>${installBtns}</div>`;
+}
+
+async function revokeExtensionUi(name) {
+  try {
+    const host = await _ensureExtHostLoaded();
+    await host.revoke(name);
+    _refreshExtPanel();
+    await _renderExtManager();
+    showToast('Removed "' + name + '"');
+  } catch (err) {
+    showToast('Remove failed: ' + (err && err.message ? err.message : err));
+  }
+}
+
+/* Re-hydrate installed extensions on boot: load each persisted grant set and mount
+   its sandboxed iframe. Manifests are re-fetched + cached for the registry map. */
+async function _rehydrateExtensions() {
+  const host = await _ensureExtHostLoaded();
+  const sets = await host.loadAllGrantSets();
+  const registry = {};
+  for (const gs of sets) {
+    const dir = EXT_REGISTRY_URLS[gs.extension];
+    if (!dir) continue;
+    try { registry[gs.extension] = { manifestJson: await _fetchExtManifest(dir), dir }; }
+    catch (err) { console.warn('[rust-ext] re-hydrate manifest fetch failed for', gs.extension, err); }
+  }
+  await host.rehydrate(registry);
+  _refreshExtPanel();
+}
+
+// Boot: load the host + re-hydrate any installed extensions (no-op on a clean DB).
+_rehydrateExtensions().then(() => {
+  console.log('[SilentNotetaker] extension host ready (sandboxed-iframe extensions)');
+}).catch(err => {
+  console.warn('[rust-ext] extension host boot failed', err);
 });
 
 // ESC to close modal

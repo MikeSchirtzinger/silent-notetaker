@@ -70,6 +70,14 @@ cp dual-engine.js "$DIST/"
 # PerfMonitor loader that drives the silent_web `WasmDiag` sampler (REPLACED the
 # inline index.html `Diag` IIFE + dumpDiag/clearDiag + prior-trail banner).
 cp diag-engine.js "$DIST/"
+# Phase 6 (Task J2 / R7): the sandboxed-iframe extension host runtime that drives
+# the silent_web `extension_host` surface (manifest validation, grant-set
+# persistence, the per-extension data/UI/network boundary, the versioned envelope).
+cp extension-host.js "$DIST/"
+# Phase 6 (R7): the bundled reference extension (manifest + entrypoint). Served as
+# static files; each extension loads inside its own null-origin sandboxed iframe.
+mkdir -p "$DIST/extensions"
+cp -r extensions/reference-notes-export "$DIST/extensions/reference-notes-export"
 
 # Cloudflare Pages response headers (COOP/COEP + CSP)
 cp _headers "$DIST/"

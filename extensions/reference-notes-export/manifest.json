@@ -1,0 +1,19 @@
+{
+  "name": "reference-notes-export",
+  "displayName": "Reference: Notes Export",
+  "version": "0.1.0",
+  "description": "Summarizes the meeting's live notes in a side panel and exports them as Markdown. The R7 acceptance reference extension: panel + notes + transcript, NO network access.",
+  "entrypoint": "index.js",
+  "capabilities": {
+    "data": [
+      "transcript.text",
+      "notes.decisions",
+      "notes.actions",
+      "notes.keypoints",
+      "notes.questions",
+      "meeting.metadata"
+    ],
+    "ui": ["panel", "notification"],
+    "network": []
+  }
+}

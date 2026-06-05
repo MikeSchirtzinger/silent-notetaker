@@ -147,6 +147,20 @@ the per-extension CSP before the next Worker restart.
 
 ### Execution context
 
+> **Implemented (Phase 6 / J2): the sandboxed iframe, not the bare Worker.**
+> The host (`extension-host.js` + `silent-web`'s `extension_host` surface) runs
+> each extension in a **null-origin sandboxed iframe** (`sandbox="allow-scripts"`,
+> deliberately *without* `allow-same-origin`). The Worker was the original
+> preference, but the `panel` UI capability (§1.2, §5 `render.panel`) requires a
+> render surface, and a bare Worker has no DOM — a Worker-only design would force
+> the host to inject extension-authored HTML into the main page, exactly what §5
+> forbids. A sandboxed iframe gives true origin isolation *and* a render surface
+> the extension owns, in one primitive. Because a null-origin (opaque) `srcdoc`
+> document cannot `import()` a cross-origin module under COEP=credentialless, the
+> host fetches the entrypoint **source** same-origin and *inlines* it into the
+> sandbox bootstrap, rather than loading it by URL. The single `postMessage`
+> channel and the versioned envelope are unchanged.
+
 An extension runs in a **Web Worker** (preferred) or a **sandboxed iframe**
 (`sandbox="allow-scripts"`, no `allow-same-origin`). It has:
 
@@ -424,15 +438,16 @@ function bulletBlock(prefix, text) {
 
 ## 7. What is shipped today vs. what this document designs
 
-| Item | Today | Phase 3 (designed here) |
-|---|---|---|
-| Single-file monolith | Shipped | Prerequisite: Phase 1 module split |
-| CSP enforcement | Report-only (hn-prep branch) | Enforcing, after browser validation |
-| Extension manifest format | Not implemented | Specified above |
-| Worker/iframe sandbox | Not implemented | Specified above |
-| postMessage API | Not implemented | Specified above |
-| Network grant UI | Not implemented | Specified above |
-| `notion-export` reference extension | Not implemented | Example only |
+| Item | Status |
+|---|---|
+| Single-file monolith | Split (Phase 1) |
+| CSP enforcement | Report-only; per-extension `connect-src` derived from grants (`GrantSet::connect_src`); promotion to enforced is j3 |
+| Extension manifest format | **Implemented** — `silent-extension-sdk` (J1) |
+| Worker/iframe sandbox | **Implemented** — null-origin sandboxed iframe, inlined source (J2) |
+| postMessage API + versioned envelope | **Implemented** — `extension_host` surface + `extension-host.js` (J2); version-mismatched envelopes refused |
+| Grant-set persistence | **Implemented** — `extensionGrants` IndexedDB store, schema v4 (J2) |
+| Install consent + manager UI | **Implemented** — consent screen (capabilities + network verbatim) + Settings manager (J2) |
+| `reference-notes-export` reference extension | **Implemented** — `extensions/reference-notes-export/` (the R7 acceptance vehicle) |
 
 The roadmap sequence is: Phase 1 (modularize) → Phase 2 (lazy + toggles, drop
 `unsafe-inline`) → **Phase 3 (Extension SDK, this doc)** → Phase 4 (Tauri) →
