@@ -2110,6 +2110,45 @@ const exportsEngine = {
   },
 };
 
+// sharedBridgeReconnect: the single BridgeReconnect policy, preloaded at boot.
+// The inline `ClaudeBridge` WebSocket executor drives it for the reconnect/
+// backoff decision (Appendix A row 28). The socket stays in JS; only the policy
+// (whether to reconnect, after how long, what status to show) is Rust. The
+// policy methods are SYNCHRONOUS once loaded — `ClaudeBridge.connect/onopen/
+// onclose` call them inside non-async WebSocket handlers — so it is preloaded on
+// boot. Until it resolves the facade returns a safe `{action:'none'}` so a
+// connect that races the load simply shows offline (the executor retries on the
+// next user action); the boot preload makes it ready well before that matters.
+let sharedBridgeReconnect = null;
+let _bridgeReconnectLoadPromise = null;
+
+function _ensureBridgeReconnectLoaded() {
+  if (_bridgeReconnectLoadPromise) return _bridgeReconnectLoadPromise;
+  _bridgeReconnectLoadPromise = (async () => {
+    const { BridgeReconnect } = await import('./bridge-engine.js');
+    if (!sharedBridgeReconnect) sharedBridgeReconnect = new BridgeReconnect();
+    await sharedBridgeReconnect.load();
+    return sharedBridgeReconnect;
+  })();
+  return _bridgeReconnectLoadPromise;
+}
+
+// `bridgeReconnect` — the synchronous reconnect-policy facade the ClaudeBridge
+// executor calls. Methods delegate to the loaded Rust surface; before the boot
+// preload resolves they return a safe no-op ({action:'none'} / offline) so a
+// boot-time connect race can never throw inside a WebSocket handler.
+const bridgeReconnect = {
+  connectRequested() { return sharedBridgeReconnect ? sharedBridgeReconnect.connectRequested() : { action: 'none' }; },
+  manualConnect() { return sharedBridgeReconnect ? sharedBridgeReconnect.manualConnect() : { action: 'none' }; },
+  open() { return sharedBridgeReconnect ? sharedBridgeReconnect.open() : { action: 'none' }; },
+  closed() { return sharedBridgeReconnect ? sharedBridgeReconnect.closed() : { action: 'none' }; },
+  setEnabled(enabled) { if (sharedBridgeReconnect) sharedBridgeReconnect.setEnabled(enabled); },
+  reset() { if (sharedBridgeReconnect) sharedBridgeReconnect.reset(); },
+  isConnected() { return sharedBridgeReconnect ? sharedBridgeReconnect.isConnected() : false; },
+  status() { return sharedBridgeReconnect ? sharedBridgeReconnect.status() : 'disconnected'; },
+  reconnectAttempt() { return sharedBridgeReconnect ? sharedBridgeReconnect.reconnectAttempt() : 0; },
+};
+
 // Add a note `{ meetingId, category, text, timestamp, triggerPhrase }`-shaped
 // object the way the old `db.notes.add({ meetingId, ...note })` did. The trigger
 // note objects carry { category, text, triggerPhrase }; timestamp may be absent
@@ -3820,21 +3859,44 @@ class ClaudeBridge {
     this.url = settings.bridgeUrl || 'ws://localhost:8765';
   }
 
+  // Connect (or auto-reconnect). The Rust reconnect policy (Appendix A row 28)
+  // owns the decision — whether to open a socket and, on close, whether/when to
+  // retry. This executor just performs the action the policy returns and reports
+  // lifecycle facts back. The policy is async-loaded; we ensure it's ready (a
+  // no-op after boot preload) so a boot-time auto-connect drives real policy.
   connect() {
-    // Respect settings toggle
+    // Respect settings toggle. setEnabled keeps the policy in sync; a disabled
+    // bridge yields {action:'none'} below (the old early-return path).
     const settings = loadSettings ? loadSettings() : {};
-    if (settings.claudeBridge === false) {
+    _ensureBridgeReconnectLoaded().then(() => {
+      bridgeReconnect.setEnabled(settings.claudeBridge !== false);
+      const decision = bridgeReconnect.connectRequested();
+      if (decision.action !== 'connect') {
+        this.updateIndicator(false);
+        return;
+      }
+      this._openSocket();
+    }).catch(err => {
+      console.warn('[ClaudeBridge] reconnect policy load failed', err);
       this.updateIndicator(false);
-      return;
-    }
+    });
+  }
+
+  // Open the WebSocket and wire its handlers. The handlers report facts to the
+  // Rust policy (open/closed) and act on the returned action (arm a backoff
+  // timer for the policy-computed delay, or stop).
+  _openSocket() {
     try {
       this.ws = new WebSocket(this.url);
 
       this.ws.onopen = () => {
         this.connected = true;
         this.updateIndicator(true);
+        bridgeReconnect.open();   // clears backoff, records success
         this.send({ type: 'connect', timestamp: Date.now() });
         console.log('[ClaudeBridge] Connected');
+        // Setup-panel feedback (only set when the user clicked "Connect").
+        if (this._onPanelOpen) { const cb = this._onPanelOpen; this._onPanelOpen = null; this._onPanelClose = null; cb(); }
       };
 
       this.ws.onmessage = (e) => {
@@ -3847,14 +3909,20 @@ class ClaudeBridge {
       };
 
       this.ws.onclose = () => {
-        const wasConnected = this.connected;
         this.connected = false;
         this.updateIndicator(false);
-        // Only auto-reconnect if we were previously connected (lost connection)
-        // Don't spam reconnects if the server was never running
-        if (wasConnected) {
-          this.reconnectTimer = setTimeout(() => this.connect(), 5000);
+        // The Rust policy decides whether to auto-reconnect (only after a prior
+        // successful connection — the old `if (wasConnected)` guard) and the
+        // backoff delay (5s → 10s → 20s → 40s, capped 60s — replacing the flat
+        // 5s). Console-logged so the backoff schedule is witnessable on real runs.
+        const decision = bridgeReconnect.closed();
+        if (decision.action === 'schedule_reconnect') {
+          const delay = decision.delay_ms;
+          console.log(`[ClaudeBridge] reconnect scheduled in ${delay}ms (attempt ${bridgeReconnect.reconnectAttempt()})`);
+          this.reconnectTimer = setTimeout(() => this.connect(), delay);
         }
+        // Setup-panel feedback (only set when the user clicked "Connect").
+        if (this._onPanelClose) { const cb = this._onPanelClose; this._onPanelOpen = null; this._onPanelClose = null; cb(); }
       };
 
       this.ws.onerror = () => {
@@ -3863,6 +3931,8 @@ class ClaudeBridge {
     } catch (err) {
       this.connected = false;
       this.updateIndicator(false);
+      // A synchronous construction failure is also a "close" to the policy.
+      bridgeReconnect.closed();
     }
   }
 
@@ -3870,6 +3940,9 @@ class ClaudeBridge {
     if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
     if (this.ws) { this.ws.close(); this.ws = null; }
     this.connected = false;
+    // Reset the policy: a manual disconnect clears `wasConnected`, so the next
+    // connect behaves like a first connect (no auto-reconnect until it succeeds).
+    bridgeReconnect.reset();
     this.updateIndicator(false);
   }
 
@@ -5551,60 +5624,53 @@ function retryBridgeConnect() {
   btn.textContent = 'Connecting...';
   status.textContent = '';
 
-  // Kill existing reconnect timer and try fresh
-  if (app.bridge) {
-    if (app.bridge.reconnectTimer) {
-      clearTimeout(app.bridge.reconnectTimer);
-      app.bridge.reconnectTimer = null;
-    }
-    if (app.bridge.ws) {
-      app.bridge.ws.close();
-      app.bridge.ws = null;
-    }
+  if (!app.bridge) return;
 
-    const settings = loadSettings();
-    app.bridge.url = settings.bridgeUrl || 'ws://localhost:8765';
+  // Tear down any in-flight socket / pending reconnect, then drive the Rust
+  // policy's manual-connect (resets backoff, always tries fresh — Appendix A
+  // row 28). The socket is opened by the executor's shared _openSocket(), so the
+  // manual path uses the SAME handlers (and the SAME policy) as auto-connect; the
+  // panel hooks below layer on the button/status UI feedback the panel needs.
+  if (app.bridge.reconnectTimer) { clearTimeout(app.bridge.reconnectTimer); app.bridge.reconnectTimer = null; }
+  if (app.bridge.ws) { app.bridge.ws.close(); app.bridge.ws = null; }
 
-    try {
-      app.bridge.ws = new WebSocket(app.bridge.url);
+  const settings = loadSettings();
+  app.bridge.url = settings.bridgeUrl || 'ws://localhost:8765';
 
-      app.bridge.ws.onopen = () => {
-        app.bridge.connected = true;
-        app.bridge.updateIndicator(true);
-        app.bridge.send({ type: 'connect', timestamp: Date.now() });
-        btn.disabled = false;
-        btn.textContent = 'Connect';
-        // Switch to connected view
-        document.getElementById('bridgeConnectedInfo').style.display = 'block';
-        document.getElementById('bridgeSetupInfo').style.display = 'none';
-        showToast('Claude bridge connected');
-      };
+  // Panel-specific success/failure UI, fired once by the executor's handlers.
+  app.bridge._onPanelOpen = () => {
+    btn.disabled = false;
+    btn.textContent = 'Connect';
+    document.getElementById('bridgeConnectedInfo').style.display = 'block';
+    document.getElementById('bridgeSetupInfo').style.display = 'none';
+    showToast('Claude bridge connected');
+  };
+  app.bridge._onPanelClose = () => {
+    btn.disabled = false;
+    btn.textContent = 'Connect';
+    status.textContent = 'Could not connect. Is the bridge server running?';
+    status.style.color = 'var(--actions)';
+  };
 
-      app.bridge.ws.onclose = () => {
-        app.bridge.connected = false;
-        app.bridge.updateIndicator(false);
-        btn.disabled = false;
-        btn.textContent = 'Connect';
-        status.textContent = 'Could not connect. Is the bridge server running?';
-        status.style.color = 'var(--actions)';
-      };
-
-      app.bridge.ws.onerror = () => {};
-
-      app.bridge.ws.onmessage = (e) => {
-        try {
-          const msg = JSON.parse(e.data);
-          app.bridge.handleMessage(msg);
-        } catch (_) {}
-      };
-
-    } catch (err) {
+  _ensureBridgeReconnectLoaded().then(() => {
+    bridgeReconnect.setEnabled(settings.claudeBridge !== false);
+    const decision = bridgeReconnect.manualConnect();
+    if (decision.action !== 'connect') {
+      app.bridge._onPanelOpen = null; app.bridge._onPanelClose = null;
       btn.disabled = false;
       btn.textContent = 'Connect';
-      status.textContent = 'Connection failed: ' + err.message;
+      status.textContent = 'Claude bridge is turned off in settings.';
       status.style.color = 'var(--actions)';
+      return;
     }
-  }
+    app.bridge._openSocket();
+  }).catch(err => {
+    app.bridge._onPanelOpen = null; app.bridge._onPanelClose = null;
+    btn.disabled = false;
+    btn.textContent = 'Connect';
+    status.textContent = 'Connection failed: ' + (err && err.message ? err.message : err);
+    status.style.color = 'var(--actions)';
+  });
 }
 
 function copyBridgeCmd(el, cmd) {
@@ -6875,6 +6941,15 @@ _ensureExportsLoaded().then(() => {
   console.log('[SilentNotetaker] exports ready (Rust/WASM formatters)');
 }).catch(err => {
   console.warn('[rust-exports] preload failed', err);
+});
+
+// Preload the Claude-bridge reconnect/backoff policy so the inline ClaudeBridge
+// executor's synchronous WebSocket handlers can drive it without a load race
+// (Appendix A row 28).
+_ensureBridgeReconnectLoaded().then(() => {
+  console.log('[SilentNotetaker] bridge reconnect policy ready (Rust/WASM)');
+}).catch(err => {
+  console.warn('[rust-bridge] preload failed', err);
 });
 
 // ESC to close modal
