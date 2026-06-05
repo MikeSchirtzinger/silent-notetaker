@@ -27,6 +27,11 @@ silent-core = { path = "../silent-core" }
 # serde-wasm-bindgen (the b2 spike's command shape). `derive` only; no browser
 # deps land here — the serde-wasm-bindgen hop lives in silent-web.
 serde = { workspace = true }
+# The registry (`registry/models.toml`) is the single source of truth (R4) and is
+# embedded at build time via `include_str!` (decision: see `selection.rs` docs),
+# so the selection module parses the embedded TOML with the same `toml` crate
+# silent-core's tests use. No browser dep; compiles for wasm32-unknown-unknown.
+toml = { workspace = true }
 
 [dev-dependencies]
 # Tests assert the on-the-wire command shape the JS host consumes.

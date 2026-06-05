@@ -7,8 +7,8 @@
 //! driven over a typed command protocol, and the `js-sherpa` host (SenseVoice).
 //! Policy — chunk sizes, Voxtral's two-cap recycle, when to feed/recycle, the
 //! Dual draft/refine coordination — stays here in Rust; the JS workers only
-//! execute (PRD R2). Registry-driven selection + device tiers land here later
-//! (Task I3).
+//! execute (PRD R2). Registry-driven selection + device tiers live in
+//! [`selection`] (Task I3).
 //!
 //! # What's implemented
 //!
@@ -34,6 +34,17 @@
 //!   the dual draft handling. Appendix A row 11; the interleaving is golden-first
 //!   from a DOM-free JS reference generator.
 //!
+//! ## Task I3 — registry-driven selection + device tiers ([`selection`])
+//!
+//! The model picker becomes registry-driven (Appendix A rows 7, 8): the embedded
+//! `registry/models.toml` is the single source of truth (R4), the
+//! [`selection::DeviceProbe`] → [`selection::DeviceTier`] resolver generalizes the
+//! Qwen tier mechanism (R3), [`selection::asr_picker_options`] builds the picker
+//! list from registry `ui` entries (so adding a model is zero code), engines
+//! carry [`selection::Availability`] verdicts with reasons + a CPU-tier
+//! recommendation (R1), and [`selection::apply_selection`] queues a mid-recording
+//! switch with a friendly "takes effect next meeting" notice (R3 decision log).
+//!
 //! ## Engine dispatch — [`engine::AnyAsrEngine`] / [`engine::JsHostEngine`]
 //!
 //! The i1 hand-off TODO: the concrete [`engine::AnyAsrEngine::JsHost`] variant
@@ -53,6 +64,7 @@
 
 pub mod dual;
 pub mod engine;
+pub mod selection;
 pub mod sensevoice;
 pub mod voxtral_recycle;
 pub mod whisper_stream;
