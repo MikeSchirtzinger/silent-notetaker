@@ -1308,6 +1308,7 @@ dependencies = [
  "serde",
  "serde_json",
  "silent-core",
+ "toml",
 ]
 
 [[package]]
@@ -1350,6 +1351,7 @@ dependencies = [
  "serde_json",
  "silent-core",
  "silent-diarization",
+ "silent-inference",
  "silent-notes",
  "silent-storage",
  "tracing",
