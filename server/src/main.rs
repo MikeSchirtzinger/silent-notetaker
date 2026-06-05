@@ -41,7 +41,7 @@ async fn main() {
     let coop = HeaderName::from_static("cross-origin-opener-policy");
     let coep = HeaderName::from_static("cross-origin-embedder-policy");
 
-    // CSP REPORT-ONLY — for tuning, NOT enforcement.
+    // CSP ENFORCED — Phase 6 / R5 (Task j3, "the privacy keystone").
     //
     // SOURCE OF TRUTH: this value MUST stay in sync with the generated policy.
     //   `cargo xtask gen-headers` derives the canonical CSP (shipping `_headers`
@@ -52,26 +52,38 @@ async fn main() {
     //   regenerated value here — do NOT hand-edit one without the other (that is
     //   exactly the drift this comment exists to prevent: an earlier copy was
     //   missing `https://cdn.pyke.io`, the ort-web onnxruntime-web runtime CDN,
-    //   producing spurious report-only violations locally that did not occur in
-    //   production where `_headers` is correct).
+    //   producing spurious violations locally that did not occur in production
+    //   where `_headers` is correct).
     //
-    // Why report-only (not the enforcing header gen_headers documents for the
-    //   local server): the shipping `_headers` ships CSP as report-only until
-    //   Phase 6 (Extension SDK). The local dev server mirrors that observation
-    //   posture so violations surface in DevTools → Console as
-    //   "[Report Only] Refused to connect to ..." without blocking transcription.
-    //   Promote to enforcing (rename to "content-security-policy") only when a
-    //   real browser run with mic + model download shows ZERO violations — and do
-    //   it in lockstep with the hosted `_headers` promotion.
+    // `'wasm-unsafe-eval'` in script-src is REQUIRED: the wasm-pack engines
+    //   compile via WebAssembly.instantiateStreaming, which an enforced CSP blocks
+    //   without it (it allows WASM compilation only, NOT JS eval). This was a
+    //   latent dependency masked by report-only; the j3 enforcement sweep surfaced
+    //   it. Fixed in gen_headers.rs (the source of truth) and copied here.
+    //
+    // ENFORCED (was report-only through Phase 1–5): the regression sweep under
+    //   enforcement found ZERO violations from the full app boot + every engine
+    //   load + the bridge once `'wasm-unsafe-eval'` was added, so the local dev
+    //   server now matches the hosted `_headers` enforcement posture. Egress that
+    //   is not in this allowlist is
+    //   BLOCKED, not merely reported — that is the privacy boundary R5 promises.
+    //   Rollback (re-open the observation period for a regressed origin):
+    //   regenerate `_headers` with `--report-only` and rename this header to
+    //   "content-security-policy-report-only" in lockstep.
+    //
+    // Per-extension `connect-src` relaxations come ONLY from the extension's own
+    //   sandboxed-iframe CSP (GrantSet::connect_src, applied by extension-host.js
+    //   as a <meta> CSP inside the iframe's srcdoc) — never from this BASE page
+    //   policy. This base policy carries no extension origins.
     //
     // ws://localhost:8765 (Claude bridge) is included; per the 2026-06-04 decision
     //   log it is also KEPT in the hosted `_headers` (localhost is inside the
     //   user's trust boundary).
-    let csp_ro = HeaderName::from_static("content-security-policy-report-only");
+    let csp = HeaderName::from_static("content-security-policy");
     // Kept byte-identical to `gen_headers::generate_local_csp_value` output.
-    let csp_ro_value = HeaderValue::from_static(
+    let csp_value = HeaderValue::from_static(
         "default-src 'self'; \
-         script-src 'self' 'unsafe-inline' blob: \
+         script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: \
              https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io; \
          worker-src 'self' blob:; \
          connect-src 'self' blob: data: \
@@ -94,9 +106,9 @@ async fn main() {
             coep,
             HeaderValue::from_static("credentialless"),
         ))
-        // Report-only CSP — observe egress violations without blocking anything.
-        // See comment block above for tuning and promotion instructions.
-        .layer(SetResponseHeaderLayer::overriding(csp_ro, csp_ro_value))
+        // Enforced CSP — egress outside the allowlist is BLOCKED (Phase 6 / R5).
+        // See comment block above for the source-of-truth + rollback procedure.
+        .layer(SetResponseHeaderLayer::overriding(csp, csp_value))
         // Dev: always reflect local edits. The browser's MODEL cache is separate
         // (IndexedDB / Cache API, keyed by origin) and is unaffected by this.
         .layer(SetResponseHeaderLayer::overriding(
