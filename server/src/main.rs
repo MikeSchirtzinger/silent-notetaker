@@ -21,10 +21,13 @@
 //! INVARIANT: cross-origin fetches must stay CORS-eligible (no no-cors mode).
 //! This value MUST stay byte-identical with `_headers` and `coi-server.py`.
 
+mod ext_route;
+
 use std::{env, net::SocketAddr, path::PathBuf};
 
 use axum::{
     http::{header::CACHE_CONTROL, HeaderName, HeaderValue},
+    routing::get,
     Router,
 };
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer, trace::TraceLayer};
@@ -78,9 +81,13 @@ async fn main() {
     //   "content-security-policy-report-only" in lockstep.
     //
     // Per-extension `connect-src` relaxations come ONLY from the extension's own
-    //   sandboxed-iframe CSP (GrantSet::connect_src, applied by extension-host.js
-    //   as a <meta> CSP inside the iframe's srcdoc) — never from this BASE page
-    //   policy. This base policy carries no extension origins.
+    //   document, served by the `/ext/<name>/` route (see `ext_route`) with a
+    //   per-extension RESPONSE-HEADER CSP built from GrantSet::connect_src(). A
+    //   response-header CSP is not inherited by the embedder (unlike the old
+    //   srcdoc `<meta>` CSP, which Chromium intersects with the base page — the j3
+    //   finding that made grants inert), so a granted origin actually takes effect
+    //   there while NEVER touching this BASE page policy. This base policy carries
+    //   no extension origins; `frame-src 'self'` authorizes framing that route.
     //
     // ws://localhost:8765 (Claude bridge) is included; per the 2026-06-04 decision
     //   log it is also KEPT in the hosted `_headers` (localhost is inside the
@@ -96,14 +103,49 @@ async fn main() {
              https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io \
              https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co \
              https://cdn-lfs-us-1.huggingface.co ws://localhost:8765; \
+         frame-src 'self'; \
          img-src 'self' data: blob:; \
          media-src 'self' blob:; \
          style-src 'self' 'unsafe-inline'",
     );
 
-    let app = Router::new()
+    // The static surface (index.html, wasm, models, …) carries the ENFORCED BASE
+    // page CSP. The base CSP MUST NOT change per extension; per-extension
+    // network grants live ONLY on the /ext/<name>/ route below.
+    //
+    // Dev cache: ServeDir gets `no-cache` so local edits always reflect. The
+    // browser's MODEL cache is separate (IndexedDB / Cache API, keyed by origin).
+    let static_app = Router::new()
         .fallback_service(serve)
-        // Cross-origin isolation → multithreaded WASM.
+        // Enforced CSP — egress outside the allowlist is BLOCKED (Phase 6 / R5).
+        // See comment block above for the source-of-truth + rollback procedure.
+        .layer(SetResponseHeaderLayer::overriding(csp, csp_value))
+        .layer(SetResponseHeaderLayer::overriding(
+            CACHE_CONTROL,
+            HeaderValue::from_static("no-cache"),
+        ));
+
+    // The per-extension document route (Task j2b — the network-grant keystone).
+    // Each installed extension is served as a DISTINCT same-origin document whose
+    // OWN response-header CSP carries exactly its granted `connect-src` (from the
+    // sanitized `o=` query params the in-page host derives from
+    // `GrantSet::connect_src()`). A response-header CSP is NOT inherited from the
+    // embedder (unlike the old `srcdoc`/`<meta>` CSP), so a granted origin
+    // actually takes effect — while `sandbox="allow-scripts"` still forces the
+    // opaque origin that keeps the extension out of the host's IndexedDB /
+    // localStorage. `serve_extension_doc` sets the per-extension CSP + `no-store`;
+    // we do NOT apply the base CSP layer here. COOP/COEP ARE applied (below, to
+    // the merged router) so the ext doc can be framed in the isolated base page.
+    let ext_app = Router::new()
+        .route("/ext/{name}/", get(ext_route::serve_extension_doc))
+        .route("/ext/{name}", get(ext_route::serve_extension_doc));
+
+    let app = ext_app
+        .merge(static_app)
+        // Cross-origin isolation → multithreaded WASM. Applied to BOTH surfaces:
+        // the base page needs it for SharedArrayBuffer; the ext doc needs
+        // require-corp + same-origin COOP so it can be embedded in the isolated
+        // base page without breaking `crossOriginIsolated`.
         .layer(SetResponseHeaderLayer::overriding(
             coop,
             HeaderValue::from_static("same-origin"),
@@ -112,21 +154,17 @@ async fn main() {
             coep,
             HeaderValue::from_static("require-corp"),
         ))
-        // Enforced CSP — egress outside the allowlist is BLOCKED (Phase 6 / R5).
-        // See comment block above for the source-of-truth + rollback procedure.
-        .layer(SetResponseHeaderLayer::overriding(csp, csp_value))
-        // Dev: always reflect local edits. The browser's MODEL cache is separate
-        // (IndexedDB / Cache API, keyed by origin) and is unaffected by this.
-        .layer(SetResponseHeaderLayer::overriding(
-            CACHE_CONTROL,
-            HeaderValue::from_static("no-cache"),
-        ))
         .layer(TraceLayer::new_for_http());
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let canon = std::fs::canonicalize(&dir).unwrap_or_else(|_| dir.clone());
-    tracing::info!("Notetaker server → http://localhost:{port}   serving {}", canon.display());
-    tracing::info!("cross-origin isolated (COOP=same-origin, COEP=require-corp) → multithreaded WASM enabled");
+    tracing::info!(
+        "Notetaker server → http://localhost:{port}   serving {}",
+        canon.display()
+    );
+    tracing::info!(
+        "cross-origin isolated (COOP=same-origin, COEP=require-corp) → multithreaded WASM enabled"
+    );
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await

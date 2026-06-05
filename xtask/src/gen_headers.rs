@@ -358,6 +358,7 @@ fn build_csp(registry: &Registry) -> String {
          script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: {script_cdns}; \
          worker-src 'self' blob:; \
          connect-src {connect_src}; \
+         frame-src 'self'; \
          img-src 'self' data: blob:; \
          media-src 'self' blob:; \
          style-src 'self' 'unsafe-inline'"
@@ -659,6 +660,25 @@ mod tests {
             "missing cdn.pyke.io: {csp}"
         );
         assert!(csp.contains("ws://localhost:8765"), "missing bridge: {csp}");
+    }
+
+    #[test]
+    fn base_csp_allows_self_framing_for_ext_route() {
+        // The per-extension document route (`/ext/<name>/`, Task j2b) is
+        // same-origin and must be framable from the base page; `frame-src 'self'`
+        // authorizes exactly that and nothing cross-origin. The base CSP carries
+        // NO extension network origins — those live only on the ext route's own
+        // response-header CSP.
+        let registry = make_minimal_registry();
+        let csp = build_csp(&registry);
+        assert!(
+            csp.contains("frame-src 'self'"),
+            "missing frame-src 'self': {csp}"
+        );
+        assert!(
+            !csp.contains("api.notion.com"),
+            "base CSP must not carry extension origins: {csp}"
+        );
     }
 
     #[test]

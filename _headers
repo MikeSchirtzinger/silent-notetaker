@@ -25,4 +25,4 @@
 /*
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
-Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io; worker-src 'self' blob:; connect-src 'self' blob: data: https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co ws://localhost:8765; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'
+Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io; worker-src 'self' blob:; connect-src 'self' blob: data: https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co ws://localhost:8765; frame-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'
