@@ -87,6 +87,14 @@ pub mod exports;
 #[cfg(target_arch = "wasm32")]
 pub mod nemotron;
 
+/// Wasm-bindgen Claude-bridge reconnect surface (Phase 4, Task x4). Wasm32 only.
+/// Wraps `silent_core::bridge::ReconnectPolicy` — the deterministic
+/// reconnect/backoff + status state machine. The JS executor (`bridge-engine.js`
+/// driving the inline `ClaudeBridge`) keeps the WebSocket; only the policy moved
+/// (Appendix A row 28).
+#[cfg(target_arch = "wasm32")]
+pub mod bridge;
+
 #[cfg(target_arch = "wasm32")]
 pub use diarization::WasmDiarization;
 
@@ -98,3 +106,6 @@ pub use notes::{WasmCorrections, WasmNoteEngine, WasmQuestionScheduler};
 
 #[cfg(target_arch = "wasm32")]
 pub use session::WasmSession;
+
+#[cfg(target_arch = "wasm32")]
+pub use bridge::WasmBridgeReconnect;
