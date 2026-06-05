@@ -96,11 +96,21 @@ export class DiarizationEngine {
     this._loadPromise = (async () => {
       this.onStatus?.('Loading speaker model (TitaNet ~40MB, first time only)...');
 
-      // Import the wasm-pack ES module.
-      const mod = await import(this.pkgUrl);
-      // wasm-pack generates a default export (init glue) + named exports for
-      // each #[wasm_bindgen] item.
-      await mod.default();   // initialises the wasm binary
+      // Import + initialise the wasm-pack ES module via the SHARED cross-loader
+      // promise (see session-engine.js): `mod.default()` must run exactly once
+      // across all engine loaders, or a concurrent boot-time init double-
+      // initializes the wasm binary and corrupts the heap. wasm-pack generates a
+      // default export (init glue) + named exports for each #[wasm_bindgen] item.
+      const mod = await (() => {
+        const w = (typeof window !== 'undefined') ? window : globalThis;
+        const cache = (w.__silentWebModulePromises ||= new Map());
+        let p = cache.get(this.pkgUrl);
+        if (!p) {
+          p = (async () => { const m = await import(this.pkgUrl); await m.default(); return m; })();
+          cache.set(this.pkgUrl, p);
+        }
+        return p;
+      })();
 
       // Fetch TitaNet ONNX weights.
       this.onStatus?.('Fetching TitaNet ONNX session...');

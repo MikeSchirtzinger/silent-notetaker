@@ -43,16 +43,27 @@ const DEFAULT_PKG_URL = new URL('./crates/silent-web/pkg/silent_web.js', import.
  * after the first init). We still guard the init so a `NotesEngine` created
  * before the diarization engine initializes the wasm binary works standalone.
  */
-let _modPromise = null;
-
+//
+// Shared, cross-loader module-init promise (see session-engine.js for the full
+// rationale): `silent_web.js`'s `default()` init is only idempotent AFTER the
+// first init resolves, so two loaders calling it concurrently (the boot race
+// between this notes loader and session-engine.js) double-initialize the wasm
+// binary and corrupt the heap. One promise per pkg URL, shared across every
+// engine loader via the `window.__silentWebModulePromises` map, guarantees a
+// single `import()` + `default()`.
 function _loadModule(pkgUrl) {
-  if (_modPromise) return _modPromise;
-  _modPromise = (async () => {
-    const mod = await import(pkgUrl);
-    await mod.default();   // initialises the wasm binary (no-op if already done)
-    return mod;
-  })();
-  return _modPromise;
+  const w = (typeof window !== 'undefined') ? window : globalThis;
+  const cache = (w.__silentWebModulePromises ||= new Map());
+  let p = cache.get(pkgUrl);
+  if (!p) {
+    p = (async () => {
+      const mod = await import(pkgUrl);
+      await mod.default();   // initialises the wasm binary exactly once
+      return mod;
+    })();
+    cache.set(pkgUrl, p);
+  }
+  return p;
 }
 
 export class NotesEngine {
