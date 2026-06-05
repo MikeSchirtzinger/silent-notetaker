@@ -43,37 +43,10 @@
 const DEFAULT_PKG_URL    = new URL('./crates/silent-web/pkg/silent_web.js', import.meta.url).href;
 const DEFAULT_MODEL_BASE = new URL('./crates/nemotron-asr/models/', import.meta.url).href;
 
-/* onnxruntime-web defaults to min(4, ceil(hardwareConcurrency/2)) WASM threads — 4 on a
-   10-core M1 Pro, leaving half the performance cores idle under the INT8 encoder. The
-   `ort` global is created by ort-web's CDN script *inside* WasmNemotron.create(), so to
-   raise the count before the wasm runtime initializes (first session build) we trap the
-   global's assignment. Threads need SharedArrayBuffer, so this no-ops without cross-origin
-   isolation — ort would fall back to 1 anyway. */
-function raiseOrtWasmThreads(desired) {
-  if (typeof window === 'undefined' || !window.crossOriginIsolated || !(desired > 1)) return;
-  const apply = (ort) => {
-    if (!ort) return;
-    let tries = 0;
-    const tick = () => {
-      try { if (ort.env && ort.env.wasm) { ort.env.wasm.numThreads = desired; return; } } catch (_) { return; }
-      if (++tries < 100) setTimeout(tick, 10);
-    };
-    tick();
-  };
-  if (window.ort) { apply(window.ort); return; }
-  // Seed with a benign empty object: ort-web's loader probes `window.ort[initSymbol]`
-  // whenever the property exists, and an accessor returning undefined would make that
-  // probe throw (it wedges load() at "Building sessions").
-  let val = {};
-  try {
-    Object.defineProperty(window, 'ort', {
-      configurable: true,
-      enumerable: true,
-      get() { return val; },
-      set(v) { val = v; apply(v); },
-    });
-  } catch (_) { /* defineProperty refused — live with ort's default thread count */ }
-}
+// raiseOrtWasmThreads now lives in the permanent ort-web-loader.js module so
+// any future ort-web host (TitaNet, Whisper-ort, …) can share the same
+// thread-count trap without duplicating it. Imported here for backward compat.
+import { raiseOrtWasmThreads } from './apps/web/js/ort-web-loader.js';
 
 // How much audio to buffer before each transcribe_chunk call — the dominant lever on
 // *perceived* latency. 250 ms feeds ⇒ a chunk decodes ~every 560 ms of speech, ~0.6-0.9 s

@@ -3005,138 +3005,97 @@ class TranscriptionManager {
     this.senseVoice = null;
     this.dual = null;
     this._voxtralPolicy = null;
+    // CaptureGraph instance (apps/web/js/capture.js, PRD R2). Created lazily on
+    // first _initCapture() call; owns the AudioWorklet graph, getDisplayMedia,
+    // and the screenshot pipeline. Properties on this (audioContext, mediaStream,
+    // isRecording, systemStream) are kept in sync with capture after each call.
+    this.capture = null;
+  }
+
+  // Create (or replace) the CaptureGraph instance with the current callbacks.
+  // Called once per recording session; safe to call again on resume.
+  async _initCapture() {
+    const { CaptureGraph } = await import('./apps/web/js/capture.js');
+    const tm = this;
+    this.capture = new CaptureGraph({
+      onSamples: null, // each engine sets its own callback via startAudioCapture(override)
+      onScreenshot: (base64, timestamp) => { if (tm.onScreenshot) tm.onScreenshot(base64, timestamp); },
+      getStorage: () => (typeof storage !== 'undefined' ? storage : null),
+      getMeetingId: () => tm.currentMeetingId,
+      onSystemAudioEnded: () => { if (tm.onSystemAudioEnded) tm.onSystemAudioEnded(); },
+    });
+    return this.capture;
   }
 
   startScreenshotCapture(videoTrack) {
-    this.videoTrack = videoTrack;
-
-    // Create hidden video element to render the track
-    this.videoElement = document.createElement('video');
-    this.videoElement.srcObject = new MediaStream([videoTrack]);
-    this.videoElement.muted = true;
-    this.videoElement.play();
-
-    // Create canvas for frame capture
-    this.captureCanvas = document.createElement('canvas');
-    this.captureCtx = this.captureCanvas.getContext('2d', { willReadFrequently: true });
-
-    // Capture every 15 seconds
-    this.screenshotInterval = setInterval(() => this.captureFrame(), 15000);
-    // Also capture first frame after short delay
-    setTimeout(() => this.captureFrame(), 2000);
+    // Delegate to CaptureGraph (apps/web/js/capture.js — permanent module).
+    if (this.capture) {
+      this.capture.startScreenshotCapture(videoTrack);
+      // Keep compat aliases in sync.
+      this.videoTrack = this.capture.videoTrack;
+      this.videoElement = this.capture.videoElement;
+      this.captureCanvas = this.capture.captureCanvas;
+      this.captureCtx = this.capture.captureCtx;
+      this.screenshotInterval = this.capture.screenshotInterval;
+      this.lastFrameHash = this.capture.lastFrameHash;
+    } else {
+      // Fallback (capture not yet initialised — should not happen in normal flow).
+      console.warn('[TranscriptionManager] startScreenshotCapture: capture not ready');
+    }
   }
 
   captureFrame() {
-    if (!this.videoElement || this.videoElement.readyState < 2) return;
-
-    // Scale to max 640px wide for thumbnails
-    const vw = this.videoElement.videoWidth;
-    const vh = this.videoElement.videoHeight;
-    if (vw === 0 || vh === 0) return;
-
-    const scale = Math.min(640 / vw, 1);
-    const w = Math.round(vw * scale);
-    const h = Math.round(vh * scale);
-
-    this.captureCanvas.width = w;
-    this.captureCanvas.height = h;
-    this.captureCtx.drawImage(this.videoElement, 0, 0, w, h);
-
-    // Quick similarity check: sample pixels and compute a rough hash
-    const imageData = this.captureCtx.getImageData(0, 0, w, h).data;
-    let hash = 0;
-    const step = Math.max(1, Math.floor(imageData.length / 256));
-    for (let i = 0; i < imageData.length; i += step) {
-      hash = ((hash << 5) - hash + imageData[i]) | 0;
+    // Delegate to CaptureGraph (apps/web/js/capture.js — permanent module).
+    if (this.capture) {
+      this.capture.captureFrame();
+      this.lastFrameHash = this.capture.lastFrameHash;
     }
-
-    // Skip if frame is very similar to last one
-    if (this.lastFrameHash !== null && this.lastFrameHash === hash) return;
-    this.lastFrameHash = hash;
-
-    // Convert to JPEG blob
-    this.captureCanvas.toBlob((blob) => {
-      if (!blob) return;
-
-      // Convert to base64 for storage and sending
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        const base64 = reader.result; // data:image/jpeg;base64,...
-        const timestamp = Date.now();
-
-        // Store in IndexedDB (Rust storage — base64 data-URL string, stored as
-        // UTF-8 bytes with the `base64` encoding marker).
-        storage.addScreenshot(this.currentMeetingId, timestamp, base64, w, h)
-          .catch(err => console.warn('[screenshot] storage add failed', err));
-
-        // Notify main app (it will send to Claude if connected)
-        if (this.onScreenshot) this.onScreenshot(base64, timestamp);
-      };
-      reader.readAsDataURL(blob);
-    }, 'image/jpeg', 0.7);
   }
 
   stopScreenshotCapture() {
-    if (this.screenshotInterval) { clearInterval(this.screenshotInterval); this.screenshotInterval = null; }
-    if (this.videoTrack) { this.videoTrack.stop(); this.videoTrack = null; }
-    if (this.videoElement) { this.videoElement.srcObject = null; this.videoElement = null; }
-    this.captureCanvas = null;
-    this.captureCtx = null;
-    this.lastFrameHash = null;
+    // Delegate to CaptureGraph (apps/web/js/capture.js — permanent module).
+    if (this.capture) {
+      this.capture.stopScreenshotCapture();
+      this.screenshotInterval = null;
+      this.videoTrack = null;
+      this.videoElement = null;
+      this.captureCanvas = null;
+      this.captureCtx = null;
+      this.lastFrameHash = null;
+    } else {
+      // Null-safe fallback when capture is not initialised.
+      if (this.screenshotInterval) { clearInterval(this.screenshotInterval); this.screenshotInterval = null; }
+      if (this.videoTrack)   { this.videoTrack.stop();               this.videoTrack   = null; }
+      if (this.videoElement) { this.videoElement.srcObject = null;    this.videoElement = null; }
+      this.captureCanvas = null;
+      this.captureCtx    = null;
+      this.lastFrameHash = null;
+    }
   }
 
   /**
-   * Shared audio capture pipeline used by every engine.
-   * Uses AudioWorklet (runs in the audio render thread) so samples don't drop
-   * when the main thread stalls. Mic and tab audio both feed `this.audioInputNode`,
-   * a GainNode mixer; the worklet posts a Float32Array per render quantum.
+   * Shared audio capture pipeline used by every engine. Delegates to CaptureGraph
+   * (apps/web/js/capture.js — permanent module, PRD R2). Uses AudioWorklet so
+   * samples don't drop when the main thread stalls. Mic and tab audio both feed
+   * the GainNode mixer; the worklet posts a Float32Array per render quantum.
    *
    * @param {(samples: Float32Array) => void} onSamples — 16kHz mono samples
    */
   async _startAudioCapture(onSamples) {
-    this.audioContext = new AudioContext({ sampleRate: 16000 });
-    if (this.audioContext.state === 'suspended') {
-      await this.audioContext.resume();
+    if (!this.capture) await this._initCapture();
+    // Sync the mediaStream from TranscriptionManager to the CaptureGraph so
+    // engine-specific start paths that pre-open the mic (startMoonshine etc.)
+    // share the already-open stream.
+    if (this.mediaStream && !this.capture.mediaStream) {
+      this.capture.mediaStream = this.mediaStream;
     }
-
-    // Mixer node — addSystemAudio() also connects into this so mic + tab audio sum here.
-    this.audioInputNode = this.audioContext.createGain();
-    this.audioInputNode.gain.value = 1.0;
-
-    const micSource = this.audioContext.createMediaStreamSource(this.mediaStream);
-    micSource.connect(this.audioInputNode);
-
-    const workletSrc = `
-      class CaptureProcessor extends AudioWorkletProcessor {
-        process(inputs) {
-          const input = inputs[0];
-          if (input.length > 0 && input[0].length > 0) {
-            this.port.postMessage(input[0]);
-          }
-          return true;
-        }
-      }
-      registerProcessor("capture-processor", CaptureProcessor);
-    `;
-    const workletUrl = URL.createObjectURL(new Blob([workletSrc], { type: 'application/javascript' }));
-    await this.audioContext.audioWorklet.addModule(workletUrl);
-    URL.revokeObjectURL(workletUrl);
-
-    this.processor = new AudioWorkletNode(this.audioContext, 'capture-processor');
-    this.processor.port.onmessage = (e) => {
-      if (!this.isRecording) return;
-      onSamples(new Float32Array(e.data));
-    };
-
-    // Silent gain keeps the graph live without echoing audio back to speakers.
-    const silentGain = this.audioContext.createGain();
-    silentGain.gain.value = 0;
-
-    this.audioInputNode.connect(this.processor);
-    this.processor.connect(silentGain);
-    silentGain.connect(this.audioContext.destination);
-
-    this.isRecording = true;
+    await this.capture.startAudioCapture(onSamples);
+    // Sync compat aliases back so existing call sites keep working.
+    this.audioContext   = this.capture.audioContext;
+    this.audioInputNode = this.capture.audioInputNode;
+    this.processor      = this.capture.processor;
+    this.mediaStream    = this.capture.mediaStream;
+    this.isRecording    = this.capture.isRecording;
   }
 
   async startMoonshine() {
@@ -3876,62 +3835,34 @@ class TranscriptionManager {
   }
 
   async addSystemAudio() {
-    if (!this.audioContext || !this.processor) {
+    // Delegate to CaptureGraph (apps/web/js/capture.js — permanent module).
+    if (!this.capture) await this._initCapture();
+    if (!this.capture.audioContext || !this.capture.processor) {
       throw new Error('Start recording first, then add tab audio.');
     }
-
-    // Request tab/screen sharing — video:true required by Chrome to enable tab audio
-    const displayStream = await navigator.mediaDevices.getDisplayMedia({
-      audio: {
-        channelCount: 1,
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-      },
-      video: true,
-    });
-
-    // Keep first video track for screenshot capture, stop the rest
-    const videoTracks = displayStream.getVideoTracks();
-    if (videoTracks.length > 0) {
-      this.startScreenshotCapture(videoTracks[0]);
-      for (let i = 1; i < videoTracks.length; i++) videoTracks[i].stop();
-    }
-
-    const audioTracks = displayStream.getAudioTracks();
-    if (audioTracks.length === 0) {
-      throw new Error('No audio track from shared tab. Make sure "Share tab audio" is checked.');
-    }
-
-    // Store for cleanup
-    this.systemStream = displayStream;
-
-    // Create source and connect to the same processor — Web Audio sums (mixes) inputs
-    const systemSource = this.audioContext.createMediaStreamSource(
-      new MediaStream(audioTracks)
-    );
-
-    // Optional: add gain to balance system vs mic levels
-    this.systemGain = this.audioContext.createGain();
-    this.systemGain.gain.value = 1.5; // boost tab audio slightly
-    systemSource.connect(this.systemGain);
-    this.systemGain.connect(this.audioInputNode);
-
-    this.systemSource = systemSource;
-
-    // Detect when user stops sharing from browser chrome
-    audioTracks[0].onended = () => {
-      this.onStatus('Tab audio sharing ended', null);
-      this.removeSystemAudio();
-      if (this.onSystemAudioEnded) this.onSystemAudioEnded();
-    };
+    await this.capture.addSystemAudio();
+    // Sync compat aliases (systemStream checked by App.shareTab()).
+    this.systemStream  = this.capture.systemStream;
+    this.systemSource  = this.capture.systemSource;
+    this.systemGain    = this.capture.systemGain;
   }
 
+  
+
   removeSystemAudio() {
-    this.stopScreenshotCapture();
-    if (this.systemSource) { try { this.systemSource.disconnect(); } catch(_) {} this.systemSource = null; }
-    if (this.systemGain) { try { this.systemGain.disconnect(); } catch(_) {} this.systemGain = null; }
-    if (this.systemStream) { this.systemStream.getTracks().forEach(t => t.stop()); this.systemStream = null; }
+    // Delegate to CaptureGraph (apps/web/js/capture.js — permanent module).
+    if (this.capture) {
+      this.capture.removeSystemAudio();
+      this.systemStream = null;
+      this.systemSource = null;
+      this.systemGain   = null;
+    } else {
+      // Null-safe fallback.
+      this.stopScreenshotCapture();
+      if (this.systemSource) { try { this.systemSource.disconnect(); } catch (_) {} this.systemSource = null; }
+      if (this.systemGain)   { try { this.systemGain.disconnect();   } catch (_) {} this.systemGain   = null; }
+      if (this.systemStream) { this.systemStream.getTracks().forEach(t => t.stop()); this.systemStream = null; }
+    }
   }
 
   stop() {
@@ -3941,12 +3872,23 @@ class TranscriptionManager {
     // voxtralStopRequested — a stale loop can never be revived (no duplicate loops).
     this.voxtralStopRequested = true;
     this._voxtralRunId++;
-    this.stopScreenshotCapture();
-    this.removeSystemAudio();
-    // Disconnect audio pipeline but keep models alive
-    if (this.processor) { this.processor.disconnect(); this.processor = null; }
-    if (this.audioContext) { this.audioContext.close(); this.audioContext = null; }
-    if (this.mediaStream) { this.mediaStream.getTracks().forEach(t => t.stop()); this.mediaStream = null; }
+    // Tear down the audio capture graph via CaptureGraph (permanent module), which
+    // internally stops screenshots + system audio + mic + AudioContext.
+    if (this.capture) {
+      this.capture.stop();
+      // Sync compat aliases to null.
+      this.audioContext = null; this.audioInputNode = null; this.processor = null;
+      this.mediaStream  = null; this.systemStream   = null;
+      this.systemSource = null; this.systemGain     = null;
+      this.screenshotInterval = null; this.videoTrack = null; this.videoElement = null;
+    } else {
+      // Null-safe fallback (capture was never initialised — e.g. stop called before start).
+      this.stopScreenshotCapture();
+      this.removeSystemAudio();
+      if (this.processor)    { try { this.processor.disconnect(); } catch (_) {} this.processor    = null; }
+      if (this.audioContext) { try { this.audioContext.close();   } catch (_) {} this.audioContext  = null; }
+      if (this.mediaStream)  { this.mediaStream.getTracks().forEach(t => t.stop()); this.mediaStream = null; }
+    }
     // Reset Voxtral ring; clear stop flag once the loop has fully drained.
     if (this.voxtralRing) this.voxtralRing.reset();
     if (this._voxtralTranscriptionPromise) {
@@ -3983,216 +3925,92 @@ class TranscriptionManager {
 }
 
 /* ════════════════════════════════════════════
-   ClaudeBridge — WebSocket client for enhanced AI analysis
-═══════════════════════════════════════════ */
-class ClaudeBridge {
-  constructor() {
-    this.ws = null;
-    this.connected = false;
-    this.reconnectTimer = null;
-    this.callbacks = {};
-    const settings = loadSettings ? loadSettings() : {};
-    this.url = settings.bridgeUrl || 'ws://localhost:8765';
-  }
+   ClaudeBridge — WebSocket client for enhanced AI analysis.
 
-  // Connect (or auto-reconnect). The Rust reconnect policy (Appendix A row 28)
-  // owns the decision — whether to open a socket and, on close, whether/when to
-  // retry. This executor just performs the action the policy returns and reports
-  // lifecycle facts back. The policy is async-loaded; we ensure it's ready (a
-  // no-op after boot preload) so a boot-time auto-connect drives real policy.
-  connect() {
-    // Respect settings toggle. setEnabled keeps the policy in sync; a disabled
-    // bridge yields {action:'none'} below (the old early-return path).
-    const settings = loadSettings ? loadSettings() : {};
-    _ensureBridgeReconnectLoaded().then(() => {
-      bridgeReconnect.setEnabled(settings.claudeBridge !== false);
-      const decision = bridgeReconnect.connectRequested();
-      if (decision.action !== 'connect') {
-        this.updateIndicator(false);
-        return;
+   RELOCATED to apps/web/js/bridge-client.js (permanent module, PRD R2).
+   This block is the inbound-message handler that must stay in index.html
+   because it touches DOM globals (app, storage, showToast, …). The executor
+   (WebSocket connect/send/receive + Rust reconnect policy) lives in
+   bridge-client.js and is dynamically imported by App._initBridge().
+
+   The null-safe bridge proxy (_makeNullBridge) is used until the import
+   resolves; its interface exactly matches ClaudeBridge's so all call sites
+   (app.bridge.send/sendTranscript/sendScreenshot/…) continue to work.
+════════════════════════════════════════════ */
+
+// Inbound message handler. Called by the ClaudeBridge.onMessage callback; stays
+// in index.html because it calls app/storage/showToast (DOM/app globals).
+function _handleBridgeMessage(msg) {
+  switch (msg.type) {
+    case 'connected':
+      console.log(`[ClaudeBridge] Model: ${msg.model}`);
+      break;
+
+    case 'enhanced_notes':
+      // Claude returned better categorized notes
+      if (msg.notes && Array.isArray(msg.notes)) {
+        for (const note of msg.notes) {
+          if (app && app.renderNote) app.renderNote(note);
+        }
       }
-      this._openSocket();
-    }).catch(err => {
-      console.warn('[ClaudeBridge] reconnect policy load failed', err);
-      this.updateIndicator(false);
-    });
-  }
+      break;
 
-  // Open the WebSocket and wire its handlers. The handlers report facts to the
-  // Rust policy (open/closed) and act on the returned action (arm a backoff
-  // timer for the policy-computed delay, or stop).
-  _openSocket() {
-    try {
-      this.ws = new WebSocket(this.url);
-
-      this.ws.onopen = () => {
-        this.connected = true;
-        this.updateIndicator(true);
-        bridgeReconnect.open();   // clears backoff, records success
-        this.send({ type: 'connect', timestamp: Date.now() });
-        console.log('[ClaudeBridge] Connected');
-        // Setup-panel feedback (only set when the user clicked "Connect").
-        if (this._onPanelOpen) { const cb = this._onPanelOpen; this._onPanelOpen = null; this._onPanelClose = null; cb(); }
-      };
-
-      this.ws.onmessage = (e) => {
-        try {
-          const msg = JSON.parse(e.data);
-          this.handleMessage(msg);
-        } catch (err) {
-          console.error('[ClaudeBridge] Parse error:', err);
+    case 'screenshot_analysis':
+      // Claude analyzed a screenshot — add as a key point
+      if (msg.content && app) {
+        const note = {
+          category: 'keypoints',
+          text: '\uD83D\uDCCA ' + msg.content,
+          timestamp: msg.timestamp || Date.now(),
+          triggerPhrase: 'screenshot_analysis'
+        };
+        if (app.meetingId) {
+          _addNoteObj(app.meetingId, note).then(id => {
+            app.renderNote({ ...note, id });
+          });
+        } else {
+          app.renderNote(note);
         }
-      };
 
-      this.ws.onclose = () => {
-        this.connected = false;
-        this.updateIndicator(false);
-        // The Rust policy decides whether to auto-reconnect (only after a prior
-        // successful connection — the old `if (wasConnected)` guard) and the
-        // backoff delay (5s → 10s → 20s → 40s, capped 60s — replacing the flat
-        // 5s). Console-logged so the backoff schedule is witnessable on real runs.
-        const decision = bridgeReconnect.closed();
-        if (decision.action === 'schedule_reconnect') {
-          const delay = decision.delay_ms;
-          console.log(`[ClaudeBridge] reconnect scheduled in ${delay}ms (attempt ${bridgeReconnect.reconnectAttempt()})`);
-          this.reconnectTimer = setTimeout(() => this.connect(), delay);
+        // Also mark screenshot as analyzed
+        if (msg.timestamp) {
+          storage.markScreenshotAnalyzed(msg.timestamp, msg.content)
+            .catch(err => console.warn('[screenshot-analyze] storage modify failed', err));
         }
-        // Setup-panel feedback (only set when the user clicked "Connect").
-        if (this._onPanelClose) { const cb = this._onPanelClose; this._onPanelOpen = null; this._onPanelClose = null; cb(); }
-      };
+      }
+      break;
 
-      this.ws.onerror = () => {
-        // Will trigger onclose
-      };
-    } catch (err) {
-      this.connected = false;
-      this.updateIndicator(false);
-      // A synchronous construction failure is also a "close" to the policy.
-      bridgeReconnect.closed();
-    }
-  }
+    case 'enhanced_summary':
+      // Claude returned a better summary — show it in the summary modal
+      if (msg.markdown && app) {
+        app.showClaudeSummary(msg.markdown);
+      }
+      break;
 
-  disconnect() {
-    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = null; }
-    if (this.ws) { this.ws.close(); this.ws = null; }
-    this.connected = false;
-    // Reset the policy: a manual disconnect clears `wasConnected`, so the next
-    // connect behaves like a first connect (no auto-reconnect until it succeeds).
-    bridgeReconnect.reset();
-    this.updateIndicator(false);
-  }
+    case 'context':
+      // Real-time context surfaced during meeting
+      if (msg.text) {
+        showToast('\uD83D\uDCA1 ' + msg.text, 4000);
+      }
+      break;
 
-  send(msg) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
-      return true;
-    }
-    return false;
-  }
-
-  // Send transcript chunk for enhanced analysis
-  sendTranscript(text, timestamp) {
-    return this.send({ type: 'transcript_chunk', text, timestamp });
-  }
-
-  // Send screenshot for visual analysis
-  sendScreenshot(imageBase64, timestamp) {
-    return this.send({ type: 'screenshot', image_base64: imageBase64, timestamp });
-  }
-
-  // Request enhanced summary at end of meeting
-  requestSummary(transcript, notes, screenshots) {
-    return this.send({ type: 'generate_summary', transcript, notes, screenshots });
-  }
-
-  // Ad-hoc query during meeting
-  query(question) {
-    return this.send({ type: 'query', question });
-  }
-
-  handleMessage(msg) {
-    switch (msg.type) {
-      case 'connected':
-        console.log(`[ClaudeBridge] Model: ${msg.model}`);
-        break;
-
-      case 'enhanced_notes':
-        // Claude returned better categorized notes
-        if (msg.notes && Array.isArray(msg.notes)) {
-          for (const note of msg.notes) {
-            if (app && app.renderNote) app.renderNote(note);
-          }
+    case 'query_response':
+    case 'response':
+      // Handle speaker name inference response
+      if (app && app.bridge && app.bridge._pendingSpeakerId && msg.text && app.tm && app.tm.speakerTracker) {
+        const inferredName = msg.text.trim();
+        if (inferredName && inferredName.toLowerCase() !== 'unknown') {
+          renameSpeaker(app.bridge._pendingSpeakerId, inferredName);
+          renderSpeakerTags();
+          showToast(`Speaker ${app.bridge._pendingSpeakerId} identified as: ${inferredName}`, 3000);
         }
-        break;
+        app.bridge._pendingSpeakerId = null;
+      }
+      break;
 
-      case 'screenshot_analysis':
-        // Claude analyzed a screenshot — add as a key point
-        if (msg.content && app) {
-          const note = {
-            category: 'keypoints',
-            text: '\uD83D\uDCCA ' + msg.content,
-            timestamp: msg.timestamp || Date.now(),
-            triggerPhrase: 'screenshot_analysis'
-          };
-          if (app.meetingId) {
-            _addNoteObj(app.meetingId, note).then(id => {
-              app.renderNote({ ...note, id });
-            });
-          } else {
-            app.renderNote(note);
-          }
-
-          // Also mark screenshot as analyzed
-          if (msg.timestamp) {
-            storage.markScreenshotAnalyzed(msg.timestamp, msg.content)
-              .catch(err => console.warn('[screenshot-analyze] storage modify failed', err));
-          }
-        }
-        break;
-
-      case 'enhanced_summary':
-        // Claude returned a better summary — show it in the summary modal
-        if (msg.markdown && app) {
-          app.showClaudeSummary(msg.markdown);
-        }
-        break;
-
-      case 'context':
-        // Real-time context surfaced during meeting
-        if (msg.text) {
-          showToast('\uD83D\uDCA1 ' + msg.text, 4000);
-        }
-        break;
-
-      case 'query_response':
-      case 'response':
-        // Handle speaker name inference response
-        if (this._pendingSpeakerId && msg.text && app && app.tm && app.tm.speakerTracker) {
-          const inferredName = msg.text.trim();
-          if (inferredName && inferredName.toLowerCase() !== 'unknown') {
-            renameSpeaker(this._pendingSpeakerId, inferredName);
-            renderSpeakerTags();
-            showToast(`Speaker ${this._pendingSpeakerId} identified as: ${inferredName}`, 3000);
-          }
-          this._pendingSpeakerId = null;
-        }
-        break;
-
-      case 'error':
-        console.error('[ClaudeBridge] Error:', msg.message);
-        break;
-    }
-  }
-
-  updateIndicator(connected) {
-    const dot = document.getElementById('claudeDot');
-    const label = document.getElementById('claudeLabel');
-    if (dot) {
-      dot.className = connected ? 'claude-dot connected' : 'claude-dot';
-    }
-    if (label) {
-      label.textContent = connected ? 'Claude connected' : 'Claude offline';
-    }
+    case 'error':
+      console.error('[ClaudeBridge] Error:', msg.message);
+      break;
   }
 }
 
@@ -4294,8 +4112,61 @@ class App {
     this.timerInterval = null;   // the host's 1 s tick handle (machine has no clock)
     this.totalNotes = 0;
     this.totalWords = 0;
-    this.bridge = new ClaudeBridge();
-    this.bridge.connect(); // Auto-connect on page load, reconnects silently
+    // bridge-client.js is an ES module (permanent JS module, PRD R2); this is a
+    // classic script, so ClaudeBridge is dynamically imported. Until the import
+    // resolves, `this.bridge` is a null-safe proxy with the same interface so all
+    // call sites (sendTranscript, sendScreenshot, connected, …) work without guards.
+    // The real bridge swaps in and auto-connects in _initBridge() below.
+    this.bridge = this._makeNullBridge();
+    this._initBridge(); // async; does not block App construction
+  }
+
+  // Null-safe bridge proxy — matches the ClaudeBridge interface exactly. Methods
+  // silently no-op or return safe values until the real ClaudeBridge is loaded.
+  _makeNullBridge() {
+    return {
+      ws: null, connected: false, reconnectTimer: null, callbacks: {},
+      url: (typeof loadSettings === 'function' ? loadSettings() : {}).bridgeUrl || 'ws://localhost:8765',
+      _pendingSpeakerId: null, _onPanelOpen: null, _onPanelClose: null,
+      connect() {},
+      disconnect() {},
+      send() { return false; },
+      sendTranscript() { return false; },
+      sendScreenshot() { return false; },
+      requestSummary() { return false; },
+      query() { return false; },
+      _openSocket() {},
+      setReconnectPolicy() {},
+      updateIndicator(connected) {
+        const dot   = document.getElementById('claudeDot');
+        const label = document.getElementById('claudeLabel');
+        if (dot)   { dot.className   = connected ? 'claude-dot connected' : 'claude-dot'; }
+        if (label) { label.textContent = connected ? 'Claude connected' : 'Claude offline'; }
+      },
+    };
+  }
+
+  // Dynamically import ClaudeBridge, wire the reconnect policy + message handler,
+  // and start the auto-connect. Swaps this.bridge from the null proxy to the real
+  // instance. Any call sites that ran on the null proxy before this resolves were
+  // no-ops (safe: bridge.py is a local tool that may not be running anyway).
+  async _initBridge() {
+    try {
+      const { ClaudeBridge } = await import('./apps/web/js/bridge-client.js');
+      // Ensure the Rust reconnect policy is loaded (boot preload may already have
+      // done this; _ensureBridgeReconnectLoaded() is idempotent).
+      await _ensureBridgeReconnectLoaded();
+      const bridge = new ClaudeBridge({
+        reconnectPolicy: bridgeReconnect,
+        loadSettings: (typeof loadSettings === 'function') ? loadSettings : () => ({}),
+        onMessage: _handleBridgeMessage,
+      });
+      this.bridge = bridge;
+      bridge.connect(); // Auto-connect on page load, reconnects silently
+      console.log('[SilentNotetaker] ClaudeBridge ready (bridge-client.js)');
+    } catch (err) {
+      console.warn('[SilentNotetaker] ClaudeBridge import failed:', err);
+    }
   }
 
   // Dynamically import + load the SessionEngine, then swap it in for the stub
@@ -4483,9 +4354,13 @@ class App {
 
       if (canResume) {
         // Models loaded — re-create audio pipeline and resume
-        this.tm.mediaStream = await navigator.mediaDevices.getUserMedia({
+        // Open mic for resume; store on tm AND propagate to capture so _startAudioCapture
+        // can reuse the already-opened stream (avoids a double getUserMedia prompt).
+        const _resumeMic = await navigator.mediaDevices.getUserMedia({
           audio: { channelCount: 1, sampleRate: 16000, echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         });
+        this.tm.mediaStream = _resumeMic;
+        if (this.tm.capture) this.tm.capture.mediaStream = _resumeMic;
 
         if (this.tm.engine === 'voxtral' && this.tm.voxtralModel) {
           // Voxtral resume: delegate to the single loop owner. It stops/awaits any prior
@@ -4760,7 +4635,8 @@ class App {
 
     // If already sharing, remove it. The machine drops the Tab source (row 6)
     // and emits sources_changed → the badge clears via _applySession.
-    if (this.tm.systemStream) {
+    const _hasSystemAudio = this.tm.capture ? this.tm.capture.systemStream : this.tm.systemStream;
+    if (_hasSystemAudio) {
       this.tm.removeSystemAudio();
       this._applySession(this.session.removeTabAudio(Date.now()));
       this.handleStatus('Tab audio removed', null);

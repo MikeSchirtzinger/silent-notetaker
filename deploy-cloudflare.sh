@@ -81,6 +81,19 @@ cp extension-host.js "$DIST/"
 mkdir -p "$DIST/extensions"
 cp -r extensions/reference-notes-export "$DIST/extensions/reference-notes-export"
 
+# Permanent JS modules (apps/web/js/ — PRD R2 "JS keeps the hands").
+# These are the four modules that stay JavaScript by design in the final hybrid
+# architecture: capture.js (audio capture graph + screenshot pipeline),
+# transformers-host.js (js-transformers executor worker source),
+# ort-web-loader.js (ort-web runtime config), and bridge-client.js (WS executor).
+# They are imported at runtime by the *-engine.js loaders and index.html;
+# they must be served at the same path the import() calls resolve to.
+mkdir -p "$DIST/apps/web/js"
+cp apps/web/js/capture.js           "$DIST/apps/web/js/"
+cp apps/web/js/transformers-host.js "$DIST/apps/web/js/"
+cp apps/web/js/ort-web-loader.js    "$DIST/apps/web/js/"
+cp apps/web/js/bridge-client.js     "$DIST/apps/web/js/"
+
 # Cloudflare Pages response headers (COOP/COEP + CSP)
 cp _headers "$DIST/"
 
