@@ -97,10 +97,66 @@ function _escapeScript(src) {
   return String(src).replace(/<\/script/gi, '<\\/script').replace(/<!--/g, '<\\!--');
 }
 
-function _bootstrapHtml(extensionId, entrypointSource) {
+/**
+ * Build the per-extension `connect-src` directive value for the iframe's own
+ * CSP. This is the NETWORK half of the keystone (PRD R7 / j3):
+ *
+ *   - The base page CSP (from `_headers` / the axum server) is NOT relaxed for
+ *     extensions — it never contains an extension origin.
+ *   - Each extension's sandboxed iframe carries its OWN enforced CSP via a
+ *     `<meta http-equiv="Content-Security-Policy">`, whose `connect-src` is
+ *     EXACTLY the origins the user granted (`GrantSet::connect_src`, computed in
+ *     Rust) and nothing else.
+ *   - An extension with NO network grant gets `connect-src 'none'` → it cannot
+ *     reach ANY host. An undeclared `fetch()` (e.g. https://example.com) is
+ *     BLOCKED by the iframe's CSP and emits a `securitypolicyviolation` event,
+ *     which the bootstrap reports back to the host for logging (R7 acceptance).
+ *   - An extension WITH a declared origin grant gets that origin in its
+ *     `connect-src`. NOTE (J3 finding): a `srcdoc` iframe INHERITS the embedder's
+ *     CSP in Chromium, and CSP combines by intersection — a child may only
+ *     tighten, never widen, the base page `connect-src`. So while this meta CSP
+ *     correctly DENIES everything by default (the privacy-critical case, fully
+ *     enforced + witnessed), a GRANTED origin is still blocked by the inherited
+ *     base policy unless it is also in the base page CSP (which by design it is
+ *     not). Functional grants require serving each extension from a distinct
+ *     same-origin document whose RESPONSE-HEADER CSP carries only that
+ *     extension's policy (no inheritance) — a J2 isolation/serving change tracked
+ *     as a follow-up (see docs/EXTENSIONS.md §7). This meta CSP is the deny-floor
+ *     and the ready-to-use grant plumbing; the serving primitive is the gap.
+ *
+ * `connectSrcOrigins` is the verbatim `GrantSet::connect_src()` output (already
+ * validated full origins, no wildcards — the manifest validator rejects those).
+ */
+function _extensionCspMeta(connectSrcOrigins) {
+  const origins = Array.isArray(connectSrcOrigins) ? connectSrcOrigins : [];
+  // Deny-by-default: an empty grant set yields `connect-src 'none'`.
+  const connectSrc = origins.length ? origins.join(' ') : "'none'";
+  // The iframe runs inlined extension code + inline styles it writes itself, so
+  // script/style 'unsafe-inline' are required for the sandbox to function; but
+  // network egress is locked to exactly the granted origins. No `default-src`
+  // fallthrough to network: connect-src is explicit, and img/media/font are
+  // pinned to self+data so an extension cannot beacon via an <img> either.
+  const directives = [
+    "default-src 'none'",
+    "script-src 'unsafe-inline'",
+    "style-src 'unsafe-inline'",
+    "img-src data:",
+    "font-src data:",
+    `connect-src ${connectSrc}`,
+  ];
+  return directives.join('; ');
+}
+
+function _bootstrapHtml(extensionId, entrypointSource, connectSrcOrigins) {
   // NOTE: this string is the iframe's whole document. It contains NO host data.
   // The extension source is inlined; it never sees host globals or the host DOM.
+  //
+  // The <meta> CSP below is the per-extension network boundary: connect-src is
+  // exactly the granted origins (or 'none'). This is enforced by the browser
+  // INSIDE the sandbox, independent of (and never relaxing) the base page CSP.
+  const cspMeta = _extensionCspMeta(connectSrcOrigins);
   return `<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="${String(cspMeta).replace(/"/g, '&quot;')}">
 <style>
   :root { color-scheme: dark; }
   html,body { margin:0; padding:0; background:#12121a; color:#e0e0e8;
@@ -143,6 +199,23 @@ function _bootstrapHtml(extensionId, entrypointSource) {
         if (root) root.innerHTML = String(html);
       },
     };
+    // R7 keystone: report this sandbox's OWN CSP violations back to the host so
+    // an undeclared/blocked fetch is LOGGED (not silently swallowed). The
+    // browser fires this on every connect-src (and other) violation inside the
+    // iframe; the host records it to its violation log + console.
+    window.addEventListener('securitypolicyviolation', function (ev) {
+      try {
+        parent.postMessage({
+          __silentExtCsp: true,
+          extensionId: EXT_ID,
+          violation: {
+            directive: ev.effectiveDirective || ev.violatedDirective || '',
+            blockedURI: ev.blockedURI || '',
+            disposition: ev.disposition || 'enforce',
+          },
+        }, '*');
+      } catch (e) { /* never let reporting throw inside the sandbox */ }
+    });
     window.addEventListener('message', function (ev) {
       var data = ev.data;
       if (!data) return;
@@ -215,6 +288,18 @@ export class ExtensionHost {
     this.ready = false;
     /** @type {Map<string, ExtensionInstance>} name → running instance */
     this.instances = new Map();
+
+    /**
+     * The R7 violation log: every CSP `connect-src` (or other) violation an
+     * extension iframe reports lands here AND in the console. `index.html`
+     * surfaces this so a blocked undeclared fetch is auditable (PRD R7
+     * "blocked by CSP and reported in logs"). Capped to avoid unbounded growth.
+     * @type {Array<{extensionId:string, directive:string, blockedURI:string,
+     *               disposition:string, at:string}>}
+     */
+    this.cspViolations = [];
+    /** Optional sink called on each violation (host wires it for UI/logging). */
+    this.onCspViolation = opts.onCspViolation || null;
 
     this._onWindowMessage = this._onWindowMessage.bind(this);
   }
@@ -337,13 +422,19 @@ export class ExtensionHost {
     if (!res.ok) throw new Error('entrypoint ' + manifest.entrypoint + ' HTTP ' + res.status);
     const entrypointSource = await res.text();
 
+    // The NETWORK boundary: ask the Rust policy for THIS extension's exact
+    // connect-src origins (GrantSet::connect_src). Empty ⇒ network-denied. These
+    // — and only these — go into the iframe's own CSP (the base page CSP is never
+    // relaxed; PRD R7 / docs/EXTENSIONS.md §1.3, §2).
+    const connectSrcOrigins = this.connectSrc(grantSet);
+
     const iframe = document.createElement('iframe');
     // The hard isolation: allow-scripts but NOT allow-same-origin → null origin.
     iframe.setAttribute('sandbox', 'allow-scripts');
     iframe.setAttribute('title', 'Extension: ' + (manifest.displayName || name));
     iframe.className = 'ext-panel-frame';
     iframe.dataset.extension = name;
-    iframe.srcdoc = _bootstrapHtml(name, entrypointSource);
+    iframe.srcdoc = _bootstrapHtml(name, entrypointSource, connectSrcOrigins);
 
     const inst = new ExtensionInstance(grantSet, iframe);
     this.instances.set(name, inst);
@@ -395,6 +486,34 @@ export class ExtensionHost {
   _onWindowMessage(ev) {
     const data = ev.data;
     if (!data) return;
+
+    // R7: a sandbox reporting one of ITS OWN CSP violations (e.g. an undeclared
+    // fetch blocked by the per-extension connect-src). Log it loudly + record it.
+    if (data.__silentExtCsp) {
+      let inst = null;
+      for (const candidate of this.instances.values()) {
+        if (candidate.iframe.contentWindow === ev.source) { inst = candidate; break; }
+      }
+      // Trust the source-matched instance name over the (sandboxed) payload.
+      const extensionId = inst ? inst.name : String(data.extensionId || 'unknown');
+      const v = data.violation || {};
+      const record = {
+        extensionId,
+        directive: String(v.directive || ''),
+        blockedURI: String(v.blockedURI || ''),
+        disposition: String(v.disposition || 'enforce'),
+        at: new Date().toISOString(),
+      };
+      this.cspViolations.push(record);
+      if (this.cspViolations.length > 200) this.cspViolations.shift();
+      console.warn(
+        '[rust-ext] CSP VIOLATION (' + record.disposition + ') in extension "' +
+        extensionId + '": ' + record.directive + ' blocked ' + record.blockedURI);
+      if (typeof this.onCspViolation === 'function') {
+        try { this.onCspViolation(record); } catch (_e) { /* never throw on logging */ }
+      }
+      return;
+    }
 
     // An extension iframe announcing it is ready: flush any queued host messages.
     if (data.__silentExtReady) {
