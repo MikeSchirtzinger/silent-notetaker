@@ -66,6 +66,14 @@ pub mod notes;
 #[cfg(target_arch = "wasm32")]
 pub mod session;
 
+/// Wasm-bindgen browser-storage surface (Phase 4, Task h2/x2 wiring). Wasm32
+/// only. Wraps `silent-storage`: the live CRUD that replaces Dexie, the zero-loss
+/// Dexie v2 migration with export-backup, history queries, and the durable
+/// per-meeting speaker-rename map (Appendix A rows 1, 3, 16, 17, 19, 26, 27, 29,
+/// 33, plus the Phase-F carry-forward).
+#[cfg(target_arch = "wasm32")]
+pub mod storage;
+
 /// Wasm-bindgen Nemotron ASR surface (Phase 3, Task w4). Wasm32 only. Wraps
 /// `nemotron-asr`'s `WasmAsr` behind the typed `EngineEvent` boundary.
 #[cfg(target_arch = "wasm32")]

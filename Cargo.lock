@@ -1339,6 +1339,7 @@ dependencies = [
  "silent-core",
  "silent-diarization",
  "silent-notes",
+ "silent-storage",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",

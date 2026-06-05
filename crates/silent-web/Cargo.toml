@@ -48,3 +48,9 @@ console_error_panic_hook = "0.1"
 # keeps its own RC pins for `ort`/`ort-web`; depending on it here only on wasm32
 # keeps the native `cargo check` free of an ort-web link.
 nemotron-asr = { path = "../nemotron-asr" }
+# The browser storage + zero-loss migration surface (Phase 4, Task h2/x2). Its
+# `#[wasm_bindgen]` exports (migrate_database, the live CRUD, the durable
+# speaker-name map) are pulled into the single `silent_web.js` pkg when this crate
+# links it — the same "one wasm binary, many surfaces" pattern as the other
+# modules. Wasm32-only: silent-storage's IDB runtime never enters the native build.
+silent-storage = { path = "../silent-storage" }
