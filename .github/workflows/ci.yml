@@ -8,6 +8,7 @@
 #   4. boundary-fresh    — export_bindings freshness gate (C1's contract check)
 #   5. xtask-gates       — model-audit + gen-headers --check
 #   6. link-check        — docs + registry link validation (non-blocking)
+#   7. reproducible-wasm — build wasm twice (assert byte-identical), publish sha256 manifest (R8)
 #
 # NOTE: xtask-gates uses continue-on-error: true for model-audit and gen-headers
 # because d2-xtask (Task D2) is building those subcommands concurrently and
@@ -464,3 +465,103 @@ jobs:
             README.md
           fail: false
           token: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Job 7: Reproducible wasm — build the deployed wasm with remapped paths,
+  # PUBLISH the sha256 of every artifact (PRD R8), and PROVE determinism by
+  # building twice from clean and asserting byte-identical output.
+  #
+  # The published `wasm-hashes.txt` artifact is the same manifest the deploy
+  # bundles and the in-app About panel verifies against (settings → About &
+  # integrity). pinned wasm-pack 0.13.1 (bundles wasm-bindgen 0.2.100 +
+  # wasm-opt v117) is required for byte-identity — see scripts/build-wasm.sh.
+  # ---------------------------------------------------------------------------
+  reproducible-wasm:
+    name: "Reproducible wasm (build twice, publish sha256)"
+    runs-on: ubuntu-latest
+    needs: core-gates
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain + wasm32 target
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.95.0"
+          components: "rust-src"
+          targets: "wasm32-unknown-unknown"
+
+      - name: Cache Cargo registry + build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-wasm-repro-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-repro-
+
+      # Pin wasm-pack 0.13.1 — wasm-bindgen/wasm-opt are vendored by it and their
+      # output bytes are version-specific, so the version is part of the
+      # reproducibility contract documented in scripts/build-wasm.sh + README.
+      - name: Install wasm-pack 0.13.1
+        run: |
+          curl -sSfL https://github.com/rustwasm/wasm-pack/releases/download/v0.13.1/wasm-pack-v0.13.1-x86_64-unknown-linux-musl.tar.gz \
+            | tar -xz --strip-components=1 -C /usr/local/bin --wildcards '*/wasm-pack'
+          wasm-pack --version
+
+      # --- Build #1 (reproducible, remapped paths) ---
+      - name: "Build wasm (run 1)"
+        run: ./scripts/build-wasm.sh | tee /tmp/wasm-hashes-1.txt
+
+      - name: "Snapshot run-1 artifacts"
+        run: |
+          mkdir -p /tmp/run1
+          cp crates/silent-web/pkg/silent_web_bg.wasm        /tmp/run1/
+          cp crates/nemotron-asr/pkg/nemotron_asr_bg.wasm    /tmp/run1/
+          # Extract just the manifest lines (drop the build log).
+          grep -E '^[0-9a-f]{64}  ' /tmp/wasm-hashes-1.txt > /tmp/run1/wasm-hashes.txt
+          cat /tmp/run1/wasm-hashes.txt
+
+      # --- Build #2 from clean — MUST match run 1 byte-for-byte ---
+      - name: "Clean the two wasm crates"
+        run: |
+          cargo clean -p silent-web -p nemotron-asr
+          rm -rf crates/silent-web/pkg crates/nemotron-asr/pkg
+
+      - name: "Build wasm (run 2)"
+        run: ./scripts/build-wasm.sh | tee /tmp/wasm-hashes-2.txt
+
+      - name: "Assert determinism: run1 == run2"
+        run: |
+          grep -E '^[0-9a-f]{64}  ' /tmp/wasm-hashes-1.txt | sort > /tmp/h1
+          grep -E '^[0-9a-f]{64}  ' /tmp/wasm-hashes-2.txt | sort > /tmp/h2
+          echo "=== run 1 ==="; cat /tmp/h1
+          echo "=== run 2 ==="; cat /tmp/h2
+          if ! diff -u /tmp/h1 /tmp/h2; then
+            echo "::error::Non-deterministic wasm build — run 1 and run 2 hashes differ."
+            exit 1
+          fi
+          echo "Deterministic: both wasm artifacts are byte-identical across two clean builds."
+
+      # --- Publish the manifest (PRD R8 requirement) ---
+      - name: "Write wasm-hashes.txt manifest"
+        run: |
+          {
+            echo "# Silent Notetaker — deployed wasm sha256 manifest (PRD R8)."
+            echo "# Built by CI job reproducible-wasm on $(date -u +%Y-%m-%dT%H:%M:%SZ)."
+            echo "# Commit: ${GITHUB_SHA}"
+            echo "# Reproduce: ./scripts/build-wasm.sh  (see README → Verify the binary)."
+            echo "# Format: <sha256>  <path-relative-to-app-root>"
+            grep -E '^[0-9a-f]{64}  ' /tmp/wasm-hashes-2.txt
+          } > wasm-hashes.txt
+          cat wasm-hashes.txt
+
+      - name: "Publish wasm sha256 manifest artifact"
+        uses: actions/upload-artifact@v4
+        with:
+          name: wasm-hashes
+          path: wasm-hashes.txt
+          if-no-files-found: error

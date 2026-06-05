@@ -34,13 +34,15 @@ done
 PROJECT="${CF_PAGES_PROJECT:-silent-notetaker}"
 DIST="dist"
 
-# ── 1. Build wasm-pack crates ──────────────────────────────────────────────
+# ── 1. Build wasm-pack crates (reproducible — PRD R8) ──────────────────────
+#
+# Delegate to scripts/build-wasm.sh so the deployed bytes are the SAME bytes a
+# fresh local clone reproduces (remapped source paths → stable hash). The script
+# builds both crates and prints the sha256 manifest, which we capture and ship in
+# the bundle so the running app can verify hosted == source (settings → About).
 
-echo "▸ Building crates/nemotron-asr (wasm-pack, --target web --release) ..."
-wasm-pack build crates/nemotron-asr --target web --release
-
-echo "▸ Building crates/silent-web (wasm-pack, --target web --release) ..."
-wasm-pack build crates/silent-web --target web --release
+echo "▸ Building wasm (reproducible, scripts/build-wasm.sh) ..."
+WASM_MANIFEST="$(./scripts/build-wasm.sh | tail -2)"
 
 # ── 2. Assemble dist/ ─────────────────────────────────────────────────────
 
@@ -90,6 +92,42 @@ cp -r crates/nemotron-asr/pkg "$DIST/crates/nemotron-asr/pkg"
 
 mkdir -p "$DIST/crates/silent-web"
 cp -r crates/silent-web/pkg "$DIST/crates/silent-web/pkg"
+
+# ── 2b. wasm hashes manifest (PRD R8) ──────────────────────────────────────
+#
+# Re-hash the wasm exactly as it sits in the bundle (the bytes that will be
+# served) and write the served-relative manifest the running app fetches to
+# verify hosted == source. Paths are relative to the deploy root (= index.html's
+# base URL), so the app can request `./wasm-hashes.txt` and match each entry
+# against the bytes it actually loaded.
+echo "▸ Writing wasm-hashes.txt manifest into bundle ..."
+sha256_bundle() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}';
+  else shasum -a 256 "$1" | awk '{print $1}'; fi
+}
+{
+  echo "# Silent Notetaker — deployed wasm sha256 manifest (PRD R8)."
+  echo "# Reproduce locally: ./scripts/build-wasm.sh   (see README → Verify the binary)."
+  echo "# Format: <sha256>  <path-relative-to-app-root>"
+  printf '%s  crates/silent-web/pkg/silent_web_bg.wasm\n' \
+    "$(sha256_bundle "$DIST/crates/silent-web/pkg/silent_web_bg.wasm")"
+  printf '%s  crates/nemotron-asr/pkg/nemotron_asr_bg.wasm\n' \
+    "$(sha256_bundle "$DIST/crates/nemotron-asr/pkg/nemotron_asr_bg.wasm")"
+} > "$DIST/wasm-hashes.txt"
+cat "$DIST/wasm-hashes.txt"
+
+# Sanity: the in-bundle hashes MUST equal what build-wasm.sh just reported. If
+# the copy into dist/ ever changed a byte, this catches it before deploy.
+echo "▸ Cross-checking bundle hashes against the build manifest ..."
+DIST_SW="$(sha256_bundle "$DIST/crates/silent-web/pkg/silent_web_bg.wasm")"
+DIST_NE="$(sha256_bundle "$DIST/crates/nemotron-asr/pkg/nemotron_asr_bg.wasm")"
+if ! grep -q "$DIST_SW" <<< "$WASM_MANIFEST" || ! grep -q "$DIST_NE" <<< "$WASM_MANIFEST"; then
+  echo "✗ Bundle wasm hash does not match the freshly-built artifact. Aborting." >&2
+  echo "  build manifest:" >&2; echo "$WASM_MANIFEST" >&2
+  echo "  bundle: $DIST_SW  silent_web   $DIST_NE  nemotron_asr" >&2
+  exit 1
+fi
+echo "✓ Bundle wasm == freshly-built wasm."
 
 echo "▸ Bundle contents:"
 find "$DIST" -type f | sort

@@ -1180,6 +1180,23 @@
       color: var(--text-faint);
       font-weight: 400;
     }
+    /* About & integrity — running-wasm hash verification (PRD R8) */
+    .integrity-row { padding: 8px 0; border-bottom: 1px solid var(--border); }
+    .integrity-row:last-of-type { border-bottom: none; }
+    .integrity-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .integrity-name { font-size: 12px; color: var(--text); font-weight: 500; }
+    .integrity-badge {
+      font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+      padding: 2px 7px; border-radius: 4px; text-transform: uppercase;
+    }
+    .integrity-ok   { background: rgba(34,197,94,0.16);  color: #4ade80; }
+    .integrity-warn { background: rgba(234,179,8,0.16);  color: #facc15; }
+    .integrity-bad  { background: rgba(239,68,68,0.16);  color: #f87171; }
+    .integrity-hash {
+      margin-top: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 10.5px; color: var(--text-faint); word-break: break-all; line-height: 1.5;
+    }
+    .integrity-expected { color: #f87171; }
     .settings-select, .settings-input {
       background: var(--surface-raised);
       border: 1px solid var(--border);
@@ -6960,6 +6977,12 @@ function openSettings() {
         <div id="extManagerSlot"><div class="ext-mgr-empty">Loading…</div></div>
       </div>
 
+      <div class="settings-section">
+        <div class="settings-section-title">About &amp; integrity</div>
+        <p class="settings-hint" style="margin-bottom:8px">The app's logic now compiles to WebAssembly. You no longer have to trust that the hosted binary matches the source — you can <strong>verify the binary you are running</strong>. Each module below is hashed live (SHA-256, in your browser) and compared against the manifest shipped with this deploy. Reproduce the same hashes from source with <code>./scripts/build-wasm.sh</code>.</p>
+        <div id="integritySlot"><div class="settings-hint">Computing module hashes…</div></div>
+      </div>
+
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="resetSettings()">Reset Defaults</button>
@@ -6973,6 +6996,12 @@ function openSettings() {
   // until the host + persisted grant sets resolve).
   if (typeof _renderExtManager === 'function') {
     _renderExtManager().catch(err => console.warn('[rust-ext] manager render failed', err));
+  }
+  // Populate the About & integrity panel: hash the running wasm in-browser and
+  // compare against the bundled manifest (PRD R8). Async; the slot shows
+  // "Computing…" until crypto.subtle finishes.
+  if (typeof _renderIntegrity === 'function') {
+    _renderIntegrity().catch(err => console.warn('[integrity] render failed', err));
   }
 }
 
@@ -7403,6 +7432,110 @@ async function confirmInstallExtension(name) {
 }
 
 /* Render the installed-extensions manager rows inside the Settings modal. */
+// ── About & integrity: verify the running wasm (PRD R8) ──────────────────────
+//
+// wasm-pack ended the no-build-step era, so the honest replacement for "audit
+// the single HTML file" is "verify the binary you are running". We fetch each
+// deployed wasm module, hash its bytes with crypto.subtle (SHA-256, entirely
+// in-browser, no egress), and compare against `wasm-hashes.txt` — the manifest
+// the deploy bundles (deploy-cloudflare.sh) from the exact bytes it ships.
+// Anyone can reproduce the same hashes from source with ./scripts/build-wasm.sh.
+//
+// The wasm-module paths mirror the engine loaders' DEFAULT_PKG_URL constants
+// (e.g. diarization-engine.js → crates/silent-web/pkg/silent_web_bg.wasm). The
+// `*_bg.wasm` is the raw module fetched and instantiated by the wasm-pack glue,
+// so hashing it is hashing the literal bytes the CPU runs.
+const INTEGRITY_MODULES = [
+  { label: 'Core (silent-web)', path: 'crates/silent-web/pkg/silent_web_bg.wasm' },
+  { label: 'Nemotron ASR',      path: 'crates/nemotron-asr/pkg/nemotron_asr_bg.wasm' },
+];
+
+async function _sha256Hex(buffer) {
+  const digest = await crypto.subtle.digest('SHA-256', buffer);
+  return Array.from(new Uint8Array(digest))
+    .map(b => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+// Parse `wasm-hashes.txt` → { '<path>': '<sha256>' }. Lines are
+// "<sha256>  <path>"; comment/blank lines are ignored.
+function _parseHashManifest(text) {
+  const map = {};
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const m = trimmed.match(/^([0-9a-fA-F]{64})\s+(.+)$/);
+    if (m) map[m[2].trim()] = m[1].toLowerCase();
+  }
+  return map;
+}
+
+async function _renderIntegrity() {
+  const slot = document.getElementById('integritySlot');
+  if (!slot) return;
+
+  // Fetch the bundled manifest (same-origin). Absent on a dev checkout that
+  // hasn't run the deploy/build manifest step — we still show the live hash so
+  // it can be compared by eye against ./scripts/build-wasm.sh output.
+  let manifest = null;
+  let manifestErr = null;
+  try {
+    const manifestUrl = new URL('./wasm-hashes.txt', document.baseURI).href;
+    const res = await fetch(manifestUrl, { cache: 'no-store' });
+    if (res.ok) {
+      manifest = _parseHashManifest(await res.text());
+    } else {
+      manifestErr = `manifest HTTP ${res.status}`;
+    }
+  } catch (err) {
+    manifestErr = (err && err.message) || 'manifest fetch failed';
+  }
+
+  const rows = await Promise.all(INTEGRITY_MODULES.map(async (mod) => {
+    let live = null, err = null;
+    try {
+      const url = new URL('./' + mod.path, document.baseURI).href;
+      const res = await fetch(url, { cache: 'no-store' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      live = await _sha256Hex(await res.arrayBuffer());
+    } catch (e) {
+      err = (e && e.message) || 'fetch failed';
+    }
+
+    const expected = manifest ? manifest[mod.path] : undefined;
+    let badge, badgeClass;
+    if (err) {
+      badge = 'ERROR'; badgeClass = 'integrity-bad';
+    } else if (!manifest) {
+      badge = 'NO MANIFEST'; badgeClass = 'integrity-warn';
+    } else if (expected === undefined) {
+      badge = 'NOT IN MANIFEST'; badgeClass = 'integrity-warn';
+    } else if (expected === live) {
+      badge = 'VERIFIED'; badgeClass = 'integrity-ok';
+    } else {
+      badge = 'MISMATCH'; badgeClass = 'integrity-bad';
+    }
+
+    const shown = err ? esc(err) : esc(live);
+    const expectedLine = (manifest && expected && expected !== live && !err)
+      ? `<div class="integrity-hash integrity-expected">expected: ${esc(expected)}</div>` : '';
+    return `<div class="integrity-row">
+      <div class="integrity-head">
+        <span class="integrity-name">${esc(mod.label)}</span>
+        <span class="integrity-badge ${badgeClass}">${badge}</span>
+      </div>
+      <div class="integrity-hash">${shown}</div>
+      ${expectedLine}
+    </div>`;
+  }));
+
+  const footer = manifestErr
+    ? `<div class="settings-hint" style="margin-top:6px">No bundled manifest (${esc(manifestErr)}). The live SHA-256 above can still be compared by eye against <code>./scripts/build-wasm.sh</code>.</div>`
+    : `<div class="settings-hint" style="margin-top:6px">Verified against <code>wasm-hashes.txt</code> shipped with this deploy.</div>`;
+
+  slot.innerHTML = rows.join('') + footer;
+}
+
 async function _renderExtManager() {
   const slot = document.getElementById('extManagerSlot');
   if (!slot) return;

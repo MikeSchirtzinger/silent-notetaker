@@ -4,7 +4,7 @@
 
 Open a tab, hit record, and it transcribes the conversation in real time, figures out *who said what*, pulls out the decisions / action items / open questions as they happen, and even suggests the next question worth asking — all on-device, using speech and language models that run locally on your GPU and CPU.
 
-The entire application is a **single HTML file**. There is no build step, no server requirement, and nothing to sign into. You can read every line of what it does.
+The application policy — speaker diarization, note extraction, smart-question scheduling, storage, the engine state machine — is written in **Rust, compiled to WebAssembly**, with a thin HTML/JS shell for the UI. That means there is now a build step, but it buys you something stronger than "read the single file": the build is **reproducible**, and the running app shows you the SHA-256 of its own wasm so you can verify that the binary you are running is the one this source produces. See [Verify the binary you are running](#verify-the-binary-you-are-running).
 
 ---
 
@@ -31,6 +31,31 @@ browser's network panel and watch.
 (See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for how this is generated and enforced, and [`SECURITY.md`](SECURITY.md) for what counts as a privacy-boundary vulnerability.)
 
 There are whole categories of conversation — legal, medical, hiring, finance, M&A, journalism with sources — where "the audio left the building" is simply a non-starter. This is built for those.
+
+---
+
+## Verify the binary you are running
+
+The privacy story is only as good as the binary that actually runs in your tab. The application logic is Rust compiled to WebAssembly, so "read the single HTML file" no longer covers it. Instead, the build is **reproducible** and the app **shows you the hash of its own wasm** — so you can confirm the hosted app is built from this source, byte for byte, without trusting us.
+
+**Three commands — clone, build, compare:**
+
+```bash
+git clone https://github.com/MikeSchirtzinger/silent-notetaker.git
+cd silent-notetaker
+./scripts/build-wasm.sh
+```
+
+`build-wasm.sh` prints the SHA-256 of each deployed wasm module, e.g.:
+
+```
+3de64f5b8237f32b223193281763ad60a1190edeb9f3113ced73048ff4215dae  crates/silent-web/pkg/silent_web_bg.wasm
+4e9e12f6d8b0fe2c649b325b7f4396d199f85cbef3f88e192af009c27d2b80b5  crates/nemotron-asr/pkg/nemotron_asr_bg.wasm
+```
+
+Now open the running app, go to **Settings → About & integrity**, and you'll see the same two hashes with a green **VERIFIED** badge — the app computed them live (`crypto.subtle`, in your browser) over the wasm it actually loaded and matched them against the `wasm-hashes.txt` manifest shipped with the deploy. **The hash from your local build equals the hash the app reports.** That is the whole proof: hosted == source.
+
+**What makes it reproducible (and what can break it):** the output bytes are pinned by `rust-toolchain.toml` (Rust 1.95.0), the committed `Cargo.lock`, the release profile in `Cargo.toml`, and **wasm-pack 0.13.1** (which bundles wasm-bindgen 0.2.100 + wasm-opt v117). The script remaps machine-specific source paths (your `CARGO_HOME`, the toolchain sysroot, the checkout path) to stable tokens via `--remap-path-prefix`, so the hash does **not** depend on where you cloned or where your toolchain lives — a fresh clone in any directory on any machine with the same toolchain produces the same bytes. A *different* wasm-pack version is the most common reason a hash won't match; the script prints the version it used. CI rebuilds the wasm twice from clean and fails if the two builds differ, then publishes the `wasm-hashes` manifest as a build artifact.
 
 ---
 
@@ -94,7 +119,7 @@ All models are pulled from Hugging Face at runtime except TitaNet, which is bund
 
 ## Architecture
 
-The whole app — markup, styles, all logic, the inlined transcription worker — is in `index.html`. It's a single file on purpose: trivial to share, trivial to audit, impossible to hide a phone-home in. Internally it's a clean set of classes (`TranscriptionManager`, `SpeakerEmbedder`, `SpeakerTracker`, `QuestionGenerator`, `NoteEngine`, `App`, …).
+The UI shell — markup, styles, the engine loaders, the inlined transcription worker — lives in `index.html` and a handful of small ES modules (`diarization-engine.js`, `notes-engine.js`, …). The application *policy* lives in Rust crates under `crates/` and compiles to two wasm modules (`silent-web`, `nemotron-asr`). This is no longer a "read the single file" story, so we replaced it with a stronger one: the build is reproducible and the app verifies its own wasm hash in-app (see [Verify the binary you are running](#verify-the-binary-you-are-running)). Internally the Rust core is a clean set of crates (`silent-core` contracts, `silent-diarization`, `silent-notes`, `silent-storage`, `silent-inference`, `nemotron-asr`, …) driving a thin JS host.
 
 ```
                           ┌─────────────────────────────┐

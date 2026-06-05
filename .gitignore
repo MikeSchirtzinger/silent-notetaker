@@ -28,6 +28,12 @@ token
 # Cloudflare Pages deploy bundle (assembled by deploy-cloudflare.sh)
 /dist/
 
+# Generated wasm sha256 manifest. scripts/build-wasm.sh writes it at the repo
+# root so start.sh's root-served app can verify itself in-app (Settings → About);
+# the deploy writes its own copy into dist/. Regenerated from source — never
+# committed (a stale committed copy would falsely claim VERIFIED).
+/wasm-hashes.txt
+
 # Locally downloaded chromedriver binaries (browser-wasm-tests.sh caches these here)
 /vendor/chromedriver/
 
