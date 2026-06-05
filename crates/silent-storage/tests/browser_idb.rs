@@ -144,3 +144,84 @@ fn live_idb_migration_round_trip_needs_fixture_db() {
     // Intentionally no assertion: this test documents an un-run path loudly.
     // A future wiring step replaces this body with the fixture-backed round-trip.
 }
+
+// ---------------------------------------------------------------------------
+// Extension grants (PRD Phase 6 / R7) — a REAL live-IndexedDB round-trip.
+//
+// Unlike the migration round-trip (which needs a Dexie v2 fixture), the
+// `extensionGrants` store is created by `open_db()` itself, so this CRUD round-
+// trip runs fully headless against a real IndexedDB. It proves the J2 grant
+// persistence (save → load → load_all → delete) the extension host depends on.
+// ---------------------------------------------------------------------------
+
+#[wasm_bindgen_test]
+async fn extension_grant_crud_round_trips_in_browser() {
+    use silent_storage::writer::{
+        delete_extension_grant, load_all_extension_grants, load_extension_grant,
+        save_extension_grant,
+    };
+
+    // A grant set is stored as an opaque JSON string keyed by the extension name.
+    let grant_json = r#"{"extension":"reference-notes-export","data":["transcript.text"],"ui":["panel"],"network":[]}"#;
+
+    // Absent extension → None.
+    let before = load_extension_grant("reference-notes-export")
+        .await
+        .expect("load absent");
+    assert!(
+        before.is_none(),
+        "an uninstalled extension has no grant row"
+    );
+
+    // Save → load round-trips byte-identically.
+    save_extension_grant("reference-notes-export", grant_json)
+        .await
+        .expect("save grant");
+    let loaded = load_extension_grant("reference-notes-export")
+        .await
+        .expect("load present");
+    assert_eq!(
+        loaded.as_deref(),
+        Some(grant_json),
+        "the stored grant JSON round-trips verbatim"
+    );
+
+    // load_all includes it.
+    let all = load_all_extension_grants().await.expect("load all");
+    assert!(
+        all.iter().any(|g| g == grant_json),
+        "load_all surfaces the saved grant"
+    );
+
+    // Re-save (re-grant) overwrites in place rather than duplicating.
+    let grant_json_2 = r#"{"extension":"reference-notes-export","data":["transcript.text","notes.decisions"],"ui":["panel"],"network":[]}"#;
+    save_extension_grant("reference-notes-export", grant_json_2)
+        .await
+        .expect("re-save grant");
+    let all_2 = load_all_extension_grants().await.expect("load all 2");
+    let count = all_2
+        .iter()
+        .filter(|g| g.contains("reference-notes-export"))
+        .count();
+    assert_eq!(count, 1, "re-grant overwrites the same row (no duplicate)");
+    assert_eq!(
+        load_extension_grant("reference-notes-export")
+            .await
+            .expect("load 2")
+            .as_deref(),
+        Some(grant_json_2),
+        "the latest grant wins"
+    );
+
+    // Delete → gone (the full revoke path).
+    delete_extension_grant("reference-notes-export")
+        .await
+        .expect("delete grant");
+    assert!(
+        load_extension_grant("reference-notes-export")
+            .await
+            .expect("load after delete")
+            .is_none(),
+        "a revoked extension has no grant row"
+    );
+}

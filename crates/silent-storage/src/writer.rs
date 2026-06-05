@@ -40,7 +40,8 @@ use js_sys::{Object, Reflect, Uint8Array};
 use wasm_bindgen::prelude::*;
 
 use silent_core::storage::{
-    Note, RUST_SCHEMA_VERSION, SPEAKER_NAMES_STORE, SpeakerName, expected_idb_version,
+    EXTENSION_GRANTS_STORE, Note, RUST_SCHEMA_VERSION, SPEAKER_NAMES_STORE, SpeakerName,
+    expected_idb_version,
 };
 
 use crate::error::{Result, StorageError};
@@ -49,14 +50,16 @@ use crate::reader::DB_NAME;
 /// The four Dexie v2 stores, each with an auto-incrementing `id` key path.
 const AUTOINC_STORES: [&str; 4] = ["meetings", "transcriptChunks", "notes", "screenshots"];
 
-/// Open the `SilentNotetaker` database at the Rust-owned schema version (30),
+/// Open the `SilentNotetaker` database at the Rust-owned schema version (40),
 /// creating any missing store in the upgrade callback.
 ///
 /// Opening at a higher version than the DB's current one triggers a single
-/// `upgradeneeded` where the stores are ensured. On a DB already at v3 this is a
-/// plain open (no upgrade). On a fresh browser (no DB) it creates all five
-/// stores. On a Dexie v2 DB (version 20) it bumps to 30 and adds only the missing
-/// `speakerNames` store — the four data stores already exist and are untouched.
+/// `upgradeneeded` where the stores are ensured. On a DB already at v4 this is a
+/// plain open (no upgrade). On a fresh browser (no DB) it creates all six stores.
+/// On a Dexie v2 DB (version 20) it bumps to 40 and adds only the missing
+/// `speakerNames` + `extensionGrants` stores; on a v3 DB (version 30) it adds
+/// only the missing `extensionGrants` store. The four data stores always exist
+/// and are untouched.
 ///
 /// # Errors
 ///
@@ -105,6 +108,21 @@ fn ensure_stores(db: &Database) -> Result<()> {
             .with_key_path(indexed_db_futures::KeyPath::One("meetingId"))
             .build()
             .map_err(|e| StorageError::Operation(format!("create {SPEAKER_NAMES_STORE}: {e:?}")))?;
+    }
+
+    if !has(EXTENSION_GRANTS_STORE) {
+        // Schema v4 (PRD Phase 6 / R7): one row per installed extension, keyed on
+        // the extension `name` (a validated `[a-z0-9._-]` string id); NOT
+        // auto-increment — the host supplies the key so re-installing/re-granting
+        // `put`s over the same extension's row. The stored value is the
+        // serde-serialized `GrantSet` as an opaque JSON string (storage never
+        // depends on the extension SDK).
+        db.create_object_store(EXTENSION_GRANTS_STORE)
+            .with_key_path(indexed_db_futures::KeyPath::One("extension"))
+            .build()
+            .map_err(|e| {
+                StorageError::Operation(format!("create {EXTENSION_GRANTS_STORE}: {e:?}"))
+            })?;
     }
 
     Ok(())
@@ -495,4 +513,127 @@ pub async fn load_speaker_names(meeting_id: u32) -> Result<BTreeMap<String, Stri
         .map_err(|e| StorageError::Operation(format!("get sn await: {e:?}")))?;
     tx.commit().await?;
     Ok(row.map(|r| r.names).unwrap_or_default())
+}
+
+// ---------------------------------------------------------------------------
+// Extension grant sets (PRD Phase 6 / R7) — the persisted, revocable per-extension
+// `GrantSet` the user approved at install. The GrantSet TYPE lives in
+// `silent-extension-sdk`; this layer stores its serde JSON as an opaque string so
+// storage never depends on the SDK (`docs/EXTENSIONS.md` §2: "recorded locally
+// (IndexedDB, same store as meeting data)").
+// ---------------------------------------------------------------------------
+
+/// `extensionGrants.put({ extension, grant })`: persist one extension's grant set.
+///
+/// `extension` is the validated extension name (the store's primary key);
+/// `grant_json` is the serde-serialized `GrantSet` as a JSON string. A re-grant
+/// for the same extension overwrites the row.
+///
+/// # Errors
+///
+/// Returns [`StorageError`] if the write fails.
+pub async fn save_extension_grant(extension: &str, grant_json: &str) -> Result<()> {
+    let db = open_db().await?;
+    let tx = db
+        .transaction([EXTENSION_GRANTS_STORE])
+        .with_mode(TransactionMode::Readwrite)
+        .build()?;
+    let store = tx.object_store(EXTENSION_GRANTS_STORE)?;
+
+    let obj = Object::new();
+    set(&obj, "extension", &JsValue::from_str(extension))?;
+    set(&obj, "grant", &JsValue::from_str(grant_json))?;
+    store
+        .put(&JsValue::from(obj))
+        .build()
+        .map_err(|e| StorageError::Operation(format!("put extensionGrants: {e:?}")))?
+        .await
+        .map_err(|e| StorageError::Operation(format!("put eg await: {e:?}")))?;
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// `extensionGrants.get(extension)`: load one extension's grant-set JSON, or
+/// `None` if the extension is not installed.
+///
+/// # Errors
+///
+/// Returns [`StorageError`] if the read fails.
+pub async fn load_extension_grant(extension: &str) -> Result<Option<String>> {
+    let db = open_db().await?;
+    let tx = db
+        .transaction([EXTENSION_GRANTS_STORE])
+        .with_mode(TransactionMode::Readonly)
+        .build()?;
+    let store = tx.object_store(EXTENSION_GRANTS_STORE)?;
+    let row: Option<JsValue> = store
+        .get::<JsValue, String, _>(extension.to_owned())
+        .primitive()
+        .map_err(|e| StorageError::Operation(format!("get extensionGrants: {e:?}")))?
+        .await
+        .map_err(|e| StorageError::Operation(format!("get eg await: {e:?}")))?;
+    tx.commit().await?;
+    Ok(row.and_then(|v| grant_string(&v)))
+}
+
+/// `extensionGrants.toArray()`: load every installed extension's grant-set JSON,
+/// for the extension-manager listing and the boot-time host re-hydration.
+///
+/// # Errors
+///
+/// Returns [`StorageError`] if the read fails.
+pub async fn load_all_extension_grants() -> Result<Vec<String>> {
+    let db = open_db().await?;
+    let tx = db
+        .transaction([EXTENSION_GRANTS_STORE])
+        .with_mode(TransactionMode::Readonly)
+        .build()?;
+    let store = tx.object_store(EXTENSION_GRANTS_STORE)?;
+    let rows = store
+        .get_all::<JsValue>()
+        .primitive()
+        .map_err(|e| StorageError::Operation(format!("getAll extensionGrants: {e:?}")))?
+        .await
+        .map_err(|e| StorageError::Operation(format!("getAll eg await: {e:?}")))?;
+    tx.commit().await?;
+    // `get_all().primitive()` yields an iterator of `Result<JsValue, _>`; project
+    // each successfully-decoded row to its `grant` JSON string (skipping any row
+    // that failed to decode or is missing the field — a corrupt row never crashes
+    // the listing).
+    Ok(rows
+        .filter_map(|r| r.ok().as_ref().and_then(grant_string))
+        .collect())
+}
+
+/// `extensionGrants.delete(extension)`: remove one extension's grant set (the
+/// full "remove extension" / revoke-all path).
+///
+/// # Errors
+///
+/// Returns [`StorageError`] if the delete fails.
+pub async fn delete_extension_grant(extension: &str) -> Result<()> {
+    let db = open_db().await?;
+    let tx = db
+        .transaction([EXTENSION_GRANTS_STORE])
+        .with_mode(TransactionMode::Readwrite)
+        .build()?;
+    let store = tx.object_store(EXTENSION_GRANTS_STORE)?;
+    store
+        .delete::<String, _>(extension.to_owned())
+        .build()
+        .map_err(|e| StorageError::Operation(format!("delete extensionGrants: {e:?}")))?
+        .await
+        .map_err(|e| StorageError::Operation(format!("delete eg await: {e:?}")))?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Read the `grant` JSON string field out of one stored `extensionGrants` row.
+/// A row missing/non-string `grant` is skipped (a corrupt row never crashes the
+/// listing — it is simply not surfaced).
+fn grant_string(row: &JsValue) -> Option<String> {
+    Reflect::get(row, &JsValue::from_str("grant"))
+        .ok()
+        .and_then(|g| g.as_string())
 }

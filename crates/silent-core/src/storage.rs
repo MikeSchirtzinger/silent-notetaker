@@ -294,9 +294,22 @@ pub struct SpeakerName {
 /// The `speakerNames` store name (schema v3, Rust-owned).
 pub const SPEAKER_NAMES_STORE: &str = "speakerNames";
 
-/// The Rust-owned schema version that adds the `speakerNames` store
-/// (`db.version(3)` equivalent; raw IDB version `30` via the ×10 rule).
-pub const RUST_SCHEMA_VERSION: u32 = 3;
+/// The `extensionGrants` store name (schema v4, Rust-owned; PRD Phase 6 / R7).
+///
+/// One row per installed extension, keyed by the extension `name` (a validated
+/// `[a-z0-9._-]` id, safe as an IDB string key — NOT auto-increment). The row's
+/// value is the serde-serialized `GrantSet` the user approved at install
+/// (`docs/EXTENSIONS.md` §2 "recorded locally (IndexedDB, same store as meeting
+/// data)"). The grant-set TYPE lives in `silent-extension-sdk`; storage persists
+/// it as an opaque JSON string so this layer never depends on the SDK. Additive
+/// schema (a new store), so it never touches the four migrated data stores.
+pub const EXTENSION_GRANTS_STORE: &str = "extensionGrants";
+
+/// The Rust-owned schema version that adds the `speakerNames` (v3) and
+/// `extensionGrants` (v4) stores (`db.version(4)` equivalent; raw IDB version
+/// `40` via the ×10 rule). Each is additive — opening a v2 or v3 database at v4
+/// only creates the missing stores and never rewrites the migrated data stores.
+pub const RUST_SCHEMA_VERSION: u32 = 4;
 
 /// A complete readback of all four `SilentNotetaker` tables.
 ///
@@ -620,13 +633,16 @@ mod tests {
         assert_eq!(expected_idb_version(2), 20);
     }
 
-    /// The Rust-owned schema (v3) raises the raw IDB version to 30, leaving the
-    /// Dexie v2 layout (20) intact for the migration pre-flight.
+    /// The Rust-owned schema (v4) raises the raw IDB version to 40, leaving the
+    /// Dexie v2 layout (20) intact for the migration pre-flight. v3 added
+    /// `speakerNames`; v4 adds `extensionGrants` (both additive, never touching
+    /// the four migrated data stores).
     #[test]
-    fn rust_schema_version_maps_to_thirty() {
-        assert_eq!(RUST_SCHEMA_VERSION, 3);
-        assert_eq!(expected_idb_version(RUST_SCHEMA_VERSION), 30);
+    fn rust_schema_version_maps_to_forty() {
+        assert_eq!(RUST_SCHEMA_VERSION, 4);
+        assert_eq!(expected_idb_version(RUST_SCHEMA_VERSION), 40);
         assert_eq!(SPEAKER_NAMES_STORE, "speakerNames");
+        assert_eq!(EXTENSION_GRANTS_STORE, "extensionGrants");
     }
 
     /// The durable speaker-name map round-trips its camelCase `meetingId` key and
