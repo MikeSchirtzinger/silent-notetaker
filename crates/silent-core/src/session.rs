@@ -95,6 +95,40 @@ impl Default for SessionConfig {
     }
 }
 
+impl SessionConfig {
+    /// Build a config from the host's `loadSettings()` booleans.
+    ///
+    /// `SessionConfig` is `#[non_exhaustive]`, so downstream crates (the
+    /// `silent-web` wasm boundary) cannot construct it with a struct literal;
+    /// this constructor is the additive-safe way to build one from the five
+    /// settings flags. Field order matches the struct declaration so the call
+    /// site reads top-to-bottom against the doc comments.
+    #[must_use]
+    #[allow(
+        clippy::fn_params_excessive_bools,
+        reason = "the five parameters are the five independent `loadSettings()` \
+                  booleans this struct already documents 1:1 (see the \
+                  struct_excessive_bools allow on SessionConfig); collapsing them \
+                  into enums would obscure that direct correspondence and force \
+                  the wasm boundary to invent enum names for plain on/off toggles"
+    )]
+    pub fn new(
+        ai_final_notes: bool,
+        smart_questions: bool,
+        smartq_recap: bool,
+        auto_summary: bool,
+        notes_model_off: bool,
+    ) -> Self {
+        Self {
+            ai_final_notes,
+            smart_questions,
+            smartq_recap,
+            auto_summary,
+            notes_model_off,
+        }
+    }
+}
+
 /// A side effect the host must perform as a result of a transition.
 ///
 /// The machine never performs I/O; it *describes* the work the host owns
@@ -102,7 +136,14 @@ impl Default for SessionConfig {
 /// command-half of the R2 split and keeps the machine pure. Distinct from
 /// [`SessionEvent`]: events are for the UI to render, side effects are for the
 /// host runtime to execute.
+///
+/// Serialized with the SAME `{ "tag": ..., "payload": ... }` envelope and
+/// `snake_case` tags as [`SessionEvent`] so the `silent-web` host glue reads one
+/// uniform wire shape for both arrays of an `Outcome` (`effect.tag` /
+/// `event.tag`). Unit variants carry no `payload` key; `RunStopHooks` carries
+/// the [`StopHooks`] flags under `payload`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "tag", content = "payload", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum SideEffect {
     /// Cold start: load the selected engine, then open mic capture and begin
