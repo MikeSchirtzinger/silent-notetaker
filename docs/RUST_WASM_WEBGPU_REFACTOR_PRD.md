@@ -379,8 +379,11 @@ Requirements:
 - Static deploy artifact contains app shell, WASM bundles, JS glue, CSS,
   `_headers`, model registry metadata, and integrity metadata.
 - Model artifacts are not deployed to Cloudflare by default.
-- COOP/COEP keeps multithreaded WASM enabled. **COEP is `credentialless`** —
-  `require-corp` breaks Hugging Face CDN fetches (decision log).
+- COOP/COEP keeps multithreaded WASM enabled. **COEP is `require-corp`** (switched
+  from `credentialless` on 2026-06-05; see decision log). `require-corp` is required
+  for WebKit/Safari cross-origin isolation, and HF CDN satisfies it via CORS headers
+  (`docs/research/spike-coep.md`). The invariant: cross-origin fetches must stay
+  CORS-eligible (no `no-cors` mode).
 - **CSP is generated, not audited.** `xtask` generates `_headers` and the
   local-server CSP from the registry plus extension grants; CI checks
   freshness. A hand-edited CSP that drifts from the registry fails the build.
@@ -1057,7 +1060,8 @@ license_verified = false
 | Notes model optional + extensible slot | 2026-06-04 | Some users don't want LLM notes; transcript-only is a supported mode. Slot stays open for future small models beyond Qwen. |
 | Raw `wgpu` spike cut | 2026-06-04 | No model in the lineup consumes it; WebGPU arrives via transformers.js and ort-web EPs. Future note for custom kernels only. |
 | SenseVoice kept; artifacts re-hosted first-party | 2026-06-04 | Little/no overhead to keep: copy the sherpa-onnx harness + model out of the k2-fsa Space into a first-party HF repo (as with TitaNet), pin + hash. Also load-bearing: Dual mode's refiner is SenseVoice. |
-| COEP `credentialless` | 2026-06-04 | Working config today; `require-corp` breaks HF CDN fetches. |
+| ~~COEP `credentialless`~~ (SUPERSEDED 2026-06-05) | 2026-06-04 | ~~Working config today; `require-corp` breaks HF CDN fetches.~~ Superseded by the row below — the "breaks HF CDN" premise was empirically disproven. |
+| COEP `require-corp` (supersedes `credentialless`) | 2026-06-05 | Switched to `require-corp`. The 2026-06-04 "breaks HF CDN fetches" assessment was wrong: `docs/research/spike-coep.md` proves HF CDN satisfies `require-corp` via its CORS headers (a CORS-eligible response is CORP-equivalent under the COEP spec — the browser validates the CORS handshake, not a CORP header, for `fetch()` from a cross-origin-isolated context), and transformers.js sends no explicit fetch mode (browser defaults to `cors`). Decisive driver: `require-corp` is the ONLY value WebKit/Safari honors for cross-origin isolation — under `credentialless`, Safari reported `crossOriginIsolated=false` and ran single-threaded. The spike confirmed `crossOriginIsolated=true` + `SharedArrayBuffer` in Chrome, Firefox, AND WebKit under `require-corp`, with every real fetch path (HF TitaNet, jsdelivr transformers.js, vendored same-origin ort-web) passing; the only blocked mode is `fetch(..., {mode:'no-cors'})` (opaque responses), which the app never uses. Closes the R1 Safari blocker. `xtask gen-headers --coep credentialless` is retained as a rollback. INVARIANT: cross-origin fetches must remain CORS-eligible (no `no-cors`). |
 | Hosted CSP keeps `ws://localhost:8765` | 2026-06-04 | v1 would have dropped the bridge from hosted builds — a feature loss. Localhost is the user's own machine, inside the trust boundary. Confirmed by Mike. |
 | Codex bridge backend deferred to post-refactor | 2026-06-04 | Bridge protocol stays backend-agnostic; Claude (CLI/API) ships now, Codex and other local agent CLIs can slot in later. |
 | Mid-recording engine switch queues for next meeting | 2026-06-04 | Friendlier than a rejection: clear "takes effect next meeting" or refresh notice. |

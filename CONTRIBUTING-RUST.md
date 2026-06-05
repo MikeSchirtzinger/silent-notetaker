@@ -180,7 +180,44 @@ omitted and will be verified at download time.
 | `gen-headers --out _headers` | Generates `_headers` from `registry/models.toml`. |
 | `gen-headers --out _headers --check` | Exits non-zero if the existing `_headers` does not match what the registry would generate (CI freshness gate). |
 | `gen-headers --out _headers --report-only` | Generates report-only CSP (rollback path). |
+| `gen-headers --out _headers --coep credentialless` | Emits COEP `credentialless` instead of the default `require-corp` (emergency rollback only — see the COEP invariant below). |
 | `deploy-gate` | Fails if any file in the deploy bundle exceeds 25 MB, if model weights are present, or if `_headers` is stale. |
+
+---
+
+## The COEP `require-corp` invariant
+
+The app ships `Cross-Origin-Embedder-Policy: require-corp` (switched from
+`credentialless` on 2026-06-05; see `docs/research/spike-coep.md` and the PRD
+decision log). `require-corp` is the only COEP value WebKit/Safari honors for
+cross-origin isolation — under `credentialless`, Safari runs single-threaded
+(`crossOriginIsolated === false`), which kills the CPU engine tier on that browser.
+
+`require-corp` is stricter than `credentialless`: it requires every cross-origin
+subresource to be embeddable. For `fetch()` from a cross-origin-isolated context, a
+**CORS-eligible** response satisfies this — the browser validates the CORS handshake
+(an `Access-Control-Allow-Origin` that matches the request origin) in lieu of a
+`Cross-Origin-Resource-Policy` header. The Hugging Face CDN, jsdelivr, and unpkg all
+send CORS headers, and the ort-web runtime is vendored same-origin, so the whole
+runtime works under `require-corp` with no code change.
+
+**The invariant — do not break it:**
+
+- **Cross-origin fetches MUST remain CORS-eligible.** Never use
+  `fetch(url, { mode: 'no-cors' })` for any cross-origin request. A `no-cors` request
+  produces an *opaque* response with no CORP header, which `require-corp` blocks — the
+  fetch silently fails and transcription breaks (worse: it works under
+  `credentialless` and only breaks for Safari users, so it is easy to miss in dev).
+  Use plain `fetch(url)` (defaults to `cors` for cross-origin) or an explicit
+  `{ mode: 'cors' }`.
+- If a new third-party origin is introduced that does **not** send
+  `Access-Control-Allow-Origin`, it cannot be fetched under `require-corp`. Vendor the
+  asset same-origin (preferred — the privacy-by-architecture endgame) or, only as a
+  last resort, roll back with `cargo xtask gen-headers --out _headers --coep credentialless`
+  (which re-introduces the Safari single-threaded regression — document it loudly).
+- The three COEP surfaces — `_headers` (generated), `server/src/main.rs` (Axum dev
+  server), and `coi-server.py` (Python dev server) — must stay byte-identical on the
+  COEP value. `_headers` is the source of truth; the two dev servers mirror it.
 
 ---
 
