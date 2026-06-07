@@ -9,7 +9,7 @@
 // crossOriginIsolated must be true and threaded WASM must work in each engine,
 // INCLUDING WebKit (this is the R1 Safari blocker resolution).
 //
-// Run: node test-playwright-cpu-tier.mjs <firefox|webkit>
+// Run: node dev/test-playwright-cpu-tier.mjs <firefox|webkit>
 
 import { firefox, webkit } from 'playwright';
 

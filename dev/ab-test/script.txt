@@ -1,0 +1,8 @@
+A|The third quarter revenue came in at 4.2 million dollars, up 18 percent from last year.
+B|Right, and we shipped version 2.0 on March 15th, three days ahead of schedule.
+A|The budget for 2026 is capped at 750 thousand dollars, split across 12 teams.
+B|Our latency target is 250 milliseconds, but we measured 187 on Tuesday.
+A|If you multiply 365 by 24, you get 8760 hours in a year.
+B|The conference call is at 3:30 PM, and the dial in code is 4422.
+A|Headcount grows from 48 to 64 engineers in quarter 4.
+B|And remember, the server bill was 9876 dollars and 54 cents last month.

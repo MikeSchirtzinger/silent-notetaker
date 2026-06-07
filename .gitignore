@@ -16,6 +16,9 @@ venv/
 .idea/
 *.swp
 
+# Claude Code session state
+.claude/
+
 # Backups / scratch
 *.bak
 *.log
@@ -37,11 +40,12 @@ token
 # Locally downloaded chromedriver binaries (browser-wasm-tests.sh caches these here)
 /vendor/chromedriver/
 
-# Build-at-deploy vendored runtimes (R6 / K2). scripts/vendor-transformers.sh +
-# scripts/vendor-ort-web.sh fetch + sha256-verify these at deploy time; the
-# binaries are NEVER committed (they are pinned by hash in the scripts, copied
-# into dist/vendor/ by deploy-cloudflare.sh). A stale committed copy would defeat
-# the hash-pinning guarantee.
+# Vendored runtimes (R6 / K2). scripts/vendor-transformers.sh +
+# scripts/vendor-ort-web.sh fetch + sha256-verify these; the binaries are NEVER
+# committed (they are pinned by hash in the scripts). Vendoring is currently
+# dormant infra — the live code path loads ort-web from cdn.pyke.io and
+# deploy-cloudflare.sh does not ship vendor/ — but a stale committed copy would
+# still defeat the hash-pinning guarantee, so keep these ignored.
 /vendor/transformers-runtime/
 /vendor/ort-web-*/
 
@@ -51,3 +55,8 @@ DEMO.md
 # Orchestrator planning specs — internal, not part of the app
 specs/
 nemotron-asr/reference/parakeet_ref_source.txt
+
+# A/B test harness (dev/ab-test): scripts + transcripts + scores are committed;
+# the multi-MB WAV fixtures and local model symlinks are not.
+/dev/ab-test/*.wav
+/dev/ab-test/models-int8dec/

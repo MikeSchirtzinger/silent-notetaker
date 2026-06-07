@@ -1,0 +1,16 @@
+file seg1.wav
+file sil.wav
+file seg2.wav
+file sil.wav
+file seg3.wav
+file sil.wav
+file seg4.wav
+file sil.wav
+file seg5.wav
+file sil.wav
+file seg6.wav
+file sil.wav
+file seg7.wav
+file sil.wav
+file seg8.wav
+file sil.wav

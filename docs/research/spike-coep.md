@@ -127,7 +127,7 @@ All tests pass identically to Chrome. `no-cors` blocked as expected.
 
 ## 5. Firefox Nemotron RTF (Bonus — warm vs cold)
 
-Test harness: `test-playwright-cpu-tier.mjs` against `http://localhost:8099` (credentialless server, as before). Model served same-origin from `crates/nemotron-asr/models/` (881 MB encoder).
+Test harness: `dev/test-playwright-cpu-tier.mjs` against `http://localhost:8099` (credentialless server, as before). Model served same-origin from `crates/nemotron-asr/models/` (881 MB encoder).
 
 | Run | RTF | TTFT (s) | Transcript |
 |-----|-----|---------|-----------|
@@ -228,4 +228,4 @@ Apply in `_headers` (and update the decision-log comment) and in `coi-server.py`
 - Test server: `/Users/mike/dev/snt-spikes/coep/require-corp-server.py`
 - Test harness: `/Users/mike/dev/snt-spikes/coep/test-harness.html`
 - Playwright WebKit/Firefox test: `/Users/mike/dev/snt-spikes/coep/test-webkit-require-corp.mjs`
-- Existing Firefox RTF harness: `/Users/mike/dev/silent-notetaker/test-playwright-cpu-tier.mjs`
+- Existing Firefox RTF harness: `dev/test-playwright-cpu-tier.mjs` (this repo)
