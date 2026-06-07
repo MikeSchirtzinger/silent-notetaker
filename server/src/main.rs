@@ -14,9 +14,9 @@
 //! Note: COEP=require-corp (switched from credentialless 2026-06-05). require-corp
 //! is the only value WebKit/Safari honors for cross-origin isolation; the earlier
 //! "credentialless avoids needing CORP on every subresource" reasoning was kept for
-//! Safari compatibility, but the spike (docs/research/spike-coep.md) proved HF CDN
-//! satisfies require-corp via its CORS headers (CORS-eligible == CORP-eligible under
-//! the COEP spec) and the vendored ort-web runtime is same-origin. WebSocket
+//! Safari compatibility, but the spike (docs/research/spike-coep.md) proved the CDN
+//! origins (HF, jsdelivr, cdn.pyke.io) satisfy require-corp via their CORS headers
+//! (CORS-eligible == CORP-eligible under the COEP spec). WebSocket
 //! connections (the Claude bridge on :8765) are not subject to COEP and keep working.
 //! INVARIANT: cross-origin fetches must stay CORS-eligible (no no-cors mode).
 //! This value MUST stay byte-identical with `_headers` and `coi-server.py`.
@@ -31,6 +31,24 @@ use axum::{
     Router,
 };
 use tower_http::{services::ServeDir, set_header::SetResponseHeaderLayer, trace::TraceLayer};
+
+/// The enforced base-page CSP. Kept byte-identical to
+/// `gen_headers::generate_local_csp_value` output — see the comment block at the
+/// use site in `main()` for the full rationale, and the `csp_matches_headers_file`
+/// test below for the guard that keeps this from drifting out of sync with the
+/// shipped `_headers`.
+const CSP_VALUE: &str = "default-src 'self'; \
+     script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: \
+         https://cdn.jsdelivr.net https://cdn.pyke.io; \
+     worker-src 'self' blob:; \
+     connect-src 'self' blob: data: \
+         https://cdn.jsdelivr.net https://cdn.pyke.io \
+         https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co \
+         https://cdn-lfs-us-1.huggingface.co ws://localhost:8765; \
+     frame-src 'self'; \
+     img-src 'self' data: blob:; \
+     media-src 'self' blob:; \
+     style-src 'self' 'unsafe-inline'";
 
 #[tokio::main]
 async fn main() {
@@ -93,21 +111,9 @@ async fn main() {
     //   log it is also KEPT in the hosted `_headers` (localhost is inside the
     //   user's trust boundary).
     let csp = HeaderName::from_static("content-security-policy");
-    // Kept byte-identical to `gen_headers::generate_local_csp_value` output.
-    let csp_value = HeaderValue::from_static(
-        "default-src 'self'; \
-         script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob: \
-             https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io; \
-         worker-src 'self' blob:; \
-         connect-src 'self' blob: data: \
-             https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io \
-             https://huggingface.co https://*.hf.co https://cdn-lfs.huggingface.co \
-             https://cdn-lfs-us-1.huggingface.co ws://localhost:8765; \
-         frame-src 'self'; \
-         img-src 'self' data: blob:; \
-         media-src 'self' blob:; \
-         style-src 'self' 'unsafe-inline'",
-    );
+    // Kept byte-identical to `gen_headers::generate_local_csp_value` output
+    // (guarded by the `csp_matches_headers_file` test).
+    let csp_value = HeaderValue::from_static(CSP_VALUE);
 
     // The static surface (index.html, wasm, models, …) carries the ENFORCED BASE
     // page CSP. The base CSP MUST NOT change per extension; per-extension
@@ -170,4 +176,32 @@ async fn main() {
         .await
         .unwrap_or_else(|e| panic!("bind {addr} failed: {e} (port in use?)"));
     axum::serve(listener, app).await.unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CSP_VALUE;
+
+    /// Parity guard: the local server's enforced CSP must stay byte-identical to
+    /// the `Content-Security-Policy` line in the shipped `_headers` (both are
+    /// derived from `cargo xtask gen-headers`). This is exactly the drift the
+    /// comment in `main()` warns about — an earlier copy silently diverged
+    /// (missing `cdn.pyke.io`, later a stale `unpkg.com`); this test makes the
+    /// next divergence a test failure instead of a "works locally, differs
+    /// hosted" surprise.
+    #[test]
+    fn csp_matches_headers_file() {
+        let headers_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../_headers");
+        let headers = std::fs::read_to_string(headers_path)
+            .expect("read ../_headers (run from the repo checkout)");
+        let from_headers = headers
+            .lines()
+            .find_map(|l| l.strip_prefix("Content-Security-Policy: "))
+            .expect("_headers has a Content-Security-Policy line");
+        assert_eq!(
+            CSP_VALUE, from_headers,
+            "server CSP and _headers CSP have drifted — regenerate both from \
+             `cargo xtask gen-headers` (see gen_headers.rs)"
+        );
+    }
 }

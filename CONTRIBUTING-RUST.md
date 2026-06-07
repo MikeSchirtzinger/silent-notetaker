@@ -197,8 +197,8 @@ cross-origin isolation — under `credentialless`, Safari runs single-threaded
 subresource to be embeddable. For `fetch()` from a cross-origin-isolated context, a
 **CORS-eligible** response satisfies this — the browser validates the CORS handshake
 (an `Access-Control-Allow-Origin` that matches the request origin) in lieu of a
-`Cross-Origin-Resource-Policy` header. The Hugging Face CDN, jsdelivr, and unpkg all
-send CORS headers, and the ort-web runtime is vendored same-origin, so the whole
+`Cross-Origin-Resource-Policy` header. The Hugging Face CDN, jsdelivr, and
+cdn.pyke.io (the ort-web runtime host) all send CORS headers, so the whole
 runtime works under `require-corp` with no code change.
 
 **The invariant — do not break it:**

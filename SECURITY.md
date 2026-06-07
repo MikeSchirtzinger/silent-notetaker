@@ -78,7 +78,6 @@ The base page CSP is enforced (not report-only). The allowlist is generated from
 hand. The current allowlist:
 
 - `https://cdn.jsdelivr.net` — Transformers.js runtime
-- `https://unpkg.com` — Dexie library
 - `https://cdn.pyke.io` — onnxruntime-web loader
 - `https://huggingface.co`, `https://*.hf.co`, `https://cdn-lfs.huggingface.co`,
   `https://cdn-lfs-us-1.huggingface.co` — model weight downloads

@@ -17,7 +17,6 @@ Silent Notetaker makes the promise structurally unnecessary. The audio is captur
 | Destination | Why | Receives your audio? |
 |---|---|---|
 | `cdn.jsdelivr.net` | Transformers.js runtime library | No |
-| `unpkg.com` | Dexie IndexedDB library | No |
 | `cdn.pyke.io` | onnxruntime-web runtime loader | No |
 | `huggingface.co`, `*.hf.co`, `cdn-lfs.huggingface.co`, `cdn-lfs-us-1.huggingface.co` | Model **weights**, downloaded once and cached in your browser | No |
 | `ws://localhost:8765` | *Optional* Claude bridge — a server **you** run, off by default | Only transcript text, only if you enable it, only to your own machine |

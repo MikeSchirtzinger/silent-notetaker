@@ -27,7 +27,6 @@ Here is the complete egress surface, derived from `registry/models.toml`
 | Destination | Why | Carries your audio? |
 |---|---|---|
 | `cdn.jsdelivr.net` | Transformers.js runtime library | No |
-| `unpkg.com` | Dexie IndexedDB wrapper | No |
 | `cdn.pyke.io` | onnxruntime-web runtime loader | No |
 | `huggingface.co` | Model weight downloads (initial fetch only; cached thereafter) | No |
 | `*.hf.co` | Hugging Face CDN subdomains for model weights | No |
@@ -252,10 +251,10 @@ The current enforced policy (from `_headers`):
 Content-Security-Policy:
   default-src 'self';
   script-src  'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:
-              https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io;
+              https://cdn.jsdelivr.net https://cdn.pyke.io;
   worker-src  'self' blob:;
   connect-src 'self' blob: data:
-              https://cdn.jsdelivr.net https://unpkg.com https://cdn.pyke.io
+              https://cdn.jsdelivr.net https://cdn.pyke.io
               https://huggingface.co https://*.hf.co
               https://cdn-lfs.huggingface.co https://cdn-lfs-us-1.huggingface.co
               ws://localhost:8765;

@@ -133,7 +133,7 @@ monolith. Discuss any structural change in an issue first.
 
 - **No new egress.** Do not add any `fetch`, `XMLHttpRequest`, WebSocket, or other
   network call that sends user data to a host not already in the CSP allowlist
-  (`cdn.jsdelivr.net`, `unpkg.com`, `huggingface.co`, and its model CDN hosts).
+  (`cdn.jsdelivr.net`, `cdn.pyke.io`, `huggingface.co`, and its model CDN hosts).
   Any new remote dependency requires explicit discussion and a CSP update.
 - **No audio escaping the boundary.** Raw PCM, encoded audio, mel spectrograms,
   and voice embeddings must never appear in a network payload, a postMessage to an

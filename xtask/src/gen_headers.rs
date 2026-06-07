@@ -53,11 +53,11 @@
 //! deployments)." The generated output ADDS `ws://localhost:8765` to match the
 //! post-decision-log intent.
 //!
-//! The shipping `_headers` file does NOT contain `cdn.pyke.io` in its CSP line.
-//! The generated output ADDS it because it is a current runtime CDN origin
-//! (ort-web fetches the onnxruntime-web runtime from there) — the spec
-//! explicitly says "keep them for parity today". The vendoring decision (K2)
-//! will remove it later.
+//! `cdn.pyke.io` is included because it is a current runtime CDN origin
+//! (ort-web fetches the onnxruntime-web runtime from there; the K2 vendoring
+//! path exists but is dormant — the live code path still loads from the CDN).
+//! `unpkg.com` is NOT included: the Dexie → Rust storage migration removed the
+//! only asset it served.
 //!
 //! ## `--check` mode
 //!
@@ -195,16 +195,14 @@ impl CspMode {
 
 /// Static CDN origins always included in the CSP, regardless of registry
 /// content. These cover the current runtime dependencies:
-/// - jsdelivr / unpkg: transformers.js scripts
+/// - jsdelivr: transformers.js scripts
 /// - cdn.pyke.io: ort-web's onnxruntime-web runtime loader
 ///
-/// Vendoring decision (Task K2) will remove cdn.pyke.io when it vendors
-/// those assets into the deploy bundle. Until then, they stay for parity.
-const STATIC_CDN_ORIGINS: &[&str] = &[
-    "https://cdn.jsdelivr.net",
-    "https://unpkg.com",
-    "https://cdn.pyke.io",
-];
+/// `unpkg.com` was REMOVED with the Dexie → Rust storage migration (the only
+/// thing it ever served); see storage-engine.js. The vendoring decision (Task
+/// K2) will remove cdn.pyke.io if/when it wires the vendored assets into the
+/// deploy bundle. Until then, it stays.
+const STATIC_CDN_ORIGINS: &[&str] = &["https://cdn.jsdelivr.net", "https://cdn.pyke.io"];
 
 /// Hugging Face origins always included. Covers the CDN + regional LFS variants
 /// that HF redirects to (observed in production network panel — the `_headers`
@@ -303,7 +301,7 @@ fn registry_origins(registry: &Registry) -> BTreeSet<String> {
 ///
 /// Sources (in order, deduped):
 /// 1. `'self' blob: data:` — static invariants.
-/// 2. CDN origins (jsdelivr, unpkg, cdn.pyke.io) — static runtime deps.
+/// 2. CDN origins (jsdelivr, cdn.pyke.io) — static runtime deps.
 /// 3. HF origins — static, always needed for model fetch.
 /// 4. Registry-derived `network_origins` — any additional origins from models.
 /// 5. Claude bridge — `ws://localhost:8765`.
@@ -654,7 +652,10 @@ mod tests {
             csp.contains("https://cdn.jsdelivr.net"),
             "missing jsdelivr: {csp}"
         );
-        assert!(csp.contains("https://unpkg.com"), "missing unpkg: {csp}");
+        assert!(
+            !csp.contains("https://unpkg.com"),
+            "stale unpkg (removed with Dexie) must not reappear: {csp}"
+        );
         assert!(
             csp.contains("https://cdn.pyke.io"),
             "missing cdn.pyke.io: {csp}"
