@@ -19,6 +19,9 @@ venv/
 # Claude Code session state
 .claude/
 
+# wrangler local dev state (`wrangler pages dev`)
+.wrangler/
+
 # Backups / scratch
 *.bak
 *.log
