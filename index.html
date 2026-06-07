@@ -8050,6 +8050,14 @@ async function _renderExtManager() {
       </div>`;
     }).join('');
   }
+  // Install buttons only where the per-extension sandbox route exists (the
+  // local servers). A static hosted deploy (e.g. Cloudflare Pages) cannot serve
+  // `/ext/<name>/` — offering an install there would mount a dead iframe — so
+  // explain the local-only boundary instead.
+  if (!(await host.extRouteAvailable())) {
+    slot.innerHTML += `<div class="ext-mgr-empty" style="margin-top:8px">Extensions are local-only: this hosted copy does not serve the per-extension sandbox route (<code>/ext/</code>). Run the app locally (<code>./start.sh</code>) to install and use extensions.</div>`;
+    return;
+  }
   // The install button for the bundled reference extension (only if not installed).
   const installed = new Set(sets.map(s => s.extension));
   const installable = Object.keys(EXT_REGISTRY_URLS).filter(n => !installed.has(n));

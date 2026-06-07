@@ -175,7 +175,36 @@ export class ExtensionHost {
     /** Optional sink called on each violation (host wires it for UI/logging). */
     this.onCspViolation = opts.onCspViolation || null;
 
+    /** Cached `/ext/` route probe (null until first extRouteAvailable() call). */
+    this._extRouteProbe = null;
+
     this._onWindowMessage = this._onWindowMessage.bind(this);
+  }
+
+  /**
+   * Probe whether THIS deployment serves the per-extension sandbox route
+   * (`/ext/<name>/`). The local Rust server does (server/src/ext_route.rs); a
+   * static hosted deploy (Cloudflare Pages) does not — and because Pages serves
+   * `index.html` as an SPA fallback for unknown paths, the dead route does not
+   * even 404 there: a naive status check would hand the sandbox the entire app
+   * shell. So the probe requires the genuine bootstrap shell, identified by its
+   * handshake marker (`__silentExtShellReady`), not just a 200. The result is
+   * cached for the page's lifetime — it cannot change without a redeploy.
+   * @returns {Promise<boolean>}
+   */
+  extRouteAvailable() {
+    if (!this._extRouteProbe) {
+      this._extRouteProbe = (async () => {
+        try {
+          const res = await fetch(_extRouteUrl('route-probe', []), { cache: 'no-store' });
+          return res.ok && (await res.text()).includes('__silentExtShellReady');
+        } catch (err) {
+          console.warn('[rust-ext] /ext route probe failed', err);
+          return false;
+        }
+      })();
+    }
+    return this._extRouteProbe;
   }
 
   load() {
@@ -281,6 +310,16 @@ export class ExtensionHost {
 
   async _mount(grantSet, manifest, manifestDir) {
     const name = grantSet.extension;
+    // Extensions are local-only on static hosting: without the real `/ext/`
+    // route there is no per-extension response-header CSP (the j2b network
+    // boundary), so we refuse to mount rather than degrade the isolation story.
+    // The settings UI checks the same probe and explains this instead of
+    // offering an install.
+    if (!(await this.extRouteAvailable())) {
+      throw new Error(
+        'the per-extension sandbox route (/ext/) is not served by this deployment — ' +
+        'extensions require running the app locally (./start.sh)');
+    }
     // Replace any prior instance.
     if (this.instances.has(name)) {
       const old = this.instances.get(name);

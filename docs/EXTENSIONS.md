@@ -514,6 +514,14 @@ header or a second directive. The hosted equivalent is the Cloudflare Pages
 Function sketch in `apps/cloudflare/functions/ext/[[path]].ts` (committed,
 not deployed); its sanitizer is kept byte-parity with the Rust one.
 
+Because the Function is not deployed, **extensions are local-only on the hosted
+deploy**: the host probes the route before any mount
+(`ExtensionHost.extRouteAvailable()` — it requires the genuine bootstrap shell,
+since Pages' SPA fallback answers unknown paths with `index.html` and a 200,
+not a 404), refuses to mount without it, and the Settings manager explains the
+boundary instead of offering an install. Shipping the Function (and re-running
+the §7.2 witnesses against it) is the gate for lifting this.
+
 ### 7.2 Witnessed acceptance (J2b)
 
 Run against the real axum server (`server/`) with the real `extension-host.js` +
