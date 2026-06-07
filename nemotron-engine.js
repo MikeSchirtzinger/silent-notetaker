@@ -46,6 +46,16 @@
 const DEFAULT_PKG_URL    = new URL('./crates/silent-web/pkg/silent_web.js', import.meta.url).href;
 const DEFAULT_MODEL_BASE = new URL('./crates/nemotron-asr/models/', import.meta.url).href;
 
+// Hosted fallback: the deploy bundle does NOT ship the ~892 MB of model
+// artifacts (Cloudflare Pages caps files at 25 MB) — they stream from the SAME
+// pinned repo+revision as registry/models.toml (the source of truth for this
+// pin; update BOTH together). Used only when the same-origin models dir is not
+// genuinely served — see _resolveModelBase(): a static host's SPA fallback
+// answers that path with index.html + 200, so a bare status check proves
+// nothing.
+const HF_MODEL_BASE =
+  'https://huggingface.co/lokkju/nemotron-speech-streaming-en-0.6b-int8/resolve/95df6c82aa796a3fc793f87633dcdb017ac12c07/';
+
 // raiseOrtWasmThreads now lives in the permanent ort-web-loader.js module so
 // any future ort-web host (TitaNet, Whisper-ort, …) can share the same
 // thread-count trap without duplicating it. Imported here for backward compat.
@@ -145,7 +155,7 @@ export class NemotronEngine {
     this._mod = await _loadModule(this.pkgUrl);
     const { WasmNemotron } = this._mod;
 
-    const base = this.modelBase.endsWith('/') ? this.modelBase : this.modelBase + '/';
+    const base = await this._resolveModelBase();
     // Encoder dominates the download (~881 MB) — stream it so we can show real progress.
     this.onStatus?.('Downloading Nemotron model (encoder ~881 MB, first load only)…', 5);
     const enc = await this._fetchBytes(base + 'encoder.onnx', 'encoder.onnx');
@@ -277,9 +287,39 @@ export class NemotronEngine {
     this.onText?.(txt);
   }
 
+  /**
+   * Resolve where the model artifacts actually live. An explicit override
+   * (opts.modelBase / __NEMOTRON_MODEL_BASE) is honored verbatim. The
+   * same-origin default is PROBED first: the local servers serve the real
+   * models dir, but a static hosted deploy does not ship it, and its SPA
+   * fallback answers the path with index.html + 200 — so require the probe
+   * response to look like model bytes (ok AND not text/html) before trusting
+   * it. Otherwise stream from the pinned HF repo. Loud either way.
+   */
+  async _resolveModelBase() {
+    const base = this.modelBase.endsWith('/') ? this.modelBase : this.modelBase + '/';
+    if (base !== DEFAULT_MODEL_BASE) return base;   // explicit override — honor verbatim
+    try {
+      const r = await fetch(base + 'tokenizer.model', { method: 'HEAD', cache: 'no-store' });
+      if (r.ok && !/text\/html/i.test(r.headers.get('content-type') || '')) {
+        console.log('[nemotron] model source: same-origin', base);
+        return base;
+      }
+    } catch (_) { /* unreachable dir — fall through to HF */ }
+    console.log('[nemotron] model source: same-origin models dir not served — streaming from pinned HF repo', HF_MODEL_BASE);
+    return HF_MODEL_BASE;
+  }
+
   async _fetchBytes(url, fileLabel) {
     const r = await fetch(url);
     if (!r.ok) throw new Error(`fetch ${url}: ${r.status}`);
+    // A static host's SPA fallback serves index.html with a 200 for paths that
+    // don't exist — feeding HTML into the onnx session builder produces an
+    // opaque downstream wedge. Fail HERE, loudly, instead.
+    const ct = r.headers.get('content-type') || '';
+    if (/text\/html/i.test(ct)) {
+      throw new Error(`fetch ${url}: got ${ct} instead of model bytes (static-host SPA fallback?)`);
+    }
     const len = +(r.headers.get('content-length') || 0);
     const label = fileLabel || url;
     // The LoadProgress events flow through silent-web (the free wasm function), produced
