@@ -20,27 +20,31 @@
 #    PRD host: rust-ort-web  execution: cpu  precision: int8
 #    R9 budgets: TTFT ≤1000 ms (browser), RTF ≤0.5× (browser WASM), ≤0.2× (native)
 #
-# IMPORTANT — artifact provenance (currently unpinned / split-source):
+# Artifact provenance (single-source as of 2026-06-05):
 #   The crate (`nemotron-asr`) expects three files in one directory:
-#     encoder.onnx            — INT8, self-contained, ~881 MB, NO external .data
-#     decoder_joint_fp32.onnx — FP32 LSTM decoder, ~36 MB, pure ai.onnx opset-17
-#     tokenizer.model         — SentencePiece, ~251 KB
+#     encoder.onnx       — INT8, self-contained, ~881 MB, NO external .data
+#     decoder_joint.onnx — INT8 LSTM decoder, ~11 MB (com.microsoft.DynamicQuantizeLSTM
+#                          contrib op — empirically VERIFIED supported in onnxruntime-web
+#                          WASM, 2026-06-05 in-browser A/B run)
+#     tokenizer.model    — SentencePiece, ~251 KB
 #
-#   As of 2026-06-04 no single public HF repo hosts all three under these
-#   exact names. The INT8 encoder (self-contained) lives in
-#     lokkju/nemotron-speech-streaming-en-0.6b-int8  (and a copy in smcleod/…)
-#   and the FP32 decoder (as decoder_joint.onnx, not decoder_joint_fp32.onnx)
-#   lives in altunenes/parakeet-rs under nemotron-speech-streaming-en-0.6b/.
-#   The tokenizer.model is identical across both (same LFS oid).
+#   All three live in lokkju/nemotron-speech-streaming-en-0.6b-int8 @ the
+#   pinned revision below, under exactly these names.
+#
+#   HISTORY (2026-06-05): we previously shipped decoder_joint_fp32.onnx from
+#   altunenes/parakeet-rs on the THEORY that the INT8 decoder's contrib op was
+#   missing from onnxruntime-web. Empirical A/B (dev/ab-test/) proved (a) the
+#   contrib op IS supported, and (b) the altunenes fp32 decoder is a MISMATCHED
+#   checkpoint: no inverse-text-normalization (spelled-out numbers) and garbled
+#   token-dense audio (~20% WER vs ~9% with the INT8 decoder on the same clip).
+#   Native Rust, onnxruntime-Python, and in-browser ort-web all reproduce the
+#   difference. Do not resurrect the fp32 decoder without a matching-checkpoint
+#   re-export from the official NVIDIA weights.
 #
 #   Action required (USER GATE — Mike):
 #     Create a first-party HF repo (e.g. FluffyBunnies/nemotron-streaming-onnx)
-#     hosting all three files under the exact names the crate expects.
-#     A5-style rehost: verify hashes, add NVIDIA NOTICE file per license §3.1.
-#     Then update repo/revision below.
-#
-#   Until then: repo/revision point at lokkju (best single-source for encoder
-#   + tokenizer), with the decoder_joint_fp32.onnx BLOCKED note below.
+#     hosting all three files. A5-style rehost: verify hashes, add NVIDIA
+#     NOTICE file per license §3.1. Then update repo/revision below.
 #
 # A2 verdict: GO — NVIDIA Open Model License §3, redistribution permitted;
 #   NOTICE file required ("Licensed by NVIDIA Corporation under the NVIDIA
@@ -50,15 +54,14 @@
 id = "asr.nemotron.streaming_0_6b"
 task = "asr"
 provider = "huggingface"
-# BLOCKED-ON-USER-GATE: Mike creates first-party repo with all three files
-# under exact names the crate expects. lokkju repo used as interim pin for
-# encoder + tokenizer hashes; decoder is in altunenes/parakeet-rs (see notes).
+# USER-GATE (non-blocking): Mike may later create a first-party repo with all
+# three files; until then the lokkju repo is a complete single-source pin.
 repo = "lokkju/nemotron-speech-streaming-en-0.6b-int8"
 revision = "95df6c82aa796a3fc793f87633dcdb017ac12c07"
 host = "rust-ort-web"
 execution_provider = "cpu"   # FINDINGS.md: CPU beats WebGPU for this model class
 precision = ["int8"]
-memory_budget_mb = 1400      # 881 MB encoder + 36 MB decoder + ORT overhead
+memory_budget_mb = 1400      # 881 MB encoder + 11 MB decoder + ORT overhead
 license = "nvidia-open-model-license"
 license_verified = false     # A2 verdict: GO — NVIDIA Open Model License §3, NOTICE required
 network_origins = ["https://huggingface.co", "https://cdn-lfs.huggingface.co"]
@@ -75,18 +78,17 @@ network_origins = ["https://huggingface.co", "https://cdn-lfs.huggingface.co"]
   sha256 = "d24be4aff18dd9d2aa3433cb89c5a457df5015abf79e06a63dde76b1cd6386bb"
   purpose = "encoder"
 
-  # decoder_joint_fp32.onnx — FP32 LSTM decoder (~36 MB), pure ai.onnx opset-17.
-  # BLOCKED-ON-USER-GATE: first-party repo must rename decoder_joint.onnx →
-  # decoder_joint_fp32.onnx. Source for hashes:
-  #   altunenes/parakeet-rs @ a95331a, path nemotron-speech-streaming-en-0.6b/decoder_joint.onnx
-  # LFS oid (sha256): 8bcfde85fa9039a70caeb90204273f837923d63a706c186bd33e2ada25a91700
+  # decoder_joint.onnx — INT8 LSTM decoder (~11 MB), com.microsoft.DynamicQuantizeLSTM.
+  # Same checkpoint as the encoder (digit/ITN output verified 2026-06-05).
+  # Source: lokkju/nemotron-speech-streaming-en-0.6b-int8 @ 95df6c8 (LFS oid = sha256)
   [[model.files]]
-  path = "decoder_joint_fp32.onnx"
-  size = 35779240
-  sha256 = "8bcfde85fa9039a70caeb90204273f837923d63a706c186bd33e2ada25a91700"
+  path = "decoder_joint.onnx"
+  size = 10962697
+  sha256 = "c86d527e4ae27251a741609eaddd4429ba5c32050e2f532cea1052d9e21f4f09"
   purpose = "decoder"
 
-  # tokenizer.model — SentencePiece, identical across lokkju + altunenes repos.
+  # tokenizer.model — SentencePiece.
+  # Source: lokkju/nemotron-speech-streaming-en-0.6b-int8 @ 95df6c8
   [[model.files]]
   path = "tokenizer.model"
   size = 251056

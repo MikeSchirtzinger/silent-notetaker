@@ -72,7 +72,7 @@ pub type Nemotron = StreamingAsr<OrtBackend>;
 impl StreamingAsr<OrtBackend> {
     /// Load the model and tokenizer from a directory.
     ///
-    /// Expects `encoder.onnx`, `decoder_joint_fp32.onnx`, and
+    /// Expects `encoder.onnx`, `decoder_joint.onnx`, and
     /// `tokenizer.model` in `model_dir`.
     ///
     /// # Errors

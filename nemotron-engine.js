@@ -31,8 +31,11 @@
  * `stats()` object). A new `onEvent(event)` hook is also exposed for consumers
  * that want the raw typed stream.
  *
- * Model artifacts (you host these; ~917 MB total, first load only, then cached):
- *   encoder.onnx (INT8, ~881 MB) · decoder_joint_fp32.onnx (~36 MB) · tokenizer.model (~251 KB)
+ * Model artifacts (you host these; ~892 MB total, first load only, then cached):
+ *   encoder.onnx (INT8, ~881 MB) · decoder_joint.onnx (INT8, ~11 MB) · tokenizer.model (~251 KB)
+ * (The INT8 decoder's DynamicQuantizeLSTM contrib op is supported by
+ * onnxruntime-web — verified in-browser 2026-06-05. The old fp32 decoder was a
+ * mismatched checkpoint: no ITN, garbled dense audio. See registry/models.toml.)
  * Default base is `./crates/nemotron-asr/models/` (local dev). For a hosted build:
  *   window.__NEMOTRON_MODEL_BASE = 'https://<cdn>/.../';
  */
@@ -88,6 +91,7 @@ export class NemotronEngine {
     this.engine = null;     // WasmNemotron instance
     this._mod   = null;
     this._pending = [];     // accumulated f32 samples awaiting a whole chunk
+    this._drainedSamples = 0; // samples decoded so far (see consumedSamples getter)
     this._chain = Promise.resolve();   // serializes transcribe_chunk so state never overlaps
 
     // ── latency telemetry: only the wall-clock instants stay in JS (the Rust core has no
@@ -146,7 +150,7 @@ export class NemotronEngine {
     this.onStatus?.('Downloading Nemotron model (encoder ~881 MB, first load only)…', 5);
     const enc = await this._fetchBytes(base + 'encoder.onnx', 'encoder.onnx');
     const [dec, tok] = await Promise.all([
-      this._fetchBytes(base + 'decoder_joint_fp32.onnx', 'decoder_joint_fp32.onnx'),
+      this._fetchBytes(base + 'decoder_joint.onnx', 'decoder_joint.onnx'),
       this._fetchBytes(base + 'tokenizer.model', 'tokenizer.model'),
     ]);
 
@@ -177,7 +181,19 @@ export class NemotronEngine {
     this._chain = Promise.resolve();
     this._startedAt = 0; this._firstTextAt = 0;
     this._lastStats = null;
+    this._drainedSamples = 0;
   }
+
+  /**
+   * Total samples drained into the wasm decoder so far. Because the host feeds
+   * the ring buffer and this engine from the same capture callback, this maps
+   * 1:1 onto ring-absolute positions — it is the position of the audio the
+   * emitted text actually CAME FROM (±1 undecoded wasm-internal tail chunk,
+   * ≤ ~0.8 s), unlike ring.writeAbs which tracks the live capture head and
+   * runs 0.6–0.9 s+backlog ahead of the transcript. Speaker attribution uses
+   * this so each sentence's audio slice aligns with its words.
+   */
+  get consumedSamples() { return this._drainedSamples || 0; }
 
   /** Feed 16 kHz mono Float32 samples. Buffers, then drains whole chunks single-file. */
   feed(samples) {
@@ -248,6 +264,9 @@ export class NemotronEngine {
       const t0 = performance.now();
       const raw = await this.engine.transcribeChunk(buf);
       this.engine.recordDecodeMs(performance.now() - t0);
+      // Advance BEFORE dispatch so onText handlers reading consumedSamples see
+      // the position including the chunk this text came from.
+      this._drainedSamples = (this._drainedSamples || 0) + buf.length;
       if (raw != null) this._dispatch(JSON.parse(raw));
       if (final) break;   // final pass takes everything in one shot
     }

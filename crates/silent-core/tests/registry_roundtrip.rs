@@ -40,8 +40,8 @@ network_origins = ["https://huggingface.co", "https://cdn-lfs.huggingface.co"]
   purpose = "encoder"
 
   [[model.files]]
-  path = "decoder_joint_fp32.onnx"
-  size = 37700000
+  path = "decoder_joint.onnx"
+  size = 11000000
   sha256 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
   purpose = "decoder"
 

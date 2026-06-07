@@ -68,3 +68,23 @@ Hann), hop 160, 128 Slaney mels, **power** spectrum, `ln(x + 2^-24)`. Chunk = 56
 4. Set up cross-origin isolation (Cloudflare Pages `_headers`) if multi-threaded WASM is wanted;
    single-thread is likely fine given the RTF headroom.
 5. Consider INT4 encoder (lokkju) to cut the 881 MB download if accuracy holds.
+
+
+---
+
+## ERRATUM (2026-06-05): ship the INT8 decoder, NOT the fp32 one
+
+The "ship FP32 decoder" recommendation above is **superseded**. Empirical A/B
+(`dev/ab-test/` in the app repo) showed:
+
+1. `DynamicQuantizeLSTM` **is supported** by onnxruntime-web's WASM build —
+   the INT8 `decoder_joint.onnx` loads and decodes in-browser (the "RISK"
+   flagged above never materialized).
+2. `decoder_joint_fp32.onnx` (from altunenes/parakeet-rs) is a **mismatched
+   checkpoint**, not an fp32 export of the lokkju INT8 model: it emits
+   spelled-out numbers (no inverse text normalization) and garbles token-dense
+   audio (~20% WER vs ~9% for the INT8 decoder on the same number-heavy clip;
+   reproduced identically on native ort, onnxruntime-Python, and ort-web).
+
+All three artifacts (encoder, INT8 decoder, tokenizer) come from
+`lokkju/nemotron-speech-streaming-en-0.6b-int8 @ 95df6c8` — single-source.

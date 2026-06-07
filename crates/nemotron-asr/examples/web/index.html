@@ -32,7 +32,7 @@
         `script-src` and `connect-src` (and `signal.pyke.io` for telemetry, or
         leave telemetry disabled — this crate disables it in WasmAsr::create).
 
-    3.  The three model artifacts (encoder.onnx, decoder_joint_fp32.onnx,
+    3.  The three model artifacts (encoder.onnx, decoder_joint.onnx,
         tokenizer.model) are fetched by *this* JS and passed to WasmAsr.create
         as Uint8Array bytes. Point MODEL_BASE at wherever you host them.
   -->
@@ -73,7 +73,7 @@
       out('fetching model artifacts…');
       const [enc, dec, tok] = await Promise.all([     // 2. fetch the 3 artifacts
         fetchBytes(MODEL_BASE + 'encoder.onnx'),
-        fetchBytes(MODEL_BASE + 'decoder_joint_fp32.onnx'),
+        fetchBytes(MODEL_BASE + 'decoder_joint.onnx'),
         fetchBytes(MODEL_BASE + 'tokenizer.model'),
       ]);
 

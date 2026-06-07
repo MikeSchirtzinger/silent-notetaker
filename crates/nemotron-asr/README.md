@@ -75,7 +75,7 @@ nemotron-asr = "0.1"
 ```rust,no_run
 use nemotron_asr::Nemotron;
 
-// `models/` holds encoder.onnx, decoder_joint_fp32.onnx, tokenizer.model.
+// `models/` holds encoder.onnx, decoder_joint.onnx, tokenizer.model.
 let mut asr = Nemotron::from_pretrained("models")?;
 let audio = nemotron_asr::audio::load_wav_mono("test-assets/test_16k.wav")?;
 let transcript = asr.transcribe_audio(&audio)?;
@@ -109,7 +109,7 @@ await init();
 const bytes = (u) => fetch(u).then(r => r.arrayBuffer()).then(b => new Uint8Array(b));
 const [enc, dec, tok] = await Promise.all([
   bytes('/models/encoder.onnx'),
-  bytes('/models/decoder_joint_fp32.onnx'),
+  bytes('/models/decoder_joint.onnx'),
   bytes('/models/tokenizer.model'),
 ]);
 
@@ -141,7 +141,7 @@ you (e.g. from a pinned Hugging Face revision or your own CDN):
 | File | Format | Approx. size |
 |---|---|---|
 | `encoder.onnx` | INT8 (`MatMulInteger` + `DynamicQuantizeLinear`) | ~881 MB |
-| `decoder_joint_fp32.onnx` | FP32 (standard `LSTM` ×2, no contrib ops) | ~36 MB |
+| `decoder_joint.onnx` | INT8 (`DynamicQuantizeLSTM` — supported by native ORT *and* onnxruntime-web) | ~11 MB |
 | `tokenizer.model` | SentencePiece | ~251 KB |
 
 The model is NVIDIA's `nemotron-speech-streaming-en-0.6b`, distributed under the

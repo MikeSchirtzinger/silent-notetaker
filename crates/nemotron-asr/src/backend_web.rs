@@ -143,7 +143,9 @@ impl WasmAsr {
     /// Create an engine from in-memory model bytes.
     ///
     /// - `encoder_onnx`: bytes of `encoder.onnx` (INT8).
-    /// - `decoder_onnx`: bytes of `decoder_joint_fp32.onnx` (FP32 LSTM).
+    /// - `decoder_onnx`: bytes of `decoder_joint.onnx` (INT8 LSTM; its
+    ///   `DynamicQuantizeLSTM` contrib op is supported by onnxruntime-web —
+    ///   verified in-browser 2026-06-05).
     /// - `tokenizer_model`: bytes of `tokenizer.model` (SentencePiece).
     ///
     /// This initialises `ort-web` (fetching onnxruntime-web) on first call and

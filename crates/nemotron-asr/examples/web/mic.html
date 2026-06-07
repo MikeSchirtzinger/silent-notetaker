@@ -57,7 +57,7 @@
       await initWasm();
       const [enc, dec, tok] = await Promise.all([
         fetchBytes(MODEL_BASE + 'encoder.onnx'),
-        fetchBytes(MODEL_BASE + 'decoder_joint_fp32.onnx'),
+        fetchBytes(MODEL_BASE + 'decoder_joint.onnx'),
         fetchBytes(MODEL_BASE + 'tokenizer.model'),
       ]);
       status('building onnxruntime-web sessions…');

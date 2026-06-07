@@ -44,7 +44,7 @@ pkg/
 2. **The three model artifacts as bytes** — your JS `fetch`es them and passes
    `Uint8Array`s in:
    - `encoder.onnx` (INT8: `MatMulInteger` + `DynamicQuantizeLinear`)
-   - `decoder_joint_fp32.onnx` (FP32, standard `LSTM` — the wasm-safe decoder)
+   - `decoder_joint.onnx` (INT8 `DynamicQuantizeLSTM` — verified supported in onnxruntime-web)
    - `tokenizer.model` (SentencePiece)
 3. **16 kHz mono `Float32Array`** audio samples in `[-1, 1]`.
 
@@ -60,7 +60,7 @@ await init();
 const bytes = (u) => fetch(u).then(r => r.arrayBuffer()).then(b => new Uint8Array(b));
 const [enc, dec, tok] = await Promise.all([
   bytes('/models/encoder.onnx'),
-  bytes('/models/decoder_joint_fp32.onnx'),
+  bytes('/models/decoder_joint.onnx'),
   bytes('/models/tokenizer.model'),
 ]);
 

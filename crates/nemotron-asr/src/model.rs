@@ -121,12 +121,16 @@ mod native {
     }
 
     impl OrtBackend {
-        /// Load `encoder.onnx` and the FP32 decoder/joint from `model_dir`.
+        /// Load `encoder.onnx` and the INT8 decoder/joint from `model_dir`.
         ///
-        /// We use `decoder_joint_fp32.onnx` (pure `ai.onnx` opset-17, standard
-        /// `LSTM`) rather than the INT8 `decoder_joint.onnx`, which relies on
-        /// the `com.microsoft.DynamicQuantizeLSTM` contrib op that is not
-        /// guaranteed to exist in the future `ort-web` WASM build.
+        /// We use the INT8 `decoder_joint.onnx` (same checkpoint as the INT8
+        /// encoder; `com.microsoft.DynamicQuantizeLSTM` is supported by both
+        /// native ONNX Runtime and onnxruntime-web — verified in-browser
+        /// 2026-06-05). The previously-shipped `decoder_joint_fp32.onnx`
+        /// (altunenes/parakeet-rs) was a MISMATCHED checkpoint: no inverse
+        /// text normalization and garbled token-dense audio (~20% vs ~9% WER
+        /// on the same clip). Do not switch back without a matching-checkpoint
+        /// re-export. See registry/models.toml provenance notes.
         ///
         /// # Errors
         ///
@@ -135,7 +139,7 @@ mod native {
         pub fn from_dir<P: AsRef<Path>>(model_dir: P) -> Result<Self> {
             let dir = model_dir.as_ref();
             let encoder_path = dir.join("encoder.onnx");
-            let decoder_path = dir.join("decoder_joint_fp32.onnx");
+            let decoder_path = dir.join("decoder_joint.onnx");
 
             if !encoder_path.exists() {
                 return Err(Error::MissingFile(encoder_path));
