@@ -944,6 +944,15 @@
     .ai-notes-group { margin-top: 12px; }
     .ai-notes-group-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; }
     /* Per-item category chip inside the AI-notes outline (topic sections mix categories). */
+    /* Live Meeting Outline — in-panel topic sections forming during the meeting */
+    .live-outline { margin-bottom: 18px; padding: 12px 14px; border: 1px solid var(--accent-dim); border-radius: var(--radius-sm); background: rgba(0,0,0,0.12); }
+    .live-outline-header { color: var(--accent); display: flex; align-items: center; gap: 8px; }
+    .live-outline-group { margin-top: 10px; }
+    .live-outline-topic { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 4px; }
+    .live-outline-item { font-size: 13px; color: var(--text); padding: 3px 0 3px 4px; display: flex; align-items: baseline; gap: 7px; }
+    .live-outline-item .note-chip { flex-shrink: 0; }
+    .live-outline-spinner { width: 10px; height: 10px; border: 2px solid var(--accent-dim); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; margin-left: auto; }
+    .live-outline-status { font-size: 12px; color: var(--text-dim); margin-top: 8px; font-style: italic; }
     .note-chip { display: inline-block; font-size: 9px; font-weight: 600; text-transform: uppercase;
       letter-spacing: 0.05em; padding: 1px 5px; border-radius: 3px; margin-right: 6px; vertical-align: 1px; }
     .note-chip.decisions { color: var(--decisions); background: var(--decisions-dim); }
@@ -1208,6 +1217,32 @@
       min-width: 200px;
     }
     .settings-select:focus, .settings-input:focus { border-color: var(--accent); }
+    /* AI prompt editors — collapsible per-model prompt customization */
+    .prompt-group { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); margin-bottom: 8px; }
+    .prompt-group summary {
+      cursor: pointer; padding: 8px 10px; font-size: 12.5px; color: var(--text);
+      display: flex; align-items: center; gap: 8px; user-select: none; list-style: none;
+    }
+    .prompt-group summary::-webkit-details-marker { display: none; }
+    .prompt-group summary::before { content: '\25B8'; font-size: 10px; color: var(--text-faint); transition: transform 0.15s; }
+    .prompt-group[open] summary::before { transform: rotate(90deg); }
+    .prompt-group-hint { font-size: 10.5px; color: var(--text-faint); font-weight: 400; margin-left: auto; }
+    .prompt-field { padding: 6px 10px 10px; border-top: 1px solid var(--border-subtle); }
+    .prompt-field-head { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+    .prompt-field-label { font-size: 11.5px; font-weight: 500; color: var(--text); }
+    .prompt-modified {
+      font-size: 9px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+      padding: 1px 6px; border-radius: 4px; background: rgba(34,197,94,0.16); color: #4ade80;
+    }
+    .prompt-reset {
+      margin-left: auto; font-size: 10.5px; color: var(--text-faint); background: none;
+      border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; cursor: pointer;
+    }
+    .prompt-reset:hover { color: var(--text); border-color: var(--accent); }
+    .prompt-textarea {
+      width: 100%; min-width: 0; min-height: 88px; resize: vertical; line-height: 1.45;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
+    }
     .settings-toggle {
       appearance: none;
       width: 36px;
@@ -1506,6 +1541,21 @@
 
         <!-- Screenshots strip (shown when tab sharing is active) -->
         <div class="screenshots-strip" id="screenshotsStrip" style="display:none"></div>
+
+        <!-- Live Meeting Outline — on-device Qwen builds topic sections from the
+             transcript as the meeting progresses (LiveOutline object). Same
+             NOTES_SYSTEM prompt + parser as the at-Stop AI Final Notes; this is
+             the in-meeting view, the modal pass at Stop stays authoritative. -->
+        <div class="live-outline" id="liveOutline" style="display:none">
+          <div class="section-header live-outline-header">
+            <span class="section-icon">&#9776;</span>
+            Meeting Outline
+            <span class="ai-badge">on-device AI &middot; forming live</span>
+            <span class="live-outline-spinner" id="liveOutlineSpinner" style="display:none"></span>
+          </div>
+          <div class="live-outline-status" id="liveOutlineStatus" style="display:none"></div>
+          <div id="liveOutlineBody"></div>
+        </div>
 
         <!-- Decisions -->
         <div class="note-section" id="decisionsSection" style="display:none">
@@ -2450,6 +2500,7 @@ class QuestionGenerator {
         // A big model loading successfully is fresh evidence — forget any past demotion.
         if ((this.config.model || '').includes('1.7B')) { try { localStorage.removeItem('qwenAutoDemoted'); } catch (_) {} }
       }
+      else if (m.type === 'progress') { this.onProgress?.(m.value, m.file); }  // download % (was silently dropped)
       else if (m.type === 'loadfailed') { this._handleLoadFailed(m.message); }
       else if (m.type === 'result') {
         // Telemetry for PerfMonitor: how long generations take on the current device.
@@ -2462,7 +2513,15 @@ class QuestionGenerator {
         else console.warn('[questions]', m.message);
       }
     };
-    this.worker.onerror = (err) => console.warn('[questions] worker error', err.message || err);
+    this.worker.onerror = (err) => {
+      console.warn('[questions] worker error', (err && err.message) || err);
+      // An OPAQUE worker death (e.g. module-graph load failure — blank Event,
+      // no 'error'/'loadfailed' message ever arrives) used to leave every
+      // pending generate hanging forever: questions + live outline silently
+      // starved. terminate() rejects them ('generator restarted'), so callers'
+      // catch paths run — SmartQ unwedges its scheduler, LiveOutline requeues.
+      this.terminate();
+    };
     this.worker.postMessage({ type: 'configure', config: this.config });
   }
   load() {
@@ -2557,6 +2616,9 @@ const SmartQ = {
   _typeByKey(key) { return this.TYPES.find(t => t.key === key) || this.TYPES[0]; },
   reset() {
     if (_notesEngineReady && sharedNotesEngine) sharedNotesEngine.resetScheduler();
+    this._accumChars = 0;
+    this._busy = false;
+    this._failCount = 0;
     this._renderEmpty();
   },
   prewarm() {
@@ -2571,25 +2633,35 @@ const SmartQ = {
     const t = String(text).trim(); if (!t) return;
     if (!this._warmed) this.prewarm();
     if (!(_notesEngineReady && sharedNotesEngine)) return;
+    this._accumChars = (this._accumChars || 0) + t.length;  // JS-side mirror of the scheduler's window growth (it doesn't expose window_len)
     const outcome = sharedNotesEngine.accumulate(t, Date.now());
     if (outcome.kind === 'generate') this._runRequest(outcome.request);
   },
-  // Manual reroll (rerollSmartQ): the Rust scheduler forces a generation
-  // regardless of the gates and expands the bar if minimized. The DOM expand is
-  // already handled by rerollSmartQ()/toggleSmartQ(); here we just run the gen.
+  // Manual reroll (rerollSmartQ / clicking the Ask-Now bar): the Rust scheduler
+  // forces a generation regardless of the time/char gates. A refusal (window
+  // under its 40-char floor, or a request in flight) used to be a SILENT no-op
+  // — now it renders a hint so a click always visibly does something.
   _generate() {
     if (!(_notesEngineReady && sharedNotesEngine)) return;
     const outcome = sharedNotesEngine.reroll(Date.now());
-    if (outcome.kind === 'generate') this._runRequest(outcome.request);
+    if (outcome.kind === 'generate') { this._runRequest(outcome.request); return; }
+    if (this._busy) return;  // already generating — the loading state is showing
+    this._renderHint((this._accumChars || 0) < 40
+      ? 'Keep the conversation going — questions need a little more transcript first…'
+      : 'One moment — still working on the previous question…');
   },
   // Run one GenerateRequest on the Qwen worker, then route the reply back into
   // the Rust scheduler. ready → render; retry → run the next request (rotated
   // type) the scheduler issued on a duplicate; superseded → drop silently.
   async _runRequest(request) {
+    this._busy = true;
     this._renderLoading();
     try {
       const type = this._typeByKey(request.kind);
-      const r = await sharedQuestionGenerator.generate(request.window, { system: type.system + this.HEURISTICS, maxTokens: 64 });
+      // Per-type prompt + shared rules — both user-tunable in Settings → AI Prompts.
+      const system = customPrompt(`smartq_${type.key}`, type.system) + customPrompt('smartq_rules', this.HEURISTICS);
+      const r = await sharedQuestionGenerator.generate(request.window, { system, maxTokens: 64 });
+      this._failCount = 0;   // worker is healthy again
       const res = sharedNotesEngine.onWorkerResult(request.request_id, r.question || '');
       if (res.kind === 'ready') {
         const lbl = this._typeByKey(res.event.kind).label;
@@ -2600,12 +2672,43 @@ const SmartQ = {
       // superseded → a reset / newer generation happened; drop.
     } catch (e) {
       console.warn('[smartq]', e && e.message || e);
+      // UNWEDGE the Rust scheduler: onWorkerResult is the ONLY thing that
+      // clears its in-flight `pending`, so a worker failure here would leave
+      // it "busy" forever — every later accumulate/reroll silently no-ops for
+      // the rest of the session. Feed the failed request an empty reply, and
+      // decline the retry slot the same way (the worker just failed — don't
+      // immediately hammer it again).
+      try {
+        const res = sharedNotesEngine.onWorkerResult(request.request_id, '');
+        if (res.kind === 'retry') sharedNotesEngine.onWorkerResult(res.request.request_id, '');
+      } catch (_) {}
       this._renderEmpty();
+      // 3 consecutive failures = the model is genuinely unavailable — disable
+      // for this meeting (one final toast) instead of re-failing every window.
+      this._failCount = (this._failCount || 0) + 1;
+      if (typeof showToast === 'function') {
+        showToast(this._failCount >= 3
+          ? 'Live questions disabled for this meeting — the notes model is unavailable'
+          : 'Live question generation failed — see console for details');
+      }
+      if (this._failCount >= 3) this.enabled = false;
+    } finally {
+      this._busy = false;
     }
   },
   // ── rendering ──
   _bar() { return document.getElementById('smartqBar'); },
   _renderLoading() { const b = this._bar(); if (b) b.classList.add('loading'); },
+  // Transient message in the empty slot (reroll refusals); restores the
+  // default copy after a few seconds unless a question rendered meanwhile.
+  _renderHint(msg) {
+    const e = document.getElementById('smartqEmpty');
+    if (!e) return;
+    const DEFAULT_EMPTY = 'Questions will appear as the conversation builds…';
+    e.textContent = msg;
+    clearTimeout(this._hintTimer);
+    this._hintTimer = setTimeout(() => { e.textContent = DEFAULT_EMPTY; }, 4000);
+  },
   _renderEmpty() {
     const b = this._bar(); if (!b) return;
     b.classList.remove('loading', 'has-new');
@@ -2631,6 +2734,12 @@ function toggleSmartQ() {
   // that decides whether a freshly-generated question raises the dot).
   if (_notesEngineReady && sharedNotesEngine) {
     if (sharedNotesEngine.isMinimized() !== b.classList.contains('minimized')) sharedNotesEngine.toggleMinimize();
+  }
+  // Clicking "Ask Now" should DO something: expanding a bar that has no
+  // question yet kicks off a generation immediately (same path as ↻).
+  const q = document.getElementById('smartqQuestion');
+  if (!b.classList.contains('minimized') && SmartQ.enabled && (!q || q.style.display === 'none')) {
+    SmartQ._generate();
   }
 }
 function rerollSmartQ() {
@@ -2790,18 +2899,136 @@ TOPIC| topic name
 
 THEN write down EVERY substantive item worth remembering, one per line, in your own words, under 18 words each. Be thorough — a real meeting yields several decisions, tasks, facts, and open questions. Skip greetings, filler, and small talk.
 
+The transcript is not always a meeting: it may be a talk, a lesson, or a demo with no decisions or tasks at all. Important facts, findings, numbers, and explanations are still KEYPOINT items — extract them just as thoroughly.
+
 Tag each item with the ONE category that fits best:
 - DECISION = a choice the group settled on or agreed to
 - ACTION = a task someone will do. Shape the text as: who — what they will do — by when (owner and deadline only if stated)
 - KEYPOINT = an important fact, metric, number, or finding
 - QUESTION = an open question or an unresolved blocker
 
-Each line has this exact shape:
-CATEGORY| note text
-where CATEGORY is literally one of: TOPIC, DECISION, ACTION, KEYPOINT, QUESTION.
+Each line is the tag, then a | separator, then the note text. A fact line looks like:
+KEYPOINT| the fact, stated in your own words
+The tag must be literally one of: TOPIC, DECISION, ACTION, KEYPOINT, QUESTION — never the word CATEGORY.
 
-Extract ONLY from the transcript — never invent, never guess owners or dates. If nothing is note-worthy, output exactly: NONE
+Extract ONLY from the transcript — never invent, never guess owners or dates. Every excerpt that explains, reports, or demonstrates something has KEYPOINT items in it. Only when the excerpt is pure greeting, filler, or small talk with no information at all, output exactly: NONE
 Output only the lines.`;
+
+/* ════════════════════════════════════════════
+   Custom AI prompts — every system prompt the notes/question models run with is
+   user-tunable in Settings (persisted under settings.prompts, OVERRIDES ONLY —
+   an untouched prompt tracks future default improvements automatically).
+═══════════════════════════════════════════ */
+/* Recap per-type prompt defaults — hoisted out of generateQuestionRecap so the
+   Settings editor and the recap generator read the SAME source of truth. */
+const RECAP_RULES = ` Each question must reference something actually discussed, ask exactly one thing, and be answerable by someone who was in the meeting. One per line. No numbering, no preamble, no quotes.`;
+const RECAP_TYPES = {
+  clarify:  { label: 'Clarifying',       system: `You were an engaged participant in this meeting. Produce up to 3 CLARIFYING questions still worth getting answered — ambiguities or gaps that will block execution if left unresolved.` },
+  risk:     { label: "Devil's Advocate", system: `You were an engaged participant in this meeting. Produce up to 3 pointed questions that challenge the decisions made — the assumption most likely to be wrong, the risk nobody priced in, or the constraint everyone glossed over.` },
+  followup: { label: 'Follow-up',        system: `You were an engaged participant in this meeting. Produce up to 3 FOLLOW-UP questions that turn talk into work: pin down the owner, the deadline, or what "done" looks like for things left vague.` },
+  coverage: { label: 'Not Covered',      system: `You were an engaged participant in this meeting. Compare what was discussed against what this kind of work normally requires, and produce up to 3 questions that raise important things the meeting did not discuss at all.` },
+  deepen:   { label: 'Push Further',     system: `You were an engaged participant in this meeting. Pick the most promising ideas that were only briefly mentioned, and produce up to 3 questions that develop those specific ideas into something concrete and more ambitious.` },
+};
+
+/** The user's prompt override for `key`, or `def` when not customized (empty/
+ *  whitespace overrides are treated as "not customized" so a cleared textarea
+ *  can never silently break a model). */
+function customPrompt(key, def) {
+  try {
+    const v = (loadSettings().prompts || {})[key];
+    return (typeof v === 'string' && v.trim()) ? v : def;
+  } catch (_) { return def; }
+}
+
+/* Claude bridge prompt defaults — keep byte-identical with bridge.py
+   (analyze_screenshot / analyze_transcript_batch / generate_summary system
+   prompts). The browser sends the EFFECTIVE prompt with each bridge message;
+   bridge.py falls back to its own copy when the field is absent. */
+const BRIDGE_SCREENSHOT_SYSTEM =
+`You are analyzing a screenshot from a meeting. Describe what's shown concisely:
+- If it's a slide: extract the title, key bullet points, and any data/charts
+- If it's a demo/UI: describe what's being shown
+- If it's a document: extract key visible text
+- If it's a person/video call: just say "Video call view" (don't describe people)
+
+Be concise — 1-3 sentences max. Focus on informational content that would be useful in meeting notes.`;
+const BRIDGE_ENHANCE_SYSTEM =
+`You are a meeting note analyzer. Given recent transcript text, extract any noteworthy items and categorize them.
+
+Return a JSON array of notes. Each note has:
+- "category": one of "decisions", "actions", "keypoints", "questions"
+- "text": the cleaned-up, concise note text
+- "confidence": 0.0-1.0 how confident you are in the categorization
+
+Rules:
+- Only include genuinely noteworthy items — skip filler, pleasantries, tangents
+- Clean up the text — fix transcription artifacts, make it concise
+- Decisions: explicit commitments to a course of action
+- Actions: tasks assigned to specific people with clear ownership
+- Questions: unresolved questions that need follow-up
+- Keypoints: important information, data points, insights
+- If nothing noteworthy, return an empty array: []
+
+Return ONLY valid JSON, no markdown fences.`;
+const BRIDGE_SUMMARY_SYSTEM =
+`You are generating a final meeting summary. Create a clean, well-structured summary in markdown format.
+
+Structure:
+# Meeting Summary
+
+**[One sentence executive summary — what was this meeting about and what was accomplished]**
+
+## Decisions Made
+- [Each decision, clearly stated]
+
+## Action Items
+- [ ] [Task] — **[Owner]** (by [deadline if mentioned])
+
+## Key Points
+- [Important information, data, insights]
+
+## Open Questions
+- [Unresolved items needing follow-up]
+
+## Visual Content
+[Only if screenshots were analyzed — summarize what was presented]
+
+Rules:
+- Be concise but complete
+- Clean up transcription errors
+- Identify action item owners from context
+- Use checkbox format for action items
+- Skip sections entirely if empty (don't show empty sections)
+- The summary should be immediately usable as meeting notes to share with attendees`;
+
+/* Registry driving the Settings "AI Prompts" editor AND the save path. `def` is
+   lazy so each field always reflects the live default constant. */
+const PROMPT_FIELDS = [
+  { key: 'notes_system', group: 'notes', label: 'Note extraction (AI Final Notes at Stop)',
+    def: () => NOTES_SYSTEM },
+  { key: 'smartq_rules', group: 'live',  label: 'Shared rules (appended to every type)',
+    def: () => SmartQ.HEURISTICS },
+  ...['clarify', 'risk', 'followup', 'coverage', 'deepen'].map(k => ({
+    key: `smartq_${k}`, group: 'live',
+    label: null,  // resolved lazily from SmartQ.TYPES below (defined earlier in this file)
+    def: () => SmartQ._typeByKey(k).system,
+    labelFn: () => `Type: ${SmartQ._typeByKey(k).label}`,
+  })),
+  { key: 'recap_rules', group: 'recap', label: 'Shared rules (appended to every type)',
+    def: () => RECAP_RULES },
+  ...Object.keys(RECAP_TYPES).map(k => ({
+    key: `recap_${k}`, group: 'recap',
+    label: null,
+    def: () => RECAP_TYPES[k].system,
+    labelFn: () => `Type: ${RECAP_TYPES[k].label}`,
+  })),
+  { key: 'bridge_screenshot', group: 'bridge', label: 'Screenshot analysis (📊 key points)',
+    def: () => BRIDGE_SCREENSHOT_SYSTEM },
+  { key: 'bridge_enhance', group: 'bridge', label: 'Live transcript enhancement (recategorized notes)',
+    def: () => BRIDGE_ENHANCE_SYSTEM },
+  { key: 'bridge_summary', group: 'bridge', label: 'Final meeting summary',
+    def: () => BRIDGE_SUMMARY_SYSTEM },
+];
 
 /* Qwen note parse / chunk / dedup — POLICY moved to crates/silent-notes
    (parse_qwen_notes / chunk_transcript / dedupe_notes / final_notes_chunks),
@@ -2822,6 +3049,206 @@ function chunkTranscript(text, target = 1100) {
 function dedupeNotes(notes) {
   return (_notesEngineReady && sharedNotesEngine) ? sharedNotesEngine.dedupeNotes(notes) : notes;
 }
+
+/** parseQwenNotes + format-drift salvage. The 0.6B's adherence to the
+ *  CATEGORY| format is content-dependent (well-punctuated ASR input flips it
+ *  into markdown-summary register even with a seeded TOPIC| line — verified
+ *  2026-06-06). When the strict Rust parse yields nothing, salvage the
+ *  content: keep the TOPIC| line if present, convert bullet/prose lines into
+ *  KEYPOINT notes. The content in drifted output is consistently extractive
+ *  and correct — only the tags are missing. */
+function parseQwenNotesSalvage(raw) {
+  const strict = parseQwenNotes(raw);
+  if (strict.length) return strict;
+  let lines = String(raw || '').split(/\n+/).map(l => l.trim()).filter(Boolean);
+  // Pure-prose replies come back as one long paragraph — split into sentences.
+  if (lines.length <= 2) {
+    lines = lines.flatMap(l => l.match(/[^.!?]+[.!?]+/g) || [l]).map(s => s.trim());
+  }
+  let topic = null;
+  const out = [];
+  for (let l of lines) {
+    const tm = l.match(/^TOPIC\|\s*(.+)$/i);
+    if (tm) { topic = tm[1].replace(/\*\*/g, '').trim() || null; continue; }
+    l = l.replace(/^[-*•#\s]+/, '').replace(/\*+/g, '').trim();
+    if (l.length < 12) continue;                              // headers/fragments
+    if (/^(NONE\b|CATEGORY\b|TOPIC\b)/i.test(l)) continue;    // template echoes
+    out.push({ cat: 'keypoints', text: l.length > 140 ? l.slice(0, 137) + '…' : l, topic });
+    if (out.length >= 6) break;   // cap salvage volume per chunk
+  }
+  return out;
+}
+
+/* ════════════════════════════════════════════
+   LiveOutline — the meeting outline FORMING DURING the meeting.
+   Every ~MIN_CHARS of finalized transcript (rate-limited to one generation per
+   MIN_INTERVAL_MS) runs the same NOTES_SYSTEM chunk pass the at-Stop AI Final
+   Notes use — same shared Qwen worker as SmartQ (CPU ASR keeps the GPU free),
+   same parser, same Rust dedup — and appends topic sections to the notes panel.
+   The full-transcript pass at Stop stays the authoritative outline (better
+   recall: coherent chunking over the whole transcript); this is the live view.
+═══════════════════════════════════════════ */
+const LiveOutline = {
+  enabled: false,
+  MIN_CHARS: 450,           // validated 0.6B recall sweet spot ≈500 chars/chunk
+  MIN_INTERVAL_MS: 60000,   // bound Qwen usage — at most one outline pass/min
+  _buf: '', _lastGenAt: 0, _busy: false, _notes: [], _fails: 0,
+
+  reset() {
+    this._buf = ''; this._lastGenAt = 0; this._busy = false; this._notes = []; this._fails = 0;
+    const body = document.getElementById('liveOutlineBody');
+    if (body) body.innerHTML = '';
+    this._showStatus(false);
+    const wrap = document.getElementById('liveOutline');
+    if (wrap) wrap.style.display = 'none';
+  },
+  /* Called at meeting start (after configureLiveQuestionsDevice). Reads the
+     setting and warms the shared generator even when Smart Questions are off.
+     Shows the section SHELL immediately with an honest status line — a 1.7B
+     pick means a 1.36 GB download, and a silently-absent section for minutes
+     reads as broken (it did). */
+  prewarm() {
+    const s = (typeof loadSettings === 'function') ? loadSettings() : {};
+    this.enabled = s.liveOutline !== false && !notesModelOff();
+    if (this.enabled) {
+      sharedQuestionGenerator.prewarm();
+      const wrap = document.getElementById('liveOutline');
+      if (wrap) wrap.style.display = '';
+      this._showStatus(sharedQuestionGenerator.ready ? null : 'Preparing AI model…');
+    }
+  },
+  /* Status line under the header. `null` = model ready but no notes yet
+     (listening copy); `false` = hide; string = show it (load progress etc.). */
+  _showStatus(msg) {
+    const el = document.getElementById('liveOutlineStatus');
+    if (!el) return;
+    if (msg === false || (msg === null && this._notes.length)) { el.style.display = 'none'; return; }
+    el.style.display = '';
+    el.textContent = msg === null ? 'Listening — the outline forms as the meeting progresses…' : msg;
+  },
+  accumulate(text) {
+    if (!this.enabled || !text) return;
+    const t = String(text).trim(); if (!t) return;
+    this._buf += (this._buf ? ' ' : '') + t;
+    this._maybeGenerate();
+  },
+  async _maybeGenerate() {
+    if (this._busy || this._fails >= 3) return;
+    if (this._buf.length < this.MIN_CHARS) return;
+    if (Date.now() - this._lastGenAt < this.MIN_INTERVAL_MS) return;
+    if (!(_notesEngineReady && sharedNotesEngine)) return;
+    // Cap per-pass input near the validated ~1100-char chunk size (0.6B recall
+    // drops on long inputs). A backlog builds while the model loads — take the
+    // head at a word boundary, leave the tail for the catch-up pass.
+    let chunk;
+    if (this._buf.length > 1400) {
+      let cut = this._buf.lastIndexOf(' ', 1400);
+      if (cut < this.MIN_CHARS) cut = 1400;
+      chunk = this._buf.slice(0, cut);
+      this._buf = this._buf.slice(cut).trim();
+    } else {
+      chunk = this._buf; this._buf = '';
+    }
+    this._busy = true; this._lastGenAt = Date.now();
+    this._spinner(true);
+    try {
+      const r = await sharedQuestionGenerator.generate(chunk,
+        { system: customPrompt('notes_system', NOTES_SYSTEM), maxTokens: 288, noMeta: false });
+      this._fails = 0;
+      this._append(parseQwenNotesSalvage(r.question || ''));
+    } catch (e) {
+      console.warn('[live-outline]', e && e.message || e);
+      // Re-queue the text so the next batch retries it; give up loudly after 3
+      // consecutive failures (the at-Stop pass still covers the full transcript).
+      this._buf = chunk + (this._buf ? ' ' + this._buf : '');
+      if (++this._fails >= 3 && typeof showToast === 'function') {
+        showToast('Live outline paused (model errors) — full notes still generate at Stop');
+      }
+    } finally {
+      this._busy = false;
+      this._spinner(false);
+      // A backlog may have built up while this generation ran.
+      if (this._buf.length >= this.MIN_CHARS) setTimeout(() => this._maybeGenerate(), this.MIN_INTERVAL_MS);
+    }
+  },
+  /* Dedup new notes against everything shown (Rust keeps-first, order-preserving
+     → survivors past the old length are the genuinely-new ones), then render. */
+  _append(fresh) {
+    if (!fresh.length) return;
+    const combined = dedupeNotes(this._notes.concat(fresh));
+    const newOnes = combined.slice(this._notes.length);
+    this._notes = combined;
+    if (!newOnes.length) return;
+    const wrap = document.getElementById('liveOutline');
+    const body = document.getElementById('liveOutlineBody');
+    if (!wrap || !body) return;
+    wrap.style.display = '';
+    this._showStatus(false);   // real notes now — drop the status line
+    const CAT_CHIP = { decisions: 'Decision', actions: 'Action', keypoints: 'Key point', questions: 'Question' };
+    for (const n of newOnes) {
+      const label = n.topic || 'Discussion';
+      // Merge into the last topic section when the topic continues across chunks.
+      let group = body.lastElementChild;
+      const lastLabel = group ? (group.querySelector('.live-outline-topic')?.textContent || '') : '';
+      if (!group || lastLabel.toLowerCase() !== label.toLowerCase()) {
+        group = document.createElement('div');
+        group.className = 'live-outline-group fade-slide-in';
+        const topicEl = document.createElement('div');
+        topicEl.className = 'live-outline-topic';
+        topicEl.textContent = label;            // Qwen output is untrusted — textContent only
+        group.appendChild(topicEl);
+        body.appendChild(group);
+      }
+      const item = document.createElement('div');
+      item.className = 'live-outline-item fade-slide-in';
+      const chip = document.createElement('span');
+      chip.className = `note-chip ${CAT_CHIP[n.cat] ? n.cat : 'keypoints'}`;
+      chip.textContent = CAT_CHIP[n.cat] || 'Key point';
+      const txt = document.createElement('span');
+      txt.textContent = n.text;
+      item.appendChild(chip); item.appendChild(txt);
+      group.appendChild(item);
+    }
+  },
+  _spinner(on) {
+    const s = document.getElementById('liveOutlineSpinner');
+    if (s) s.style.display = on ? '' : 'none';
+  },
+  /* Surface shared-Qwen load state (status + download %) in the outline header
+     AND the Ask-Now empty slot. Without this, a 1.7B pick (1.36 GB download +
+     WebGPU session build) leaves both surfaces silently empty for minutes —
+     indistinguishable from broken. Wired once at meeting start. */
+  wireLoadStatus() {
+    const applyBoth = (msg) => {
+      this._showStatus(msg);
+      const e = document.getElementById('smartqEmpty');
+      const q = document.getElementById('smartqQuestion');
+      if (e && (!q || q.style.display === 'none')) {
+        e.textContent = (msg === null || msg === false)
+          ? 'Questions will appear as the conversation builds…' : msg;
+      }
+    };
+    sharedQuestionGenerator.onStatus = (msg) =>
+      applyBoth(sharedQuestionGenerator.ready ? null : msg);
+    sharedQuestionGenerator.onProgress = (pct) => {
+      if (!sharedQuestionGenerator.ready) applyBoth(`Downloading AI model… ${pct}%`);
+    };
+  },
+  /* Markdown for Copy-as-Markdown — appended after the Rust notesToMarkdown
+     output (that format is golden-pinned policy; this is additive JS). */
+  toMarkdown() {
+    if (!this._notes.length) return '';
+    const CAT = { decisions: 'Decision', actions: 'Action', keypoints: 'Key point', questions: 'Question' };
+    let md = '## Meeting Outline (formed live, on-device AI)\n';
+    let lastTopic = null;
+    for (const n of this._notes) {
+      const t = n.topic || 'Discussion';
+      if (t.toLowerCase() !== (lastTopic || '').toLowerCase()) { md += `\n### ${t}\n`; lastTopic = t; }
+      md += `- **${CAT[n.cat] || 'Key point'}** — ${n.text}\n`;
+    }
+    return md;
+  },
+};
 
 /* ════════════════════════════════════════════
    OpenQs — meeting-level open/unanswered question tracking.
@@ -3293,10 +3720,21 @@ class TranscriptionManager {
   /** Wire mic audio → Nemotron engine → streaming transcript. Shared by start and resume. */
   async _startNemotronCapture() {
     const eng = this.nemotron;
+    // Resume (pause/Continue reuses the engine): promote any leftover partial
+    // sentence from the previous segment FIRST. The old code just nulled the
+    // references below, which orphaned the live element — its text stayed
+    // visible in the transcript but was never promoted, so it never reached
+    // storage/notes and silently vanished from the saved meeting.
+    if (this._nemoLiveText && this._nemoLiveText.trim() && this.nemoRing) this._nemotronFlushLive();
     // streaming-render state
     this._nemoLiveEl = null;
     this._nemoLiveText = '';
     this._nemoLastFinalAbs = 0;
+    this._nemoLastSpeakerInfo = null;
+    // Ring abs restarts at 0 here; rebase the engine's consumed counter so
+    // consumedSamples-derived positions stay 1:1 with ring positions across
+    // resume (where the engine is reused without a reset).
+    this._nemoConsumedBase = eng ? eng.consumedSamples : 0;
     if (!this.nemoRing) this.nemoRing = new Float32RingBuffer(16000 * 60);
     this.nemoRing.reset();
     if (this.speakerTracker) this.speakerTracker.embedder.load().catch(() => {}); // prewarm speaker model
@@ -3314,13 +3752,56 @@ class TranscriptionManager {
   _nemotronAppend(frag) {
     if (!frag) return;
     this._nemoLiveText += frag;
-    // Promote any complete sentence(s) to their own final transcript segment.
+    // Ring-abs position of the audio this text was DECODED from. Unlike
+    // ring.writeAbs (the live capture head, 0.6–0.9 s + backlog ahead of the
+    // transcript), engine.consumedSamples tracks drained-into-wasm audio, so
+    // speaker slices stay aligned with the words — the old writeAbs slices
+    // bled into the NEXT speaker's turn (visibly wrong on fast speech).
+    const base = this._nemoConsumedBase || 0;
+    const fragAbs = this.nemotron ? Math.max(0, this.nemotron.consumedSamples - base) : this.nemoRing.writeAbs;
+    // Collect completed sentence(s), then split the [lastFinal..fragAbs] audio
+    // window across them (plus any leftover partial) proportionally by char
+    // count — so two sentences finishing in ONE fragment each get a real,
+    // non-empty window (the old code gave the second a zero-length slice and
+    // silently skipped its speaker identify).
+    const done = [];
     let mm;
     while ((mm = this._nemoLiveText.match(/[.?!]+(\s|$)/)) !== null) {
       const cut = mm.index + mm[0].length;
       const sentence = this._nemoLiveText.slice(0, cut).trim();
       this._nemoLiveText = this._nemoLiveText.slice(cut);
-      if (sentence) this._nemotronPromote(sentence);
+      if (sentence) done.push(sentence);
+    }
+    // Fallback segmentation: the INT8 RNN-T under-punctuates continuous speech
+    // (it prefers commas when the speaker never pauses), so a long monologue
+    // would otherwise grow ONE live element for the whole recording and flush
+    // at Stop as a single timestamped paragraph. Carve at clause boundaries
+    // once the live text exceeds a budget (~300 chars ≈ 20-25 s of speech).
+    const MAX_LIVE_CHARS = 300;
+    while (this._nemoLiveText.length > MAX_LIVE_CHARS) {
+      const head = this._nemoLiveText.slice(0, MAX_LIVE_CHARS);
+      let cut = head.lastIndexOf(', ');
+      if (cut >= 0) cut += 2;                    // keep the comma with the carved segment
+      else cut = head.lastIndexOf(' ') + 1;      // else last word boundary
+      if (cut <= 0) cut = MAX_LIVE_CHARS;        // pathological: no spaces at all
+      const sentence = this._nemoLiveText.slice(0, cut).trim();
+      this._nemoLiveText = this._nemoLiveText.slice(cut);
+      if (!sentence) break;
+      done.push(sentence);
+    }
+    if (done.length) {
+      const liveLen = this._nemoLiveText.trim().length;
+      const totalChars = done.reduce((n, s) => n + s.length, 0) + liveLen;
+      const start0 = Math.max(this.nemoRing.earliest, this._nemoLastFinalAbs || 0);
+      const span = Math.max(0, fragAbs - start0);
+      let cum = 0, prevEnd = start0;
+      for (const sentence of done) {
+        cum += sentence.length;
+        const endAbs = totalChars > 0 ? Math.round(start0 + span * (cum / totalChars)) : fragAbs;
+        this._nemotronPromote(sentence, prevEnd, endAbs);
+        prevEnd = endAbs;
+      }
+      this._nemoLastFinalAbs = prevEnd;
     }
     this._nemotronRenderLive(this._nemoLiveText.trim());
   }
@@ -3347,8 +3828,12 @@ class TranscriptionManager {
     container.scrollTop = container.scrollHeight;
   }
 
-  /** Finalize one completed sentence: promote the live el → final, attach speaker, fire onFinal. */
-  _nemotronPromote(sentence) {
+  /**
+   * Finalize one completed sentence: promote the live el → final, attach speaker, fire onFinal.
+   * `startAbs`/`endAbs` are the ring-abs bounds of the audio this sentence was decoded
+   * from (computed by _nemotronAppend from engine.consumedSamples, NOT ring.writeAbs).
+   */
+  _nemotronPromote(sentence, startAbs, endAbs) {
     const container = document.getElementById('transcriptContent');
     let el = this._nemoLiveEl;
     if (el) {
@@ -3370,19 +3855,24 @@ class TranscriptionManager {
       if (container) container.scrollTop = container.scrollHeight;
     }
     // Speaker label from this turn's ring audio (async, off the decode path).
-    const startAbs = Math.max(this.nemoRing.earliest, this._nemoLastFinalAbs || 0);
-    const endAbs = this.nemoRing.writeAbs;
-    this._nemoLastFinalAbs = endAbs;
-    if (this.speakerTracker && el && endAbs > startAbs) {
+    // Windows too short to embed reliably (< 400 ms — e.g. an interjection like
+    // "Right.") inherit the previous sentence's speaker instead of either
+    // embedding noise or going unlabeled.
+    const MIN_EMBED_SAMPLES = 16000 * 0.4;
+    if (this.speakerTracker && el && (endAbs - startAbs) >= MIN_EMBED_SAMPLES) {
       let turn = null;
-      try { turn = this.nemoRing.read(startAbs, endAbs); } catch (_) {}
+      try { turn = this.nemoRing.read(Math.max(this.nemoRing.earliest, startAbs), endAbs); } catch (_) {}
       const CAP = 16000 * 20; // cap very long turns for embed efficiency
       if (turn && turn.length > CAP) turn = turn.subarray(turn.length - CAP);
       if (turn) {
         this.speakerTracker.identify(turn)
-          .then(info => { if (info) attachSpeakerToEl(el, info); })
+          .then(info => {
+            if (info) { this._nemoLastSpeakerInfo = info; attachSpeakerToEl(el, info); }
+          })
           .catch(() => {});
       }
+    } else if (el && this._nemoLastSpeakerInfo) {
+      attachSpeakerToEl(el, this._nemoLastSpeakerInfo);
     }
     // Fire onFinal for storage, notes, SmartQ, Claude bridge.
     this.onFinal(sentence, null);
@@ -3392,7 +3882,15 @@ class TranscriptionManager {
   _nemotronFlushLive() {
     const rem = (this._nemoLiveText || '').trim();
     this._nemoLiveText = '';
-    if (rem) this._nemotronPromote(rem);
+    if (rem) {
+      // At stop the engine has drained everything; the remaining partial's
+      // audio spans [lastFinal .. consumed].
+      const base = this._nemoConsumedBase || 0;
+      const endAbs = this.nemotron ? Math.max(0, this.nemotron.consumedSamples - base) : this.nemoRing.writeAbs;
+      const startAbs = Math.max(this.nemoRing.earliest, this._nemoLastFinalAbs || 0);
+      this._nemotronPromote(rem, startAbs, Math.max(endAbs, startAbs));
+      this._nemoLastFinalAbs = Math.max(endAbs, startAbs);
+    }
   }
 
   /**
@@ -3488,6 +3986,7 @@ class TranscriptionManager {
 
     this.voxtralRing.reset();
     this._voxtralLastSentenceAbs = 0; // ring position of last completed sentence (per-turn speaker audio)
+    this._voxtralLastSpeakerInfo = null; // last identified speaker (inherited by sub-400ms fragments)
     if (this.speakerTracker) this.speakerTracker.embedder.load().catch(() => {}); // prewarm speaker model
     this.voxtralStopRequested = false;
     const myRunId = ++this._voxtralRunId;
@@ -3576,19 +4075,28 @@ class TranscriptionManager {
       }
       // Speaker label: embed THIS turn's ring audio (async, OFF the token path so it
       // never touches the RAM-sensitive generate loop) and patch the element when ready.
+      // Windows too short to embed reliably (< 400 ms — sentence-splitter fragments
+      // like "30 p." / "m.", or a second sentence finalizing in the same tick)
+      // inherit the previous sentence's speaker instead of embedding noise (which
+      // minted phantom speakers) or going unlabeled.
       const startAbs = Math.max(ring.earliest, this._voxtralLastSentenceAbs || 0);
       const endAbs = ring.writeAbs;
       this._voxtralLastSentenceAbs = endAbs;
-      if (this.speakerTracker && promotedEl && endAbs > startAbs) {
+      const MIN_EMBED_SAMPLES = 16000 * 0.4;
+      if (this.speakerTracker && promotedEl && (endAbs - startAbs) >= MIN_EMBED_SAMPLES) {
         let turn = null;
         try { turn = ring.read(startAbs, endAbs); } catch (_) {}
         const CAP = 16000 * 20; // cap very long turns for embed efficiency
         if (turn && turn.length > CAP) turn = turn.subarray(turn.length - CAP);
         if (turn) {
           this.speakerTracker.identify(turn)
-            .then(info => { if (info) attachSpeakerToEl(promotedEl, info); })
+            .then(info => {
+              if (info) { this._voxtralLastSpeakerInfo = info; attachSpeakerToEl(promotedEl, info); }
+            })
             .catch(() => {});
         }
+      } else if (promotedEl && this._voxtralLastSpeakerInfo) {
+        attachSpeakerToEl(promotedEl, this._voxtralLastSpeakerInfo);
       }
       // Fire onFinal for storage, notes, Claude bridge
       this.onFinal(sentence, null);
@@ -4025,7 +4533,7 @@ function _handleBridgeMessage(msg) {
    the WebGPU recap/notes burst.
 ═══════════════════════════════════════════ */
 const PerfMonitor = {
-  _iv: null, _stopTimer: null, _tick: 0, _totalMB: null, _buckets: null,
+  _iv: null, _stopTimer: null, _tick: 0, _totalMB: null, _buckets: null, _lagging: false,
   start() {
     this.stop();
     window.__perfLog = window.__perfLog || [];
@@ -4067,6 +4575,21 @@ const PerfMonitor = {
       // PerfMonitor (row 35): ride the EngineStats snapshot on the SAME `silent.diag`
       // tracing target so the crash trail and the perf telemetry are one subscriber.
       if (asrStats) Diag.recordStats(asrStats);
+      // Falling-behind guard: a sustained feed backlog means this machine is
+      // decoding slower than realtime right now (other load, thermal, battery).
+      // To the user that silently reads as "sentences being skipped" — the text
+      // arrives much later or piles up at Stop. Say it out loud instead, and
+      // clear the notice once the backlog drains.
+      if (asrStats && app.tm && app.tm.engine === 'nemotron' && app.isRecording) {
+        const lagSecs = (asrStats.pendingSamples || 0) / 16000;
+        if (lagSecs >= 10) {
+          this._lagging = true;
+          app.handleStatus(`Transcription is ~${Math.round(lagSecs)}s behind live audio — this machine can't keep up right now. Nothing is lost; text catches up as it decodes (or at Stop).`, null);
+        } else if (this._lagging && lagSecs < 2) {
+          this._lagging = false;
+          app.handleStatus('Nemotron caught up — streaming transcription active', null);
+        }
+      }
       const row = {
         t: new Date().toISOString().slice(11, 19),
         heapMB: m.usedJSHeapSize ? Math.round(m.usedJSHeapSize / 1048576) : null,
@@ -4325,12 +4848,15 @@ class App {
       await _ensureNotesLoaded();   // Rust notes/questions policy (NoteExtractor + OpenQs + Scheduler)
       SmartQ.reset();    // fresh teleprompter for this meeting
       OpenQs.reset();    // fresh open-question tracking
+      LiveOutline.reset();   // fresh outline for this meeting
       applyTeleprompterVisibility();   // hide the Ask-Now bar cleanly in transcript-only mode
       // Transcript-only mode (notes model = Off): never touch the Qwen worker —
       // no device config, no prewarm. Live regex notes above still run.
       if (!notesModelOff()) {
         configureLiveQuestionsDevice();  // CPU ASR (Nemotron) → GPU is free → run live Qwen on WebGPU
+        LiveOutline.wireLoadStatus();    // surface Qwen load progress in outline + Ask-Now (BEFORE prewarm kicks off the load)
         SmartQ.prewarm();  // warm Qwen off-thread so the first question is ready fast
+        LiveOutline.prewarm();  // live meeting outline (warms the same shared worker)
       }
 
       if (!canResume) {
@@ -4348,7 +4874,7 @@ class App {
         const s = loadSettings();
         if (!s.screenshots) return;
         this.addScreenshotThumbnail(base64, timestamp);
-        if (s.claudeBridge) this.bridge.sendScreenshot(base64, timestamp);
+        if (s.claudeBridge) this.bridge.sendScreenshot(base64, timestamp, customPrompt('bridge_screenshot', BRIDGE_SCREENSHOT_SYSTEM));
       };
       this.tm.onSystemAudioEnded = () => this.onTabStreamEnded();
 
@@ -4534,7 +5060,7 @@ class App {
       };
       // Get screenshot count
       const screenshotCount = await storage.countScreenshots(this.meetingId);
-      this.bridge.requestSummary(fullTranscript, notes, screenshotCount);
+      this.bridge.requestSummary(fullTranscript, notes, screenshotCount, customPrompt('bridge_summary', BRIDGE_SUMMARY_SYSTEM));
     }
   }
 
@@ -4547,6 +5073,7 @@ class App {
     this.noteEngine = new NoteEngine();
     SmartQ.reset();
     OpenQs.reset();
+    LiveOutline.reset();
     this.meetingId = null;
     this._startEpoch = null;
     this.totalNotes = 0;
@@ -4735,9 +5262,10 @@ class App {
 
     // Feed the live smart-questions teleprompter (throttled, off-thread, WASM).
     SmartQ.accumulate(text);
+    LiveOutline.accumulate(text);
 
     // Send to Claude for enhanced analysis if connected
-    if (s.claudeBridge) this.bridge.sendTranscript(text.trim(), timestamp);
+    if (s.claudeBridge) this.bridge.sendTranscript(text.trim(), timestamp, customPrompt('bridge_enhance', BRIDGE_ENHANCE_SYSTEM));
 
     // Try to infer speaker name from context if Claude is connected and a new speaker was detected
     if (speakerInfo && speakerInfo.isNew && this.bridge.connected) {
@@ -5188,14 +5716,12 @@ class App {
 
     const s = loadSettings();
     const sel = (Array.isArray(s.smartqTypes) && s.smartqTypes.length) ? s.smartqTypes : SmartQ.TYPES.map(t => t.key);
-    const RECAP_RULES = ` Each question must reference something actually discussed, ask exactly one thing, and be answerable by someone who was in the meeting. One per line. No numbering, no preamble, no quotes.`;
-    const PROMPTS = {
-      clarify:  { label: 'Clarifying',       system: `You were an engaged participant in this meeting. Produce up to 3 CLARIFYING questions still worth getting answered — ambiguities or gaps that will block execution if left unresolved.` + RECAP_RULES },
-      risk:     { label: "Devil's Advocate", system: `You were an engaged participant in this meeting. Produce up to 3 pointed questions that challenge the decisions made — the assumption most likely to be wrong, the risk nobody priced in, or the constraint everyone glossed over.` + RECAP_RULES },
-      followup: { label: 'Follow-up',        system: `You were an engaged participant in this meeting. Produce up to 3 FOLLOW-UP questions that turn talk into work: pin down the owner, the deadline, or what "done" looks like for things left vague.` + RECAP_RULES },
-      coverage: { label: 'Not Covered',      system: `You were an engaged participant in this meeting. Compare what was discussed against what this kind of work normally requires, and produce up to 3 questions that raise important things the meeting did not discuss at all.` + RECAP_RULES },
-      deepen:   { label: 'Push Further',     system: `You were an engaged participant in this meeting. Pick the most promising ideas that were only briefly mentioned, and produce up to 3 questions that develop those specific ideas into something concrete and more ambitious.` + RECAP_RULES },
-    };
+    // Defaults hoisted to RECAP_TYPES / RECAP_RULES (top level); each piece is
+    // user-tunable in Settings → AI Prompts (customPrompt returns the override).
+    const PROMPTS = Object.fromEntries(Object.entries(RECAP_TYPES).map(([key, t]) => [key, {
+      label: t.label,
+      system: customPrompt(`recap_${key}`, t.system) + customPrompt('recap_rules', RECAP_RULES),
+    }]));
     syncRecapGeneratorToLive();   // reuse the live model's cached weights (no second download)
     const stillOpen = OpenQs.openTexts();
     const ctx = transcript.slice(-4000);  // cap recap context
@@ -5248,8 +5774,8 @@ class App {
     let notes = [];
     try {
       for (const chunk of chunks) {
-        const r = await recapQuestionGenerator.generate(chunk, { system: NOTES_SYSTEM, maxTokens: 288 });
-        notes.push(...parseQwenNotes(r.question));
+        const r = await recapQuestionGenerator.generate(chunk, { system: customPrompt('notes_system', NOTES_SYSTEM), maxTokens: 288, noMeta: false });
+        notes.push(...parseQwenNotesSalvage(r.question));
       }
     } catch (e) {
       console.warn('[ai-notes]', e && e.message || e);
@@ -5377,11 +5903,14 @@ function copySummaryMarkdown() {
    Copy notes action
 ═══════════════════════════════════════════ */
 function copyNotes() {
-  const md = app.notesToMarkdown();
-  if (!md || md.split('\n').length < 3) {
+  let md = app.notesToMarkdown();
+  const outline = LiveOutline.toMarkdown();
+  const hasBuckets = md && md.split('\n').length >= 3;
+  if (!hasBuckets && !outline) {
     showToast('No notes yet — start recording first');
     return;
   }
+  if (outline) md = (md || '') + '\n' + outline;
   navigator.clipboard.writeText(md).then(() => {
     showToast('Copied to clipboard as Markdown');
   }).catch(() => {
@@ -6658,6 +7187,7 @@ const DEFAULT_SETTINGS = {
   triggerDetection: true,
   autoSummary: true,
   aiFinalNotes: true,        // Qwen-generated final meeting notes at Stop (WebGPU, additive — does not replace live notes)
+  liveOutline: true,         // Qwen meeting outline forming live in the notes panel during recording
   bridgeUrl: 'ws://localhost:8765',
   showTimestamps: true,      // per-line timestamps visible + included in copied text
   timeFormat: 'elapsed',     // 'elapsed' (12:34) | 'clock' (1:23 PM) | 'ago' (2m ago)
@@ -6666,6 +7196,7 @@ const DEFAULT_SETTINGS = {
   smartqTypes: ['clarify', 'risk', 'followup', 'coverage', 'deepen'],  // which question types rotate
   smartqRecap: true,                                 // WebGPU question recap when recording stops
   qwenModel: 'auto',         // AI model for questions/notes: 'auto' (device-tier pick) | '0.6b' | '1.7b' | 'off' (transcript-only mode)
+  prompts: {},               // user prompt OVERRIDES by PROMPT_FIELDS key (absent key = live default; see customPrompt())
 };
 
 function loadSettings() {
@@ -6732,6 +7263,60 @@ function _renderModelOptions(s) {
     const flag = unavailable ? ' data-unavailable="1"' : '';
     return `<option value="${esc(m.value)}" ${sel}${flag}>${esc(m.label)}${esc(reason)}</option>`;
   }).join('');
+}
+
+/* Build the Settings → AI Prompts editor: one collapsible group per model
+   surface (notes / live questions / recap questions), one textarea per
+   PROMPT_FIELDS entry. The textarea always shows the EFFECTIVE prompt
+   (override when set, live default otherwise); applySettings() persists only
+   values that differ from the default, so untouched prompts keep tracking
+   future default improvements. */
+function _renderPromptEditors(s) {
+  const overrides = (s && s.prompts) || {};
+  const GROUPS = [
+    { id: 'notes',  title: 'Meeting notes model',        hint: 'runs at Stop (AI Final Notes)' },
+    { id: 'live',   title: 'Live "Ask Now" questions',   hint: 'teleprompter, during the meeting' },
+    { id: 'recap',  title: 'Question recap',             hint: 'runs at Stop (Questions to Take Forward)' },
+    { id: 'bridge', title: 'Claude bridge',              hint: 'screenshots, enhanced notes, summary (when bridge connected)' },
+  ];
+  return GROUPS.map(g => {
+    const fields = PROMPT_FIELDS.filter(f => f.group === g.id);
+    const editedCount = fields.filter(f => {
+      const v = overrides[f.key];
+      return typeof v === 'string' && v.trim() && v !== f.def();
+    }).length;
+    const rows = fields.map(f => {
+      const def = f.def();
+      const ov = overrides[f.key];
+      const edited = typeof ov === 'string' && ov.trim() && ov !== def;
+      const value = edited ? ov : def;
+      const label = f.labelFn ? f.labelFn() : f.label;
+      return `
+        <div class="prompt-field">
+          <div class="prompt-field-head">
+            <span class="prompt-field-label">${esc(label)}</span>
+            ${edited ? '<span class="prompt-modified" data-modified-for="' + esc(f.key) + '">modified</span>' : '<span style="display:none" data-modified-for="' + esc(f.key) + '"></span>'}
+            <button type="button" class="prompt-reset" onclick="resetPromptField('${esc(f.key)}')">Reset to default</button>
+          </div>
+          <textarea class="settings-input prompt-textarea" data-prompt-key="${esc(f.key)}" spellcheck="false">${esc(value)}</textarea>
+        </div>`;
+    }).join('');
+    return `
+      <details class="prompt-group">
+        <summary>${esc(g.title)}${editedCount ? ` <span class="prompt-modified">${editedCount} modified</span>` : ''}<span class="prompt-group-hint">${esc(g.hint)}</span></summary>
+        ${rows}
+      </details>`;
+  }).join('');
+}
+
+/* Restore one prompt textarea to the live default (takes effect on Save). */
+function resetPromptField(key) {
+  const f = PROMPT_FIELDS.find(p => p.key === key);
+  const ta = document.querySelector(`textarea[data-prompt-key="${key}"]`);
+  if (!f || !ta) return;
+  ta.value = f.def();
+  const badge = document.querySelector(`[data-modified-for="${key}"]`);
+  if (badge) badge.style.display = 'none';
 }
 
 function openSettings() {
@@ -6802,6 +7387,11 @@ function openSettings() {
           <span class="settings-label">AI Final Notes<span class="settings-hint">On-device Qwen re-derives clean notes at Stop (WebGPU) — added below the live notes, never replaces them</span></span>
           <input type="checkbox" id="settingAiNotes" class="settings-toggle" ${s.aiFinalNotes !== false ? 'checked' : ''}>
         </label>
+
+        <label class="settings-row settings-toggle-row">
+          <span class="settings-label">Live Meeting Outline<span class="settings-hint">On-device Qwen builds a topic-by-topic outline in the notes panel as the meeting progresses (~1 pass/min)</span></span>
+          <input type="checkbox" id="settingLiveOutline" class="settings-toggle" ${s.liveOutline !== false ? 'checked' : ''}>
+        </label>
       </div>
 
       <div class="settings-section">
@@ -6837,6 +7427,12 @@ function openSettings() {
           <span class="settings-label">Question Recap on Stop<span class="settings-hint">Generate a full question set (WebGPU) when recording ends</span></span>
           <input type="checkbox" id="settingSmartQRecap" class="settings-toggle" ${s.smartqRecap !== false ? 'checked' : ''}>
         </label>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">AI Prompts</div>
+        <p class="settings-hint" style="margin-bottom:8px">Tune the exact system prompts the on-device notes &amp; question models run with. An edited prompt is saved with your settings; an untouched one tracks future app defaults. The notes model parses its own output — keep the <code>TOPIC|</code> / <code>CATEGORY| note text</code> line format or the AI Final Notes panel will come up empty.</p>
+        ${_renderPromptEditors(s)}
       </div>
 
       <div class="settings-section">
@@ -6886,6 +7482,10 @@ function applySettings() {
   // route the user-facing notice through the Rust queued-switch policy (R3).
   const _prevModel = (loadSettings() || {}).model;
   const s = {
+    // Carry forward keys managed OUTSIDE this modal (showTimestamps, timeFormat,
+    // showSpeakerLabels — saved by the transcript-header toggles); rebuilding
+    // from scratch was silently resetting them to defaults on every Save.
+    ...loadSettings(),
     model: document.getElementById('settingModel').value,
     dtype: document.getElementById('settingDtype').value,
     device: document.getElementById('settingDevice').value,
@@ -6894,12 +7494,20 @@ function applySettings() {
     triggerDetection: document.getElementById('settingTriggers').checked,
     autoSummary: document.getElementById('settingSummary').checked,
     aiFinalNotes: document.getElementById('settingAiNotes').checked,
+    liveOutline: document.getElementById('settingLiveOutline').checked,
     smartQuestions: document.getElementById('settingSmartQ').checked,
     smartqTypes: ['clarify', 'risk', 'followup', 'coverage', 'deepen'].filter(k =>
       document.getElementById('settingSmartQ' + k.charAt(0).toUpperCase() + k.slice(1)).checked),
     smartqRecap: document.getElementById('settingSmartQRecap').checked,
     qwenModel: document.getElementById('settingQwenModel').value,
     bridgeUrl: document.getElementById('settingBridgeUrl').value.trim() || DEFAULT_SETTINGS.bridgeUrl,
+    // AI prompt overrides: persist ONLY textareas that differ from the live
+    // default (and aren't blank) — untouched prompts keep tracking defaults.
+    prompts: Object.fromEntries([...document.querySelectorAll('textarea[data-prompt-key]')].flatMap(ta => {
+      const f = PROMPT_FIELDS.find(p => p.key === ta.dataset.promptKey);
+      const v = ta.value;
+      return (f && v.trim() && v !== f.def()) ? [[f.key, v]] : [];
+    })),
   };
   saveSettings(s);
 
@@ -6907,6 +7515,16 @@ function applySettings() {
   // Transcript-only mode (notes model = Off) also disables it and hides the bar.
   SmartQ.enabled = s.smartQuestions !== false && s.qwenModel !== 'off';
   if (!SmartQ.enabled) SmartQ._renderEmpty();
+  // Live outline: apply mid-meeting — disabling hides the section (state kept;
+  // re-enabling resumes on the next batch).
+  LiveOutline.enabled = s.liveOutline !== false && s.qwenModel !== 'off';
+  if (!LiveOutline.enabled) {
+    const lo = document.getElementById('liveOutline');
+    if (lo) lo.style.display = 'none';
+  } else if (LiveOutline._notes.length) {
+    const lo = document.getElementById('liveOutline');
+    if (lo) lo.style.display = '';
+  }
   applyTeleprompterVisibility();   // show/hide the Ask-Now bar for the new notes-model setting
   // Honor a mid-session question-type change: rebuild the Rust scheduler's
   // rotation (the former JS read `_enabledTypes()` fresh on each generate).

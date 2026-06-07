@@ -52,10 +52,18 @@
  *                   { type: 'decoded',  chunk: number, text: string }
  */
 export const EXECUTOR_WORKER_SRC = `
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/dist/transformers.min.js';
-
-env.allowLocalModels = false;
-env.useBrowserCache = true;
+// DYNAMIC import, not static: under COEP require-corp a STATIC cross-origin
+// import in a module worker fails OPAQUELY at module-graph load (worker dies
+// before line 1, blank onerror Event, no message ever reaches the host). The
+// dynamic form of the same URL loads fine and failures surface as catchable
+// rejections inside init → the 'error' message path. Same fix as
+// question-worker.js — keep the two in sync.
+const _tf = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3/dist/transformers.min.js')
+  .then((m) => {
+    m.env.allowLocalModels = false;
+    m.env.useBrowserCache = true;
+    return m;
+  });
 
 let transcriber = null;
 let isInitializing = false;
@@ -86,6 +94,7 @@ self.onmessage = async (e) => {
     if (isInitializing || transcriber) return;
     isInitializing = true;
     try {
+      const { pipeline } = await _tf;   // CDN import failure lands in this catch → 'error' (loud)
       let device = config.device === 'auto' ? await detectBestDevice() : config.device;
       const modelName = config.model.split('/').pop();
       const dtypeLabel = config.dtype === 'fp32' ? 'full precision' : config.dtype;

@@ -19,10 +19,19 @@
  *                   {type:'error', id?, message}
  */
 
-import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.0.0-next.7/dist/transformers.min.js';
-
-env.allowLocalModels = false;
-env.useBrowserCache = true;
+// DYNAMIC import, not static: under COEP `require-corp` (the 2026-06-05
+// isolation switch) a STATIC cross-origin import in a module worker fails
+// OPAQUELY at module-graph load — the worker dies before line 1, onerror gets
+// a blank Event, and no loadfailed/error message ever reaches the main thread
+// (silent wedge: questions + live outline starve forever). The dynamic form
+// of the SAME URL loads fine, and a failure here surfaces as a catchable
+// rejection inside load() → 'loadfailed' → the main thread's loud fallback.
+const _tf = import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.0.0-next.7/dist/transformers.min.js')
+  .then((m) => {
+    m.env.allowLocalModels = false;
+    m.env.useBrowserCache = true;
+    return m;
+  });
 
 let generator = null;
 let loading = null;
@@ -46,15 +55,18 @@ async function load() {
   if (generator) return;
   if (loading) return loading;
   loading = (async () => {
-    env.backends.onnx.wasm.numThreads = config.threads;
     self.postMessage({ type: 'status', message: `Loading ${config.model.split('/').pop()} (${config.dtype}, ${config.device}×${config.threads})…` });
     const progress_callback = (p) => {
       if (p.status === 'downloading' && p.total > 0) {
         self.postMessage({ type: 'progress', value: Math.round((p.loaded / p.total) * 100), file: p.file });
       }
     };
+    let env;   // hoisted: the ready message below reads it after the try block
     try {
-      generator = await pipeline('text-generation', config.model, { device: config.device, dtype: config.dtype, progress_callback });
+      const m = await _tf;   // CDN import failure lands in this catch → loadfailed (loud)
+      env = m.env;
+      env.backends.onnx.wasm.numThreads = config.threads;
+      generator = await m.pipeline('text-generation', config.model, { device: config.device, dtype: config.dtype, progress_callback });
     } catch (err) {
       // Don't fall back in here — the main thread owns the policy (e.g. a big model that
       // OOMs on WebGPU should demote to the smaller model, NOT crawl on WASM, and a
@@ -72,15 +84,29 @@ async function generateOne(id, transcript, opts = {}) {
   await load();
   // Keep questions natural-spoken: the transcript is NOT shared with other participants,
   // so the model must never reference "the transcript"/notes/recording in its question.
+  // QUESTION generations only — opts.noMeta === false skips it. Appending this to a
+  // structured-output prompt (NOTES_SYSTEM's TOPIC|/CATEGORY| format) makes the 0.6B
+  // obey the LAST instruction and reply conversationally → zero parseable notes
+  // (verified 2026-06-06: live-outline passes parsed 0 until this was excluded).
   const NO_META = ' Phrase the question as something natural to say out loud to the other people in the conversation. Never mention "the transcript", "the notes", "the meeting notes", or that anything is being recorded or transcribed.';
   const messages = [
-    { role: 'system', content: (opts.system || DEFAULT_SYSTEM) + NO_META },
-    { role: 'user', content: `Conversation so far:\n${transcript}` },
+    { role: 'system', content: (opts.system || DEFAULT_SYSTEM) + (opts.noMeta === false ? '' : NO_META) },
+    // Notes callers pass userLabel: 'Transcript excerpt:' — the default
+    // "Conversation so far:" framing invites a conversational summary reply.
+    { role: 'user', content: `${opts.userLabel || 'Conversation so far:'}\n${transcript}` },
   ];
   // Qwen3 defaults to THINKING mode — must disable or it emits hundreds of <think> tokens.
-  const prompt = generator.tokenizer.apply_chat_template(messages, {
+  let prompt = generator.tokenizer.apply_chat_template(messages, {
     tokenize: false, add_generation_prompt: true, enable_thinking: false,
   });
+  // Response seeding: structured-output callers (notes/outline) pass
+  // opts.prefix (e.g. 'TOPIC|') which is appended to the prompt so the model
+  // CONTINUES in the required format instead of choosing its register. At
+  // 0.6B, format adherence is content-dependent without this (well-punctuated
+  // ASR input reads as prose → the model replies with a prose summary → zero
+  // parseable lines; verified 2026-06-06). The prefix is re-prepended to the
+  // output below so the caller parses the full line.
+  if (opts.prefix) prompt += opts.prefix;
   const t0 = performance.now();
   const out = await generator(prompt, {
     max_new_tokens: opts.maxTokens || config.maxTokens,
@@ -89,7 +115,7 @@ async function generateOne(id, transcript, opts = {}) {
   });
   const raw = Array.isArray(out) ? out[0].generated_text : out.generated_text;
   // Defensive: strip any stray <think>…</think> and surrounding quotes.
-  const question = String(raw).replace(/<think>[\s\S]*?<\/think>/g, '').replace(/^["'\s]+|["'\s]+$/g, '').trim();
+  const question = (opts.prefix || '') + String(raw).replace(/<think>[\s\S]*?<\/think>/g, '').replace(/^["'\s]+|["'\s]+$/g, '').trim();
   self.postMessage({ type: 'result', id, question, ms: Math.round(performance.now() - t0) });
 }
 

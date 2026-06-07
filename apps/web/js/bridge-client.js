@@ -174,19 +174,21 @@ export class ClaudeBridge {
     return false;
   }
 
-  // Send transcript chunk for enhanced analysis
-  sendTranscript(text, timestamp) {
-    return this.send({ type: 'transcript_chunk', text, timestamp });
+  // Send transcript chunk for enhanced analysis. `prompt` is the effective
+  // system prompt (Settings → AI Prompts override or default); bridge.py
+  // falls back to its own default when absent.
+  sendTranscript(text, timestamp, prompt) {
+    return this.send({ type: 'transcript_chunk', text, timestamp, prompt });
   }
 
-  // Send screenshot for visual analysis
-  sendScreenshot(imageBase64, timestamp) {
-    return this.send({ type: 'screenshot', image_base64: imageBase64, timestamp });
+  // Send screenshot for visual analysis (`prompt` as in sendTranscript)
+  sendScreenshot(imageBase64, timestamp, prompt) {
+    return this.send({ type: 'screenshot', image_base64: imageBase64, timestamp, prompt });
   }
 
-  // Request enhanced summary at end of meeting
-  requestSummary(transcript, notes, screenshots) {
-    return this.send({ type: 'generate_summary', transcript, notes, screenshots });
+  // Request enhanced summary at end of meeting (`prompt` as in sendTranscript)
+  requestSummary(transcript, notes, screenshots, prompt) {
+    return this.send({ type: 'generate_summary', transcript, notes, screenshots, prompt });
   }
 
   // Ad-hoc query during meeting

@@ -248,6 +248,12 @@ class MeetingContext:
         self.transcript_chunks: list[dict] = []
         self.screenshot_analyses: list[dict] = []
         self.start_time = datetime.now()
+        # Screenshot analyses are serialized (see analyze_screenshot): the
+        # lock makes each one see its predecessor's result (dedup needs it);
+        # the 1-slot pending holds only the LATEST frame that arrived while
+        # one was in flight.
+        self.screenshot_lock = asyncio.Lock()
+        self.pending_screenshot: tuple | None = None
 
     def add_chunk(self, text: str, timestamp: int) -> None:
         self.transcript_chunks.append({"text": text, "timestamp": timestamp})
@@ -273,7 +279,9 @@ def _strip_json_fences(text: str) -> str:
 # Claude handlers (backend-agnostic)
 # ---------------------------------------------------------------------------
 
-async def analyze_transcript_batch(context: MeetingContext, ws) -> None:
+async def analyze_transcript_batch(
+    context: MeetingContext, ws, system_override: str | None = None
+) -> None:
     """Send accumulated chunks to Claude for categorization every N chunks."""
     recent = context.get_recent_context(5)
     if not recent.strip():
@@ -281,7 +289,11 @@ async def analyze_transcript_batch(context: MeetingContext, ws) -> None:
 
     try:
         raw = await backend.complete(
-            system="""You are a meeting note analyzer. Given recent transcript text, extract any noteworthy items and categorize them.
+            # Default kept byte-identical with BRIDGE_ENHANCE_SYSTEM in
+            # index.html; the browser sends its effective prompt (Settings →
+            # AI Prompts) as `system_override`.
+            system=system_override
+            or """You are a meeting note analyzer. Given recent transcript text, extract any noteworthy items and categorize them.
 
 Return a JSON array of notes. Each note has:
 - "category": one of "decisions", "actions", "keypoints", "questions"
@@ -313,7 +325,37 @@ Return ONLY valid JSON, no markdown fences.""",
 
 
 async def analyze_screenshot(
-    image_base64: str, timestamp: int, context: MeetingContext, ws
+    image_base64: str,
+    timestamp: int,
+    context: MeetingContext,
+    ws,
+    system_override: str | None = None,
+) -> None:
+    """Analyze a meeting screenshot — serialized per connection.
+
+    Analyses must run one at a time: NO_CHANGE dedup compares against the
+    PREVIOUS analysis, but vision latency (~10-20 s on the CLI backend)
+    overlaps the 15 s capture interval, so concurrent tasks would race and
+    never see each other's results. Latest-wins: a frame arriving while one
+    is in flight replaces the single pending slot instead of queueing, so a
+    long-stale backlog can never build up.
+    """
+    context.pending_screenshot = (image_base64, timestamp, system_override)
+    if context.screenshot_lock.locked():
+        return  # the in-flight task will drain the pending slot when done
+    async with context.screenshot_lock:
+        while context.pending_screenshot is not None:
+            img, ts, override = context.pending_screenshot
+            context.pending_screenshot = None
+            await _analyze_screenshot_once(img, ts, context, ws, override)
+
+
+async def _analyze_screenshot_once(
+    image_base64: str,
+    timestamp: int,
+    context: MeetingContext,
+    ws,
+    system_override: str | None = None,
 ) -> None:
     """Use Claude vision to analyze a screenshot captured during the meeting."""
     tmp_path = None
@@ -328,18 +370,43 @@ async def analyze_screenshot(
         with os.fdopen(fd, "wb") as f:
             f.write(img_bytes)
 
-        content = await backend.complete(
-            system="""You are analyzing a screenshot from a meeting. Describe what's shown concisely:
+        # Default kept byte-identical with BRIDGE_SCREENSHOT_SYSTEM in
+        # index.html; the browser sends its effective prompt (Settings →
+        # AI Prompts) as `system_override`.
+        system = system_override or """You are analyzing a screenshot from a meeting. Describe what's shown concisely:
 - If it's a slide: extract the title, key bullet points, and any data/charts
 - If it's a demo/UI: describe what's being shown
 - If it's a document: extract key visible text
 - If it's a person/video call: just say "Video call view" (don't describe people)
 
-Be concise — 1-3 sentences max. Focus on informational content that would be useful in meeting notes.""",
+Be concise — 1-3 sentences max. Focus on informational content that would be useful in meeting notes."""
+
+        # Dedup: screenshots arrive every ~15 s, so a static screen (one slide,
+        # one video, a slow terminal) would otherwise yield a near-identical
+        # key point per capture. Give Claude the previous analysis and a
+        # NO_CHANGE escape hatch; appended AFTER any user override so custom
+        # prompts keep dedup behavior.
+        if context.screenshot_analyses:
+            prev = context.screenshot_analyses[-1]["content"]
+            system += (
+                "\n\nThe PREVIOUS screenshot (~15 seconds earlier) was described as:\n"
+                f"{prev}\n\n"
+                "If this screenshot still shows substantially the same content "
+                "(same slide/page/video/screen — only minor changes like cursor "
+                "position, scroll, playback time, or download progress), reply "
+                "with exactly: NO_CHANGE"
+            )
+
+        content = await backend.complete(
+            system=system,
             user_text="What's shown in this meeting screenshot?",
             image_path=tmp_path,
             model=FAST_MODEL,
         )
+
+        if "no_change" in content.strip().lower()[:20]:
+            log.info("Screenshot analysis: NO_CHANGE (deduped)")
+            return
 
         # Skip generic video call views — not useful in notes
         if "video call view" not in content.lower():
@@ -381,7 +448,11 @@ async def generate_summary(data: dict, context: MeetingContext, ws) -> None:
             screenshot_context = f"\n\nVisual content captured during meeting:\n{lines}"
 
         summary_md = await backend.complete(
-            system="""You are generating a final meeting summary. Create a clean, well-structured summary in markdown format.
+            # Default kept byte-identical with BRIDGE_SUMMARY_SYSTEM in
+            # index.html; the browser sends its effective prompt (Settings →
+            # AI Prompts) as `data["prompt"]`.
+            system=data.get("prompt")
+            or """You are generating a final meeting summary. Create a clean, well-structured summary in markdown format.
 
 Structure:
 # Meeting Summary
@@ -501,7 +572,9 @@ async def handler(websocket) -> None:
                     chunk_count += 1
                     if chunk_count % ANALYSIS_INTERVAL == 0:
                         asyncio.create_task(
-                            analyze_transcript_batch(context, websocket)
+                            analyze_transcript_batch(
+                                context, websocket, msg.get("prompt")
+                            )
                         )
 
             elif msg_type == "screenshot":
@@ -509,7 +582,10 @@ async def handler(websocket) -> None:
                 timestamp = msg.get("timestamp", 0)
                 if image:
                     asyncio.create_task(
-                        analyze_screenshot(image, timestamp, context, websocket)
+                        analyze_screenshot(
+                            image, timestamp, context, websocket,
+                            msg.get("prompt"),
+                        )
                     )
                 else:
                     log.warning("Received screenshot message with no image data")
