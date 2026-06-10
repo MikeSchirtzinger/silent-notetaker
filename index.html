@@ -7179,8 +7179,8 @@ document.addEventListener('click', (e) => {
    Settings
 ═══════════════════════════════════════════ */
 const DEFAULT_SETTINGS = {
-  model: 'voxtral',
-  dtype: 'q4f16',
+  model: 'nemotron',         // default ASR: CPU/WASM streaming — works on every tier (no WebGPU/16GB gate), frees the GPU for Qwen notes (the "private by architecture" pairing). Whisper/Voxtral remain user-selectable.
+  dtype: 'q4f16',            // dtype/device apply only to the whisper/voxtral WebGPU path; Nemotron self-resolves and ignores them.
   device: 'webgpu',
   claudeBridge: true,
   screenshots: true,
