@@ -1688,6 +1688,8 @@
       <div class="claude-dot" id="claudeDot"></div>
       <span id="claudeLabel">Claude offline</span>
     </div>
+    <span class="separator">·</span>
+    <a href="https://brevity.ventures" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;opacity:0.35" tabindex="-1">brevity.ventures</a>
   </footer>
 </div>
 
@@ -2298,55 +2300,6 @@ function _addNoteObj(meetingId, note) {
   );
 }
 
-/* ════════════════════════════════════════════
-   Migration on load (Dexie v2 → Rust, zero-loss, export-backup FIRST)
-   An existing Dexie v2 `SilentNotetaker` DB is detected and migrated before any
-   live write. The backup-ready event is offered as a download BEFORE migration
-   writes (PRD Phase 4 exit criterion). One-time (localStorage guard in Rust).
-═══════════════════════════════════════════ */
-let _migrationPromise = null;
-function _runStorageMigration() {
-  if (_migrationPromise) return _migrationPromise;
-  _migrationPromise = (async () => {
-    try {
-      const engine = await _ensureStorageLoaded();
-      const after = await engine.migrateDatabase((ev) => {
-        if (ev.tag === 'backup_ready') {
-          // Offer the backup download FIRST (existing <a download> path). The
-          // migration's write proceeds after; the file is the pre-migration DB.
-          const { object_url, filename, size_bytes, counts } = ev.payload;
-          try {
-            const a = document.createElement('a');
-            a.href = object_url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            a.remove();
-            // Revoke after a tick so the download has grabbed the blob.
-            setTimeout(() => { try { URL.revokeObjectURL(object_url); } catch (_) {} }, 30000);
-            console.log('[rust-storage] migration backup offered:', filename, size_bytes, 'bytes', counts);
-          } catch (e) {
-            console.warn('[rust-storage] backup download failed', e);
-          }
-        } else if (ev.tag === 'completed') {
-          console.log('[rust-storage] migration complete — zero loss verified', ev.payload);
-        } else if (ev.tag === 'failed') {
-          console.error('[rust-storage] migration FAILED:', ev.payload.message);
-        } else if (ev.tag === 'status_changed') {
-          console.log('[rust-storage] migration status:', ev.payload.status);
-        }
-      });
-      return after;
-    } catch (e) {
-      // A migration failure must be LOUD, not silent — but it must not brick the
-      // app for a fresh user (no DB to migrate). Log and continue; live writes
-      // open the DB fresh at v3.
-      console.error('[rust-storage] migration error:', e);
-      return null;
-    }
-  })();
-  return _migrationPromise;
-}
 
 /* ════════════════════════════════════════════
    SpeakerTracker (Rust/WASM) — strangler-fig adapter
@@ -7680,11 +7633,7 @@ setInterval(() => {
   }
 }, 1000);
 
-// Load storage + run the Dexie v2 → Rust migration on boot. The migration is a
-// one-time no-op once done (localStorage guard in Rust); on an existing v2 DB it
-// offers the export-backup download FIRST, then migrates with zero loss. This
-// runs BEFORE any live write so the migrate-then-write ordering holds.
-_runStorageMigration().then(() => {
+_ensureStorageLoaded().then(() => {
   console.log('[SilentNotetaker] storage ready (Rust/WASM IndexedDB)');
 }).catch(err => {
   app.handleStatus('Storage error: ' + (err && err.message ? err.message : err), null);

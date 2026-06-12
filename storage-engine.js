@@ -98,27 +98,6 @@ export class StorageEngine {
     return this._mod;
   }
 
-  // ── Migration (Dexie v2 → Rust, zero-loss, export-backup first) ─────────────
-
-  /**
-   * Run the migration. `onEvent` receives a parsed StorageEvent object for each
-   * step ({ tag, payload }). The FIRST meaningful event is
-   * `{ tag:'backup_ready', payload:{ object_url, filename, size_bytes, counts } }`
-   * — the caller wires it to a download BEFORE migration writes. Resolves to the
-   * after-migration counts.
-   *
-   * @param {(ev:object)=>void} onEvent
-   * @returns {Promise<object>} after-migration StorageCounts
-   */
-  async migrateDatabase(onEvent) {
-    const cb = (json) => {
-      try { onEvent(JSON.parse(json)); }
-      catch (err) { console.warn('[rust-storage] migration event parse failed', err, json); }
-    };
-    const countsJson = await this._m().migrate_database(cb);
-    return JSON.parse(countsJson);
-  }
-
   /**
    * Read all four tables as a verification summary (counts + per-table arrays +
    * screenshot encodings + raw bytes). Used by the before/after zero-loss proof
