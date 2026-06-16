@@ -1689,7 +1689,7 @@
       <span id="claudeLabel">Claude offline</span>
     </div>
     <span class="separator">·</span>
-    <a href="https://brevity.ventures" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;opacity:0.35" tabindex="-1">brevity.ventures</a>
+    <a href="https://brevity.ventures" target="_blank" rel="noopener" style="color:inherit;text-decoration:none;opacity:0.35" tabindex="-1">Built by Brevity</a>
   </footer>
 </div>
 
@@ -2788,8 +2788,10 @@ function resolveQwenModelKey(forDevice) {
    slot is OFF. This is a first-class supported configuration — silent-core
    models it as SessionConfig.notes_model_off, the empty NotesSlot=None state.
    When on, the Qwen worker is never loaded: no smart-questions teleprompter, no
-   AI final notes, no question recap. The live regex trigger notes (row 16,
-   NoteExtractor, model-free) keep working — they are NOT gated here. */
+   AI final notes, no question recap. In this mode the live regex trigger notes
+   (row 16, NoteExtractor, model-free) are the FALLBACK note source — they only
+   run here. When the AI model is on (default) the regex pass stays off; the live
+   AI outline + AI final notes own the notes panel. */
 function notesModelOff() {
   const s = (typeof loadSettings === 'function') ? loadSettings() : {};
   return s.qwenModel === 'off';
@@ -2845,27 +2847,23 @@ function syncRecapGeneratorToLive() {
    recall drops on long inputs — small coherent chunks + cross-chunk dedup.
 ═══════════════════════════════════════════ */
 const NOTES_SYSTEM =
-`You are taking meeting minutes. Read the transcript excerpt and produce an outline section for it, the way a good note-taker would — grouped under what the discussion was about, not as loose bullets.
+`You are taking meeting minutes. Extract information-dense notes from the transcript excerpt below.
 
-FIRST output one topic line naming what this part of the meeting was about, in 2-6 words:
-TOPIC| topic name
+FIRST output one topic line (2-6 words) naming what this section covers:
+TOPIC| model selection tradeoffs
 
-THEN write down EVERY substantive item worth remembering, one per line, in your own words, under 18 words each. Be thorough — a real meeting yields several decisions, tasks, facts, and open questions. Skip greetings, filler, and small talk.
+THEN extract every important item — one per line, under 25 words. Be specific: capture names, numbers, scores, prices, and concrete findings. Skip greetings, small talk, and setup/logistics.
 
-The transcript is not always a meeting: it may be a talk, a lesson, or a demo with no decisions or tasks at all. Important facts, findings, numbers, and explanations are still KEYPOINT items — extract them just as thoroughly.
+The content may be a talk, lesson, or demo — no decisions or tasks needed. Important facts, numbers, and findings are KEYPOINT items. Extract them thoroughly.
 
-Tag each item with the ONE category that fits best:
-- DECISION = a choice the group settled on or agreed to
-- ACTION = a task someone will do. Shape the text as: who — what they will do — by when (owner and deadline only if stated)
-- KEYPOINT = an important fact, metric, number, or finding
-- QUESTION = an open question or an unresolved blocker
+Tag each item with exactly one label:
+DECISION| what was decided or agreed
+ACTION| owner — task (deadline only if explicitly stated)
+KEYPOINT| the specific fact, number, finding, or insight
+QUESTION| the open or unresolved question
 
-Each line is the tag, then a | separator, then the note text. A fact line looks like:
-KEYPOINT| the fact, stated in your own words
-The tag must be literally one of: TOPIC, DECISION, ACTION, KEYPOINT, QUESTION — never the word CATEGORY.
-
-Extract ONLY from the transcript — never invent, never guess owners or dates. Every excerpt that explains, reports, or demonstrates something has KEYPOINT items in it. Only when the excerpt is pure greeting, filler, or small talk with no information at all, output exactly: NONE
-Output only the lines.`;
+Rules: tags must be TOPIC, DECISION, ACTION, KEYPOINT, or QUESTION — nothing else. Never invent facts or guess owners/dates. If the excerpt has nothing noteworthy, output: NONE
+Output only tagged lines.`;
 
 /* ════════════════════════════════════════════
    Custom AI prompts — every system prompt the notes/question models run with is
@@ -3010,8 +3008,26 @@ function dedupeNotes(notes) {
  *  content: keep the TOPIC| line if present, convert bullet/prose lines into
  *  KEYPOINT notes. The content in drifted output is consistently extractive
  *  and correct — only the tags are missing. */
+/* The 0.6B sometimes parrots the prompt's own label descriptions back as if they
+   were notes (e.g. "ACTION| owner — task (deadline only if explicitly stated)",
+   "DECISION| what was decided or agreed"). Those are valid-looking tagged lines, so
+   the strict parser accepts them — this deterministic filter drops the known
+   template phrasings (covers the shipped + custom prompts) so they never reach the
+   outline. Conservative, start-anchored patterns: real notes don't match. */
+function isTemplateEcho(text) {
+  const t = String(text || '').trim().toLowerCase();
+  if (!t || t === 'none') return true;
+  return [
+    /^owner\s*[—–-]\s*task/, /deadline only if (explicitly )?stated/, /^a task someone will do/, /^the action[,:]/, /who\s*[—–-]\s*what they will do/,
+    /^what was decided( or (agreed|recommended))?$/, /^something decided or recommended$/, /^the decision[,:]/,
+    /^(the|an) open or unresolved question$/, /^the question[,:]/,
+    /^(the|a) specific fact, number/, /^a fact, number, finding/, /^the key ?point[,:]/, /stated in your own words/,
+    /^what this section covers$/, /^topic name$/, /^2-6 words$/, /your topic here/,
+  ].some(r => r.test(t));
+}
+
 function parseQwenNotesSalvage(raw) {
-  const strict = parseQwenNotes(raw);
+  const strict = parseQwenNotes(raw).filter(n => !isTemplateEcho(n.text));
   if (strict.length) return strict;
   let lines = String(raw || '').split(/\n+/).map(l => l.trim()).filter(Boolean);
   // Pure-prose replies come back as one long paragraph — split into sentences.
@@ -3026,6 +3042,7 @@ function parseQwenNotesSalvage(raw) {
     l = l.replace(/^[-*•#\s]+/, '').replace(/\*+/g, '').trim();
     if (l.length < 12) continue;                              // headers/fragments
     if (/^(NONE\b|CATEGORY\b|TOPIC\b)/i.test(l)) continue;    // template echoes
+    if (isTemplateEcho(l)) continue;                          // parroted label descriptions
     out.push({ cat: 'keypoints', text: l.length > 140 ? l.slice(0, 137) + '…' : l, topic });
     if (out.length >= 6) break;   // cap salvage volume per chunk
   }
@@ -3105,8 +3122,14 @@ const LiveOutline = {
     this._busy = true; this._lastGenAt = Date.now();
     this._spinner(true);
     try {
+      // Use the worker's structured-output API: userLabel 'Transcript excerpt:'
+      // (the default "Conversation so far:" invites a prose summary) + a TOPIC|
+      // seed so the 0.6B continues in the tagged format instead of choosing a
+      // register (question-worker.js §generateOne). parseQwenNotesSalvage stays
+      // the safety net, so this is strictly non-regressive.
       const r = await sharedQuestionGenerator.generate(chunk,
-        { system: customPrompt('notes_system', NOTES_SYSTEM), maxTokens: 288, noMeta: false });
+        { system: customPrompt('notes_system', NOTES_SYSTEM), maxTokens: 400, noMeta: false,
+          userLabel: 'Transcript excerpt:', prefix: 'TOPIC| ' });
       this._fails = 0;
       this._append(parseQwenNotesSalvage(r.question || ''));
     } catch (e) {
@@ -4911,11 +4934,14 @@ class App {
   async stop() {
     PerfMonitor.stopSoon();   // keep sampling 60s — Stop triggers the WebGPU recap/notes burst
     if (this.tm) {
-      // Flush note engine buffer
-      const flushed = this.noteEngine.flush();
-      for (const note of flushed) {
-        const id = await _addNoteObj(this.meetingId, note);
-        this.renderNote({ ...note, id });
+      // Flush the regex trigger-note buffer — only in transcript-only mode, where
+      // these model-free notes are the fallback (mirrors handleFinal's gate).
+      if (loadSettings().triggerDetection && notesModelOff()) {
+        const flushed = this.noteEngine.flush();
+        for (const note of flushed) {
+          const id = await _addNoteObj(this.meetingId, note);
+          this.renderNote({ ...note, id });
+        }
       }
 
       this.tm.stop();
@@ -4979,7 +5005,12 @@ class App {
     if (hooks.recluster && this.tm && this.tm.speakerTracker && sharedDiarzEngine &&
         sharedDiarzEngine.speakers.length > 1) {
       try {
-        const { relabel, speakers } = sharedDiarzEngine.globalRecluster();
+        // Merge at 0.60 (vs the 0.65 default): the stop-time pass compares robust
+        // full-meeting centroids, so a slightly more aggressive merge collapses
+        // phantom speakers minted live (tone/volume shifts, short-segment noise)
+        // without risking distinct speakers, whose full-meeting centroids sit well
+        // below 0.60. Additive and manual renames survive (DIARIZATION.md §2.4).
+        const { relabel, speakers } = sharedDiarzEngine.globalRecluster(0.60);
         if (relabel.length > 0) {
           applyRecluster(relabel, speakers);
         }
@@ -5192,9 +5223,13 @@ class App {
       document.getElementById('wordCount').textContent = `${this.totalWords.toLocaleString()} words`;
     }
 
-    // Local trigger detection — only on final (accurate) text
+    // Local regex trigger notes are the MODEL-FREE FALLBACK for transcript-only
+    // mode (notes model = Off). When the on-device AI notes model is on (default),
+    // the live AI outline + AI final notes own the notes panel and this regex pass
+    // stays off — its trigger patterns capture raw transcript noise on talks and
+    // lectures (see experiments/notes-quality/ANALYSIS.md). Final text only.
     const s = loadSettings();
-    if (s.triggerDetection) {
+    if (s.triggerDetection && notesModelOff()) {
       const noteResults = this.noteEngine.analyze(text);
       OpenQs.consider(text);   // resolve any prior open questions this text answers (before adding new ones)
       for (const note of noteResults) {
@@ -5598,7 +5633,11 @@ class App {
 
   showSummary() {
     const s = this.generateSummary();
-    const hasAnyNotes = s.totalNotes > 0;
+    // Show the full summary body whenever there's a transcript — the AI Meeting
+    // Notes (mounted async below) are the notes when the AI model is on, and the
+    // executive line falls back to "N words transcribed" when there are no regex
+    // notes. Only a truly empty meeting shows the "no notes" placeholder.
+    const hasAnyNotes = s.totalNotes > 0 || s.totalWords > 0;
 
     const sectionDefs = [
       { key: 'decisions', label: 'Decisions',      cls: 'decisions' },
@@ -5619,12 +5658,17 @@ class App {
         </div>`;
     }
 
+    // Regex trigger notes only populate in transcript-only mode (notes model = Off),
+    // where they're the model-free fallback. When the AI model is on these sections
+    // are empty and the AI Meeting Notes below are the summary.
+    const triggerBlock = sectionsHtml || '';
+
     const bodyHtml = hasAnyNotes ? `
       <div class="summary-title">${esc(s.title)}</div>
       <div class="summary-meta">${esc(s.date)} · ${esc(s.duration)}</div>
       <div class="summary-executive">${esc(s.executiveLine)}</div>
-      ${sectionsHtml}
-      <div class="summary-stats">${s.totalWords.toLocaleString()} words transcribed · ${s.totalNotes} note${s.totalNotes !== 1 ? 's' : ''} captured live</div>
+      ${triggerBlock}
+      <div class="summary-stats">${s.totalWords.toLocaleString()} words transcribed</div>
       <div id="aiNotesMount"></div>
     ` : `
       <div class="summary-title">${esc(s.title)}</div>
@@ -5727,7 +5771,10 @@ class App {
     let notes = [];
     try {
       for (const chunk of chunks) {
-        const r = await recapQuestionGenerator.generate(chunk, { system: customPrompt('notes_system', NOTES_SYSTEM), maxTokens: 288, noMeta: false });
+        // Same structured-output API as the live outline (userLabel + TOPIC| seed)
+        // so the at-Stop final notes parse cleanly into tagged lines too.
+        const r = await recapQuestionGenerator.generate(chunk, { system: customPrompt('notes_system', NOTES_SYSTEM), maxTokens: 400, noMeta: false,
+          userLabel: 'Transcript excerpt:', prefix: 'TOPIC| ' });
         notes.push(...parseQwenNotesSalvage(r.question));
       }
     } catch (e) {
@@ -7327,7 +7374,7 @@ function openSettings() {
         </label>
 
         <label class="settings-row settings-toggle-row">
-          <span class="settings-label">Auto Note Detection<span class="settings-hint">Detect decisions, actions, questions from triggers</span></span>
+          <span class="settings-label">Auto Note Detection<span class="settings-hint">Regex fallback for transcript-only mode — detects decisions, actions &amp; questions when the AI notes model is off</span></span>
           <input type="checkbox" id="settingTriggers" class="settings-toggle" ${s.triggerDetection ? 'checked' : ''}>
         </label>
 
