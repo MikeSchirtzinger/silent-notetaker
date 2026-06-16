@@ -63,3 +63,8 @@ nemotron-asr/reference/parakeet_ref_source.txt
 # the multi-MB WAV fixtures and local model symlinks are not.
 /dev/ab-test/*.wav
 /dev/ab-test/models-int8dec/
+
+# Notes-quality eval scratch — contains REAL captured workshop transcripts with
+# named participants. Local-only analysis, never public. (Belt-and-suspenders so
+# `git add -A` can't publish a private meeting.)
+/experiments/
