@@ -61,6 +61,19 @@ const HF_MODEL_BASE =
 // thread-count trap without duplicating it. Imported here for backward compat.
 import { raiseOrtWasmThreads } from './apps/web/js/ort-web-loader.js';
 
+// Tier-1 on-device weight cache (silent OPFS). The ~881 MB encoder used to ride
+// only the HTTP disk cache (evicted aggressively for single ~GB responses), so
+// repeat visits re-downloaded it. This persists the weights in OPFS — same
+// privacy posture as the existing transformers.js cache, no prompt, on-device,
+// nothing uploaded. See apps/web/js/model-cache.js.
+import { readModel, writeModel, requestPersistentStorage } from './apps/web/js/model-cache.js';
+
+// Cache identity = the pinned model revision (the commit hash in HF_MODEL_BASE),
+// NOT the literal URL — so local-dev (same-origin models dir) and the hosted
+// HF stream share one cache key, and bumping the pin auto-invalidates it. Edit
+// HF_MODEL_BASE → registry/models.toml together → cache keys rotate for free.
+const NEMOTRON_REV = (HF_MODEL_BASE.match(/\/resolve\/([^/]+)\//) || [, 'pinned'])[1];
+
 // How much audio to buffer before each transcribe_chunk call — the dominant lever on
 // *perceived* latency. 250 ms feeds ⇒ a chunk decodes ~every 560 ms of speech, ~0.6-0.9 s
 // behind live. The crate's EDGE_GUARD_FRAMES fix means feed size only sets how promptly
@@ -91,6 +104,10 @@ export class NemotronEngine {
     // regress on ort's spin-wait pool). Override via opts.numThreads for A/B runs.
     this.numThreads  = opts.numThreads || w.__NEMOTRON_THREADS
                     || Math.min(8, Math.max(1, ((typeof navigator !== 'undefined' && navigator.hardwareConcurrency) || 4) - 2));
+    // On-device weight cache (OPFS). On by default; set window.__NEMOTRON_NO_CACHE
+    // = true (or opts.noCache) to force a clean network load — handy when A/B-ing
+    // download timing or after editing the local models dir without bumping the pin.
+    this._noCache    = opts.noCache != null ? opts.noCache : !!w.__NEMOTRON_NO_CACHE;
 
     // Backward-compatible callbacks (unchanged shapes — index.html consumes these).
     this.onStatus = null;   // (message: string|null, pct: number|null) => void
@@ -151,6 +168,10 @@ export class NemotronEngine {
   async load() {
     const tLoad = performance.now();
     this.onStatus?.('Initializing Nemotron ASR (WASM)…', 3);
+
+    // Ask for durable storage up front (silent on Chrome/Edge) so the weights we
+    // cache below survive eviction. Fire-and-forget; writeModel re-awaits it.
+    if (!this._noCache) requestPersistentStorage();
 
     this._mod = await _loadModule(this.pkgUrl);
     const { WasmNemotron } = this._mod;
@@ -310,7 +331,39 @@ export class NemotronEngine {
     return HF_MODEL_BASE;
   }
 
+  /** Cache key for a model file, namespaced by the pinned model revision. */
+  _cacheKey(label) { return `nemotron/${NEMOTRON_REV}/${label}`; }
+
+  /**
+   * Cache-aware fetch: try the on-device OPFS cache first (instant, offline,
+   * never leaves the machine), else hit the network and write-through for next
+   * time. Every failure path degrades to a plain network load — the cache can
+   * never wedge a model load.
+   */
   async _fetchBytes(url, fileLabel) {
+    const label = fileLabel || url;
+    const key = this._cacheKey(label);
+    if (!this._noCache) {
+      const hit = await readModel(key).catch(() => null);
+      if (hit) {
+        console.log(`[nemotron] ${label}: restored from device cache (OPFS, ${hit.length} B) — no download`);
+        if (/encoder/i.test(label)) this.onStatus?.('Loading Nemotron model from this device (cached)…', 75);
+        return hit;
+      }
+    }
+    const bytes = await this._networkFetchBytes(url, label);
+    if (!this._noCache) {
+      // Write-through off the hot path; a cache-write failure must not fail the load.
+      writeModel(key, bytes, { url }).then(
+        () => console.log(`[nemotron] ${label}: cached to device (OPFS) — instant on next load`),
+        (e) => console.warn(`[nemotron] ${label}: cache write skipped:`, (e && e.message) || e),
+      );
+    }
+    return bytes;
+  }
+
+  /** Plain network fetch of one model file (the original, pre-cache behaviour). */
+  async _networkFetchBytes(url, fileLabel) {
     const r = await fetch(url);
     if (!r.ok) throw new Error(`fetch ${url}: ${r.status}`);
     // A static host's SPA fallback serves index.html with a 200 for paths that

@@ -93,6 +93,9 @@ cp apps/web/js/capture.js           "$DIST/apps/web/js/"
 cp apps/web/js/transformers-host.js "$DIST/apps/web/js/"
 cp apps/web/js/ort-web-loader.js    "$DIST/apps/web/js/"
 cp apps/web/js/bridge-client.js     "$DIST/apps/web/js/"
+# On-device weight cache (OPFS) imported by nemotron-engine.js — must ship or the
+# import 404s on the hosted build and the engine load throws.
+cp apps/web/js/model-cache.js       "$DIST/apps/web/js/"
 
 # Cloudflare Pages response headers (COOP/COEP + CSP)
 cp _headers "$DIST/"
