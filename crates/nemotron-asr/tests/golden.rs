@@ -26,7 +26,7 @@
 
 use std::path::Path;
 
-use nemotron_asr::{audio, Nemotron};
+use nemotron_asr::{Nemotron, audio};
 
 /// Lowercase, strip everything that is not a letter, digit, or space, and
 /// split into words.

@@ -47,12 +47,12 @@
 //!
 //! ## Engine dispatch — [`engine::AnyAsrEngine`] / [`engine::JsHostEngine`]
 //!
-//! The i1 hand-off TODO: the concrete [`engine::AnyAsrEngine::JsHost`] variant
-//! and the [`engine::JsHostEngine`] adapter that drives a transformers.js worker
-//! under any of the above policies. It lives here (not `silent-core`) because the
-//! variants pull in host-specific shapes that must not contaminate the
-//! dependency-free contracts crate (PRD "Core contracts": *"concrete variants …
-//! are added in their home crates"*).
+//! The i1 hand-off, realized: the concrete [`engine::AnyAsrEngine::JsHost`]
+//! variant and the [`engine::JsHostEngine`] adapter that drives a
+//! transformers.js worker under any of the above policies. It lives here (not
+//! `silent-core`) because the variants pull in host-specific shapes that must
+//! not contaminate the dependency-free contracts crate (PRD "Core contracts":
+//! *"concrete variants … are added in their home crates"*).
 //!
 //! # Shared text-event type
 //!

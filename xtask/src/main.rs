@@ -4,9 +4,9 @@
 //!
 //! - [`model_audit`] — fail on committed model weights outside the tiny-fixture
 //!   allowlist; require pinned revisions (no `main`), per-file sha256 + size,
-//!   `license` and `license_verified` on every registry entry. Currently FAILS
-//!   on the committed `titanet.onnx` / `mel_fb.json` — that is correct; E1
-//!   removes them.
+//!   `license` and `license_verified` on every registry entry. This is a hard
+//!   gate: E1 removed the committed `titanet.onnx` / `mel_fb.json`, so the
+//!   scan now passes cleanly and fails again only on regression.
 //!
 //! - [`gen_headers`] — generate the Cloudflare `_headers` file and the
 //!   local-server CSP from the registry's `network_origins` plus the static
@@ -43,8 +43,8 @@ enum Command {
     /// Scan the repo for committed model weights and audit the registry for
     /// completeness (pinned revisions, hashes, sizes, licenses).
     ///
-    /// CURRENTLY FAILS on `titanet.onnx` + `mel_fb.json` — that is correct
-    /// behavior; they are removed in Task E1.
+    /// A hard gate: Task E1 removed `titanet.onnx` + `mel_fb.json` from the
+    /// repo root, so this passes cleanly today and only fails on regression.
     ModelAudit(model_audit::ModelAuditArgs),
 
     /// Generate `_headers` (Cloudflare) and the local-server CSP from the

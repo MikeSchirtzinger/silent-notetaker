@@ -23,7 +23,7 @@
 use ndarray::{Array1, Array3, Array4};
 use ort::session::{RunOptions, Session};
 use ort::value::{Tensor, TensorRef};
-use ort_web::{sync_outputs, Dist, FEATURE_NONE};
+use ort_web::{Dist, FEATURE_NONE, sync_outputs};
 use wasm_bindgen::prelude::*;
 
 use crate::audio::MelFrontend;
@@ -32,7 +32,7 @@ use crate::chunk_core::{
 };
 use crate::constants::{
     BLANK_ID, CHUNK_SIZE, CONV_CONTEXT, DECODER_LSTM_DIM, EDGE_GUARD_FRAMES, HIDDEN_DIM,
-    HOP_LENGTH, LEFT_CONTEXT, LSTM_LAYERS, MAX_SYMBOLS_PER_STEP, NUM_ENCODER_LAYERS, N_MELS,
+    HOP_LENGTH, LEFT_CONTEXT, LSTM_LAYERS, MAX_SYMBOLS_PER_STEP, N_MELS, NUM_ENCODER_LAYERS,
     PRE_ENCODE_CACHE, VOCAB_SIZE, WIN_LENGTH,
 };
 use crate::vocab::SentencePieceVocab;

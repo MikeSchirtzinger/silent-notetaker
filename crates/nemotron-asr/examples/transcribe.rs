@@ -23,7 +23,7 @@ use std::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use nemotron_asr::constants::SAMPLE_RATE;
 #[cfg(not(target_arch = "wasm32"))]
-use nemotron_asr::{audio, Nemotron};
+use nemotron_asr::{Nemotron, audio};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {

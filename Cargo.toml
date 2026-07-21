@@ -26,9 +26,10 @@ repository = "https://github.com/brevity-ventures/silent-notetaker"
 authors = ["Brevity Ventures"]
 
 # Shared dependency versions. New crates pin these via `*.workspace = true`.
-# `nemotron-asr` keeps its own pins (edition 2021, ort/ort-web RC pins) and does
-# not consume these — it joins the workspace for unified gating, not for shared
-# deps (see crates/nemotron-asr TODO-D3).
+# `nemotron-asr` keeps its own dependency pins (ort/ort-web RC pins) and does
+# not consume these — it joins the workspace for unified gating, not for
+# shared deps. It now shares the workspace's edition = "2024" (Task D3's
+# edition migration is complete; see crates/nemotron-asr/Cargo.toml).
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

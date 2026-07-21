@@ -294,5 +294,11 @@ pub(crate) fn encoder_frame(encoded: &Array3<f32>, t: usize) -> Result<Array3<f3
         .index_axis(Axis(0), 0)
         .index_axis(Axis(1), t)
         .to_owned();
-    Ok(frame.to_shape((1, hidden, 1))?.to_owned())
+    // Bind the reshaped array to a local instead of returning it as a tail
+    // expression: `to_shape` produces a second `OwnedRepr` temporary, and
+    // Edition 2024 narrows temporary tail-expr scope (dropped before `frame`
+    // instead of after), which only matters here because `OwnedRepr` has a
+    // custom `Drop`. Binding makes the drop order explicit and edition-stable.
+    let reshaped = frame.to_shape((1, hidden, 1))?.to_owned();
+    Ok(reshaped)
 }

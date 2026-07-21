@@ -21,7 +21,7 @@ use crate::constants::{
     PRE_ENCODE_CACHE, VOCAB_SIZE,
 };
 use crate::error::{Error, Result};
-use crate::model::{encoder_frame, AsrBackend, EncoderCache};
+use crate::model::{AsrBackend, EncoderCache, encoder_frame};
 use crate::vocab::SentencePieceVocab;
 
 /// Mutable per-utterance decoder state: encoder cache, LSTM state, and the

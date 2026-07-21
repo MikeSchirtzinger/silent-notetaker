@@ -10,11 +10,10 @@
 #   6. link-check        — docs + registry link validation (non-blocking)
 #   7. reproducible-wasm — build wasm twice (assert byte-identical), publish sha256 manifest (R8)
 #
-# NOTE: xtask-gates uses continue-on-error: true for model-audit and gen-headers
-# because d2-xtask (Task D2) is building those subcommands concurrently and
-# because model-audit INTENTIONALLY FAILS today (titanet.onnx + mel_fb.json are
-# committed at root until E1 removes them). See "E1: flip continue-on-error to
-# false" markers in the xtask-gates job.
+# NOTE: xtask-gates runs model-audit and gen-headers --check as hard gates (no
+# continue-on-error). E1 removed the committed titanet.onnx + mel_fb.json and
+# regenerated _headers from the registry, so both subcommands pass cleanly
+# today and any drift fails the job.
 #
 # Toolchain: pinned via rust-toolchain.toml (1.95.0, components: rustfmt clippy
 # rust-src, target: wasm32-unknown-unknown). The dtolnay/rust-toolchain action

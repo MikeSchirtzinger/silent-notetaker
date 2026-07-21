@@ -54,7 +54,8 @@ const WEIGHT_EXTENSIONS: &[&str] = &["onnx", "gguf", "safetensors", "bin", "pt",
 /// Current entries:
 /// - `mel_fb.json`: mel filterbank JSON for the TitaNet audio frontend.
 ///   Generated from the model at build time; should be fetched at runtime, not
-///   committed. E1 removes this from the repo root.
+///   committed. E1 removed it from the repo root; this check guards against
+///   regression.
 const KNOWN_MODEL_ARTIFACTS: &[&str] = &["mel_fb.json"];
 
 /// Minimum file size for a "large binary blob" check, in bytes (25 MB).
@@ -81,7 +82,7 @@ const BINARY_SIZE_THRESHOLD_BYTES: u64 = 25 * 1024 * 1024;
 ///   production weight (that lives on Hugging Face and is fetched at runtime);
 ///   it is intentionally kept in the repo for the `eval/` harness.
 ///
-/// E1 removes `titanet.onnx` (root) and `mel_fb.json` (root). The eval/
+/// E1 removed `titanet.onnx` (root) and `mel_fb.json` (root). The eval/
 /// fixtures are separate and remain until the eval/ harness is updated to
 /// fetch them at test time.
 const ALLOWED_FIXTURE_PATHS: &[&str] = &["eval/js/titanet.onnx", "eval/js/mel_fb.json"];
