@@ -1,10 +1,19 @@
 # Extension System Design
 
-> **Status: DESIGN — not yet implemented.**
-> This document specifies the extension system planned for Phase 3 of the
-> [migration roadmap](ARCHITECTURE.md#7-migration-roadmap). Nothing described
-> here ships today. It is written now so the community can reason about the
-> direction, and so that Phase 3 has a concrete spec to implement against.
+> **Status: SHIPPED (Phase 6 / Tasks J1–J3 + J2b).**
+> The extension system described here is implemented: the manifest SDK
+> (`silent-extension-sdk`), the host runtime (`extension-host.js` + the
+> `silent-web` extension-host surface), opaque-origin sandboxed iframes, the
+> versioned `postMessage` protocol, install consent + manager UI, and grant
+> persistence. **Network grants are functional** — they are applied as a
+> per-extension **response-header CSP** served by the Rust server's
+> `/ext/<name>/` route (`server/src/ext_route.rs`); see §7.
+> **One real caveat:** that route is an axum server route, so on the **hosted
+> Cloudflare deploy extensions are local-only** until the equivalent Pages
+> Function (`apps/cloudflare/functions/ext/[[path]].ts`, committed, not yet
+> deployed) ships — the host refuses to mount without the genuine bootstrap
+> route (§7.1). This document is both the spec and the shipped protocol reference;
+> §7 records exactly what is implemented and the witnessed acceptance (§7.2).
 
 ---
 

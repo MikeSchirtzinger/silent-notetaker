@@ -65,7 +65,7 @@ The design splits work across silicon so nothing contends: the **default ASR (Ne
 
 **Requirements:** Chrome or Edge (most complete WebGPU support), a microphone, and a few hundred MB of free disk for the first-run model cache.
 
-**Fastest — just open it:** **[silentnotetaker.com](https://silentnotetaker.com)**. Same app, hosted on Cloudflare Pages with the cross-origin-isolation headers already set. Nothing is uploaded — the page only fetches JS runtimes and model weights (see [Privacy statement](#privacy-statement)). The first visit downloads the selected model and caches it in your browser; after that it works offline.
+**Fastest — just open it:** **[silentnotetaker.com](https://silentnotetaker.com)**. Same app, hosted on Cloudflare Pages with the cross-origin-isolation headers already set. Nothing is uploaded — the page only fetches JS runtimes and model weights (see [Privacy statement](#privacy-statement)). The first visit downloads the selected model; the large weights (the Nemotron encoder is ~880 MB) are then persisted **on-device in the browser's private file system (OPFS)**, keyed to the pinned model revision, so repeat visits skip the download entirely and the app works offline. It's purely a local cache, and bumping the model pin auto-invalidates the old copy.
 
 **Run it locally** (full source, same behavior):
 
@@ -75,7 +75,7 @@ cd silent-notetaker
 ./start.sh
 ```
 
-`start.sh` launches a local server with the right headers and opens the app at **http://localhost:8080**. Pick an engine, click **Start**, allow the mic, and talk. The first run downloads the selected model from Hugging Face and caches it in your browser — after that it works offline.
+`start.sh` launches a local server with the right headers and opens the app at **http://localhost:8080**. Pick an engine, click **Start**, allow the mic, and talk. The first run downloads the selected model from Hugging Face and caches it on-device in the browser's private storage (OPFS), keyed to the model revision — so everyday repeat runs skip the download and work offline (bumping the pin re-fetches).
 
 > **Why a server and not just opening the file?** The on-device models use multithreaded WebAssembly, which the browser only enables when the page is "cross-origin isolated" (it needs `SharedArrayBuffer`). That requires two HTTP headers (`COOP` + `COEP`) you can't set from a `file://` URL. `start.sh` runs a tiny server that sends them — a Rust (axum) one if you have `cargo`, otherwise a dependency-free Python fallback (`coi-server.py`). A plain `python -m http.server` will *load* the app but run single-threaded and several times slower.
 

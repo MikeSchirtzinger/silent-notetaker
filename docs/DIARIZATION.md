@@ -1,6 +1,6 @@
 # Diarization: Over-Split Root Cause and Global Re-Clustering Design
 
-**Status:** Design + ready-to-paste patch. QUALITY IMPROVEMENT IS UNPROVEN — Mike must validate with real audio in a browser. This document describes a hypothesis with an implementation, not a verified fix.
+**Status:** The re-clustering *mechanism* SHIPPED — reimplemented in Rust as the stop-time global recluster in `crates/silent-diarization/src/tracker.rs` (`recluster_threshold` default `0.65`), with golden tests in `crates/silent-diarization/tests/recluster_golden.rs`. **§3 below is the original JS paste-in patch for `index.html` and is now historical — do not paste it; the live implementation is the Rust `SpeakerTracker`.** What remains genuinely OPEN is the same thing it always was: QUALITY IMPROVEMENT IS UNPROVEN in-browser — the merge is mechanically correct and test-covered, but that it actually reduces over-splitting on real meeting audio still needs validation with a live mic. The root-cause analysis (§1), design rationale (§2), and test procedure (§4) remain accurate; treat §3's code as a spec of what was built, not instructions to apply.
 
 ---
 

@@ -32,8 +32,9 @@ parens. Avoid adjectives like "blazing," "powerful," "revolutionary" — HN alle
 
 > Silent Notetaker is a meeting notetaker that runs entirely in your browser — live
 > transcription, speaker labels, and decision/action-item extraction — with the audio
-> never leaving your machine. No backend, no account, and the whole app is a single
-> HTML file you can read.
+> never leaving your machine. No backend, no account — just static files you can read
+> and host yourself (an `index.html` shell, ES-module engine loaders, and a
+> hash-verifiable Rust/WASM core).
 >
 > I built it because every mainstream AI notetaker, including the privacy-marketed
 > ones, streams your audio to their servers and runs the AI there. Their privacy is a
@@ -42,22 +43,26 @@ parens. Avoid adjectives like "blazing," "powerful," "revolutionary" — HN alle
 > You can verify that in the network panel; the only things it fetches are JS
 > libraries and model weights from CDNs.
 >
-> The interesting part was making three models run at once without choking. A
-> streaming ASR model (Voxtral 4B, default) gets the GPU to itself via WebGPU; a
-> speaker-ID model (TitaNet) and a small question-suggesting LLM (Qwen3) run on
-> WASM/CPU so they can't contend with it. The nastiest bug was an invisible WebGPU
-> memory runaway — the streaming model's KV cache grows every token in GPU memory
-> that the JS heap profiler can't see, so an hour-long meeting silently balloons to
-> ~2 GB and freezes the tab. Fixed it by capping the per-context token + audio budget
-> and recycling the context, re-anchored at "now" so no audio is dropped.
+> The interesting part was making three models run at once without choking. By
+> default all three — the streaming ASR (NVIDIA's Nemotron, INT8), a speaker-ID model
+> (TitaNet), and a small question-suggesting LLM (Qwen3) — run on WASM/CPU, which
+> keeps the whole default pipeline off the GPU so nothing contends. There's also an
+> optional premium tier: a 4B streaming model (Voxtral) that takes the GPU to itself
+> via WebGPU when you select it. That GPU path is where the nastiest bug lived — an
+> invisible WebGPU memory runaway: the streaming model's KV cache grows every token in
+> GPU memory that the JS heap profiler can't see, so an hour-long meeting silently
+> balloons to ~2 GB and freezes the tab. Fixed it by capping the per-context token +
+> audio budget and recycling the context, re-anchored at "now" so no audio is dropped.
 >
-> Honest about the rough edges: it needs WebGPU (Chrome/Edge), the first load
-> downloads a big model (up to ~2.7 GB for Voxtral, cached after), live speaker
-> clustering still over-splits sometimes, and it captures your mic rather than system
-> audio today. Lighter engines (SenseVoice, Whisper base/small) are in there for
-> weaker machines.
+> Honest about the rough edges: it wants a modern Chromium (Chrome/Edge), the first
+> load downloads the model weights (a few hundred MB for the default Nemotron, up to
+> ~2.7 GB if you opt into the Voxtral GPU tier) — after that they're cached on-device
+> in the browser's private file system (OPFS), keyed to the model revision, so repeat
+> visits skip the download. Live speaker clustering still over-splits sometimes, and
+> it captures your mic rather than system audio today. Lighter engines (SenseVoice,
+> Whisper base/small) are in there for weaker machines.
 >
-> Code is MIT, single file, audit away: [repo link]
+> Code is MIT, no build step, audit away: [repo link]
 > Hosted demo (purely on-device, nothing to install): [Cloudflare link]
 
 Keep it to roughly this length. Resist adding a feature list — link the README for that.
@@ -69,7 +74,9 @@ Keep it to roughly this length. Resist adding a feature list — link the README
 > Author here. A few implementation notes for the curious, since "it runs in a
 > browser" is doing a lot of work:
 >
-> **The invisible memory runaway.** Inside one `model.generate()` call the KV cache
+> **The invisible memory runaway (the optional Voxtral GPU tier).** The default engine
+> (Nemotron) runs on CPU/WASM, but the optional Voxtral 4B tier streams on the GPU —
+> and that's where this one lived. Inside one `model.generate()` call the KV cache
 > (`past_key_values`) grows with every emitted token, and that memory is GPU/native —
 > it does *not* show up in the JS heap profiler, which is where you'd instinctively
 > look. Measured ~0.52 MB/token on M1 Metal with real Voxtral 4B; the old
@@ -87,14 +94,16 @@ Keep it to roughly this length. Resist adding a feature list — link the README
 > by online "leader clustering" on a cosine threshold (~0.45). The live clustering is
 > the weakest link — it over-splits — and global re-clustering is what I'm working on.
 >
-> **Why split GPU vs WASM.** The GPU is the bottleneck, so the heaviest model owns it
-> and the other two are deliberately kept on CPU/WASM so they can never contend for
-> GPU memory or scheduling.
+> **Why split GPU vs WASM.** By default everything runs on CPU/WASM — Nemotron ASR,
+> TitaNet, and Qwen — so nothing touches the GPU at all. Opt into a GPU ASR tier
+> (Voxtral) and the GPU becomes the bottleneck, so that heaviest model owns it and the
+> other two stay on CPU/WASM where they can never contend for GPU memory or scheduling.
 >
 > There's a scrollytelling writeup of the six main build decisions in the repo
-> (`overview.html`), and full architecture notes + where it's going (modular core +
-> a sandboxed extension system, network-denied-by-default so a marketplace can't
-> undermine the privacy guarantee) in `docs/ARCHITECTURE.md`.
+> (`overview.html`), and full architecture notes in `docs/ARCHITECTURE.md` — including
+> the now-modular core and the shipped sandboxed, network-denied-by-default extension
+> system (the groundwork for a future marketplace that can't undermine the privacy
+> guarantee; grants land via a per-extension response-header CSP).
 >
 > Built by Brevity — we build private, on-device AI. Happy to answer anything.
 
@@ -102,10 +111,12 @@ Keep it to roughly this length. Resist adding a feature list — link the README
 
 ## Pre-empt the predictable HN objections (have answers ready)
 
-- **"6,000-line single HTML file is gross."** Agreed it's a tradeoff — it's a
-  deliberate auditability/shareability choice for the demo, and the documented next
-  step is splitting into native ES modules (no build step; Cloudflare serves them).
-  Point to `docs/ARCHITECTURE.md`.
+- **"6,000-line single HTML file is gross."** It's since been split — the monolith is
+  now a root `index.html` shell plus native ES-module engine loaders and Rust/WASM
+  crates, no build step (Cloudflare serves the modules directly). The single-file era
+  was a deliberate auditability/shareability choice for the early demo; "verify the
+  binary you're running" (published WASM hashes) replaced it. Point to
+  `docs/ARCHITECTURE.md`.
 - **"Weights come from Hugging Face, so it's not really offline / not really local."**
   Weights download once and cache; inference is 100% client-side; audio never goes
   anywhere. The egress surface is libraries + weights, full stop — and that's listed
@@ -133,7 +144,7 @@ the bodies are buried.
 ## Pre-launch checklist
 
 - [x] Fill in the real **Brevity link / email capture** (README footer → https://brevity.ventures) — this is how the launch converts into a following.
-- [ ] **CSP added and browser-validated** (the `connect-src` allowlist — turns "audio never leaves" from asserted to enforced; see `docs/ARCHITECTURE.md` §3). Highest-value pre-HN hardening.
+- [x] **CSP added and browser-validated** (the `connect-src` allowlist — turns "audio never leaves" from asserted to enforced; see `docs/ARCHITECTURE.md` §6). Live on silentnotetaker.com as a response header, alongside COOP/COEP.
 - [ ] Hosted Cloudflare link tested cold on a fresh profile (first-load model download works on real wifi).
 - [ ] README renders correctly on GitHub (tables, the egress-surface table especially).
 - [ ] A 30–60s screen recording or GIF in the README/post — HN engagement jumps with a visual.

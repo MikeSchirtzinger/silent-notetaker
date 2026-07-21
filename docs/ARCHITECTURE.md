@@ -97,10 +97,13 @@ surfaces to the UI:
 | `capture.js` | Mic/tab capture, AudioWorklet bootstrap |
 | `transformers-host.js` | transformers.js model host worker (the JS executor for Voxtral, Whisper, Moonshine, Qwen) |
 | `ort-web-loader.js` | onnxruntime-web runtime loader for Rust/ort-web engines |
+| `model-cache.js` | OPFS weight cache — persists large model weights (e.g. the Nemotron encoder) on-device, keyed to the pinned model revision, so repeat loads skip the download |
 | `bridge-client.js` | Thin WebSocket client for `bridge.py` |
 
-`apps/web/js/` also contains `session-engine.js` and `extension-host.js`, which are
-thin glue wrappers that delegate all policy decisions to the corresponding wasm surfaces.
+The engine loaders themselves (`session-engine.js`, `extension-host.js`,
+`nemotron-engine.js`, `diarization-engine.js`, …) live at the repo root next to
+`index.html`. Each is a thin glue wrapper that delegates every policy decision to its
+corresponding wasm surface.
 
 ### Data flow
 
@@ -142,12 +145,12 @@ thin glue wrappers that delegate all policy decisions to the corresponding wasm 
 ## 3. Rust workspace
 
 ```
+index.html                  # UI shell at the repo root (post-modularization)
+*-engine.js                 # root-level ES-module engine loaders (nemotron-engine.js,
+                            #   diarization-engine.js, session-engine.js, extension-host.js, …)
 apps/
   web/
-    index.html              # UI shell (unchanged by the refactor)
-    js/                     # permanent JS modules (see above)
-    silent_web.js           # wasm-bindgen output (generated; not hand-edited)
-    silent_web_bg.wasm      # compiled wasm binary
+    js/                     # permanent JS glue modules (see above)
 crates/
   silent-core/              # domain contracts: commands, events, errors, registry types.
                             #   No browser dependencies. Testable natively.
@@ -165,6 +168,8 @@ crates/
   silent-extension-sdk/     # Extension manifest schema, capability vocabulary, versioned
                             #   host<->extension message protocol, permission-grant model.
   silent-web/               # wasm-bindgen boundary: exposes all of the above to the UI.
+                            #   wasm-pack output lands in silent-web/pkg/ (silent_web.js +
+                            #   silent_web_bg.wasm; generated, not hand-edited).
 xtask/                      # Build and CI tooling (model-audit, gen-headers, deploy-gate).
 registry/
   models.toml               # Single source of truth for all model metadata (see §5).
@@ -277,20 +282,26 @@ Notes:
 - COEP is `credentialless` (not `require-corp`). Decision log 2026-06-04:
   `require-corp` breaks Hugging Face CDN redirects.
 
-**Per-extension CSP.** Extensions run in null-origin sandboxed iframes. Their
-per-extension network grants are applied as `<meta>` CSP inside the iframe context
-via `GrantSet::connect_src`. See §7 for the known limitation.
+**Per-extension CSP.** Extensions run in opaque-origin sandboxed iframes served from
+a per-extension `/ext/<name>/` route whose **response-header** CSP carries that
+extension's granted `connect-src` (derived from `GrantSet::connect_src`). This
+replaced an earlier `<meta>`-CSP-in-`srcdoc` design, which could enforce
+deny-by-default but could not make grants take effect — a `srcdoc` iframe inherits the
+base CSP and can only tighten it. See §7 for the mechanism and the hosted-deploy caveat.
 
 ---
 
 ## 7. Extension system
 
-**Status: implemented (Phase 6 / Tasks J1–J3).**
+**Status: implemented (Phase 6 / Tasks J1–J3 + J2b).** Network grants are functional
+(J2b); the one remaining gap is the hosted deploy, where extensions are local-only
+until the Cloudflare Pages Function port of the `/ext/<name>/` route ships (see below).
 
-Extensions run in null-origin sandboxed iframes (`sandbox="allow-scripts"` without
-`allow-same-origin`). The host fetches the extension entrypoint source same-origin
-and inlines it into the sandbox bootstrap (this avoids a COEP/CORS restriction on
-`import()` from a null-origin context under `credentialless`).
+Extensions run in opaque-origin sandboxed iframes (`sandbox="allow-scripts"` without
+`allow-same-origin`), each served from a per-extension `/ext/<name>/` route. The host
+fetches the extension entrypoint source same-origin and inlines it into the sandbox
+bootstrap (this avoids a COEP/CORS restriction on `import()` from an opaque-origin
+context under `credentialless`).
 
 The sandbox rests on three controls:
 
@@ -304,22 +315,32 @@ The sandbox rests on three controls:
 3. **Declared capabilities.** `silent-extension-sdk` enforces the manifest; anything
    undeclared is denied at the boundary.
 
-### Known limitation (J3 finding, pending follow-up)
+### Network grants (shipped via J2b)
 
-A `srcdoc`/`blob:` iframe inherits the embedder's CSP in Chromium, and CSP
-combines by intersection. A child context can only tighten, never widen, the base
-page `connect-src`. This means per-extension network grants (which would relax
-`connect-src` to an approved origin) **do not take effect** while extensions run in
-`srcdoc` iframes: a granted origin is still blocked by the inherited base policy.
+An earlier cut booted each extension from a `srcdoc` iframe carrying a `<meta>` CSP.
+That enforced deny-by-default perfectly but made **grants inert**: a `srcdoc`/`blob:`
+iframe inherits the embedder's CSP in Chromium, and CSP combines by intersection, so a
+child context can only tighten — never widen — the base page `connect-src`. A granted
+origin stayed blocked by the inherited base policy.
 
-**The privacy-critical guarantee is met:** network deny-by-default is fully enforced;
-the base page CSP is never relaxed. What is not yet working is the *relaxation* side
-(grants). Making grants functional requires serving each extension from a distinct
-same-origin document whose response header carries only that extension's CSP (no
-inheritance). This is tracked as task J2b and is explicitly pending.
+The fix (task J2b, shipped) serves each extension from a **distinct same-origin route**
+(`/ext/<name>/`, `server/src/ext_route.rs`) whose **response-header CSP** carries only
+that extension's policy. A response-header CSP is the document's own policy — it is not
+intersected with the embedder — so a granted `connect-src` origin actually takes effect.
+Isolation is preserved because `sandbox="allow-scripts"` (without `allow-same-origin`)
+forces the served document to an opaque origin regardless of its URL: `window.origin ===
+"null"`, and `localStorage`/`indexedDB` throw `SecurityError`, so it still cannot reach
+the host's storage. The base page CSP is never relaxed; it only gains `frame-src 'self'`
+to authorize framing the route. Deny-by-default *and* functional grants are both
+witnessed — see `docs/EXTENSIONS.md` §7.2.
 
-Grant persistence, consent UI, and the extension manager are fully implemented; the
-CSP relaxation for granted origins awaits J2b.
+**One real caveat — the hosted deploy.** `ext_route` is an axum server route, so it
+exists only when you run the local server. On the Cloudflare Pages deploy the equivalent
+is a Pages Function (`apps/cloudflare/functions/ext/[[path]].ts`, committed but not yet
+deployed), so **extensions are local-only on the hosted site**: the host probes for the
+genuine bootstrap route and refuses to mount without it, and the Settings manager
+explains the boundary instead of offering an install. Shipping that Function (and
+re-running the §7.2 witnesses against it) is the gate for lifting the restriction.
 
 See `docs/EXTENSIONS.md` for the full extension protocol specification.
 
