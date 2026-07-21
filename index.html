@@ -1217,6 +1217,7 @@
       min-width: 200px;
     }
     .settings-select:focus, .settings-input:focus { border-color: var(--accent); }
+    .settings-select:disabled { opacity: 0.5; cursor: not-allowed; }
     /* AI prompt editors — collapsible per-model prompt customization */
     .prompt-group { border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); margin-bottom: 8px; }
     .prompt-group summary {
@@ -7319,6 +7320,32 @@ function resetPromptField(key) {
   if (badge) badge.style.display = 'none';
 }
 
+/* Precision/Backend selects are read ONLY by the generic transformers.js
+   Whisper/Moonshine loader (the `else` branch of App.start()'s model routing,
+   line ~4906) — Nemotron self-resolves to fixed INT8/CPU, Voxtral hardcodes its
+   own q4f16/WebGPU config, and Dual/SenseVoice each manage their own model
+   config. Keep this set in sync with that routing switch. */
+const _PRECISION_DEVICE_SPECIAL_MODELS = ['nemotron', 'voxtral', 'dual', 'sensevoice'];
+function _modelHonorsPrecisionDevice(modelValue) {
+  return !_PRECISION_DEVICE_SPECIAL_MODELS.includes(modelValue);
+}
+
+/* Grey out + hide-behind-a-hint the Precision/Backend selects when the
+   currently-selected model ignores them, so the panel never shows a value that
+   isn't actually in effect. Runs on settings-panel open AND on every
+   #settingModel change. */
+function _updatePrecisionDeviceGate() {
+  const modelSel = document.getElementById('settingModel');
+  const dtypeSel = document.getElementById('settingDtype');
+  const deviceSel = document.getElementById('settingDevice');
+  const hint = document.getElementById('precisionDeviceHint');
+  if (!modelSel || !dtypeSel || !deviceSel) return;
+  const honors = _modelHonorsPrecisionDevice(modelSel.value);
+  dtypeSel.disabled = !honors;
+  deviceSel.disabled = !honors;
+  if (hint) hint.style.display = honors ? 'none' : '';
+}
+
 function openSettings() {
   const s = loadSettings();
   const container = document.getElementById('modalContainer');
@@ -7336,7 +7363,7 @@ function openSettings() {
 
         <label class="settings-row">
           <span class="settings-label">Model</span>
-          <select id="settingModel" class="settings-select">
+          <select id="settingModel" class="settings-select" onchange="_updatePrecisionDeviceGate()">
             ${_renderModelOptions(s)}
           </select>
         </label>
@@ -7346,6 +7373,7 @@ function openSettings() {
           <select id="settingDtype" class="settings-select">
             <option value="fp32" ${s.dtype === 'fp32' ? 'selected' : ''}>Full (fp32) — best accuracy</option>
             <option value="fp16" ${s.dtype === 'fp16' ? 'selected' : ''}>Half (fp16) — faster, slight quality loss</option>
+            <option value="q4f16" ${s.dtype === 'q4f16' ? 'selected' : ''}>Mixed (q4f16) — small, default for large models</option>
             <option value="q8" ${s.dtype === 'q8' ? 'selected' : ''}>Quantized (q8) — smaller, some quality loss</option>
             <option value="q4" ${s.dtype === 'q4' ? 'selected' : ''}>Aggressive (q4) — smallest, noticeable quality loss</option>
           </select>
@@ -7358,6 +7386,7 @@ function openSettings() {
             <option value="webgpu" ${s.device === 'webgpu' ? 'selected' : ''}>WebGPU (faster, Chrome 113+)</option>
           </select>
         </label>
+        <div id="precisionDeviceHint" class="settings-hint" style="margin-top:-4px; margin-bottom:6px; display:none;">Applies only to Whisper/Moonshine above — Nemotron (default, CPU/WASM), Voxtral, Dual, and SenseVoice each manage their own precision &amp; backend and ignore these controls.</div>
       </div>
 
       <div class="settings-section">
@@ -7464,6 +7493,7 @@ function openSettings() {
     </div>
   `;
   overlay.style.display = 'flex';
+  _updatePrecisionDeviceGate();   // correct disabled/hint state for the persisted model on open
   // Populate the installed-extensions manager (async; the slot shows "Loading…"
   // until the host + persisted grant sets resolve).
   if (typeof _renderExtManager === 'function') {
