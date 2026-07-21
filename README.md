@@ -6,7 +6,7 @@ A private AI meeting notetaker that runs entirely in your browser. Open a tab, h
 
 > Top-5 Global Demo at AI Tinkerers.
 
-**▶ Try it now — [silent-notetaker.pages.dev](https://silent-notetaker.pages.dev)** · nothing to install, runs entirely in your browser. Use Chrome or Edge; the first load downloads the models (a few hundred MB) and caches them, so give it a minute on the first visit.
+**▶ Try it now — [silentnotetaker.com](https://silentnotetaker.com)** · nothing to install, runs entirely in your browser. Use Chrome or Edge; the first load downloads the models (a few hundred MB) and caches them, so give it a minute on the first visit.
 
 ---
 
@@ -65,7 +65,7 @@ The design splits work across silicon so nothing contends: the **default ASR (Ne
 
 **Requirements:** Chrome or Edge (most complete WebGPU support), a microphone, and a few hundred MB of free disk for the first-run model cache.
 
-**Fastest — just open it:** **[silent-notetaker.pages.dev](https://silent-notetaker.pages.dev)**. Same app, hosted on Cloudflare Pages with the cross-origin-isolation headers already set. Nothing is uploaded — the page only fetches JS runtimes and model weights (see [Privacy statement](#privacy-statement)). The first visit downloads the selected model and caches it in your browser; after that it works offline.
+**Fastest — just open it:** **[silentnotetaker.com](https://silentnotetaker.com)**. Same app, hosted on Cloudflare Pages with the cross-origin-isolation headers already set. Nothing is uploaded — the page only fetches JS runtimes and model weights (see [Privacy statement](#privacy-statement)). The first visit downloads the selected model and caches it in your browser; after that it works offline.
 
 **Run it locally** (full source, same behavior):
 
