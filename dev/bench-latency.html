@@ -23,7 +23,7 @@
   <pre id="log"></pre>
 
   <script type="module">
-    const CLIP = './nemotron-asr/test-assets/test_16k.wav';
+    const CLIP = '../crates/nemotron-asr/test-assets/test_16k.wav';
     const GOLDEN = 'the quick brown fox jumps over the lazy dog';   // substring check (lowercased)
     const $ = (id) => document.getElementById(id);
     const log = (m) => { $('log').textContent += m + '\n'; console.log(m); };
@@ -52,7 +52,7 @@
         const audio = await loadClip();
         const dur = audio.length / 16000;
         log(`[nemotron] clip ${dur.toFixed(2)}s, crossOriginIsolated=${self.crossOriginIsolated}`);
-        const { NemotronEngine } = await import('./nemotron-engine.js');
+        const { NemotronEngine } = await import('../nemotron-engine.js');
         const eng = new NemotronEngine();
         eng.onStatus = (m, p) => log(`[nemotron] ${m}${p != null ? ' ('+p+'%)' : ''}`);
         let transcript = '', firstAt = 0;
@@ -68,7 +68,7 @@
           const ct0 = performance.now();
           eng.feed(c);
           // drain this chunk before the next (mimics realtime arrival, isolates per-chunk cost)
-          await eng._chain;
+          await eng._kick(false);
           perChunk.push(+(performance.now() - ct0).toFixed(1));
         }
         const tail = await eng.finalize();

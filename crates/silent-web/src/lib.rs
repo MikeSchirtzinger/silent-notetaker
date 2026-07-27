@@ -165,7 +165,7 @@ pub mod extension_host;
 pub use diarization::WasmDiarization;
 
 #[cfg(target_arch = "wasm32")]
-pub use nemotron::WasmNemotron;
+pub use nemotron::{WasmNemotron, WasmNemotronBacklog};
 
 #[cfg(target_arch = "wasm32")]
 pub use notes::{WasmCorrections, WasmNoteEngine, WasmQuestionScheduler};

@@ -13,9 +13,10 @@
  * What stays here (host execution, not policy — deliberately NOT migrated):
  *   - fetching the three model files (a host I/O concern; the Rust core is
  *     browser-free by contract). Progress bytes feed `WasmNemotron.loadProgressEvent`.
- *   - the feed-buffer drain loop (whole-56-frame-chunk slicing) and the
- *     ort-web thread-count trap. Keeping the per-feed drain in JS preserves the
- *     measured streaming hot-path baseline (no extra wasm round-trip per feed).
+ *   - executing typed backlog commands: temporary OPFS reads/writes and the
+ *     async ort-web decode call. Queue capacity, spill ordering, and overload
+ *     decisions live in Rust (`WasmNemotronBacklog`).
+ *   - the ort-web thread-count trap.
  *   - the `performance.now()` wall-clock instants (the Rust core has no clock):
  *     this loader measures load_ms / chunk_ms / ttft_ms and hands the deltas to
  *     Rust, which owns the telemetry aggregation the PerfMonitor reads.
@@ -31,7 +32,7 @@
  * `stats()` object). A new `onEvent(event)` hook is also exposed for consumers
  * that want the raw typed stream.
  *
- * Model artifacts (you host these; ~892 MB total, first load only, then cached):
+ * Model artifacts (you host these; ~892 MB total, then browser-managed cached copies):
  *   encoder.onnx (INT8, ~881 MB) · decoder_joint.onnx (INT8, ~11 MB) · tokenizer.model (~251 KB)
  * (The INT8 decoder's DynamicQuantizeLSTM contrib op is supported by
  * onnxruntime-web — verified in-browser 2026-06-05. The old fp32 decoder was a
@@ -66,7 +67,13 @@ import { raiseOrtWasmThreads } from './apps/web/js/ort-web-loader.js';
 // repeat visits re-downloaded it. This persists the weights in OPFS — same
 // privacy posture as the existing transformers.js cache, no prompt, on-device,
 // nothing uploaded. See apps/web/js/model-cache.js.
-import { readModel, writeModel, requestPersistentStorage } from './apps/web/js/model-cache.js';
+import {
+  modelCacheAvailable,
+  readModel,
+  requestPersistentStorage,
+  writeModelResponse,
+} from './apps/web/js/model-cache.js';
+import { OpfsAudioSpool } from './apps/web/js/audio-spool.js';
 
 // Cache identity = the pinned model revision (the commit hash in HF_MODEL_BASE),
 // NOT the literal URL — so local-dev (same-origin models dir) and the hosted
@@ -116,10 +123,15 @@ export class NemotronEngine {
     this.onEvent  = null;   // (event: { tag, payload }) => void
 
     this.engine = null;     // WasmNemotron instance
+    this.backlog = null;    // WasmNemotronBacklog: Rust-owned bound/order law
     this._mod   = null;
-    this._pending = [];     // accumulated f32 samples awaiting a whole chunk
-    this._drainedSamples = 0; // samples decoded so far (see consumedSamples getter)
-    this._chain = Promise.resolve();   // serializes transcribe_chunk so state never overlaps
+    this._spool = null;     // OPFS executor only; no queue policy
+    this._spillWrites = new Map();
+    this._drainPromise = null;
+    this._finalRequested = false;
+    this._isDecoding = false;
+    this._fatalError = null;
+    this._generation = 0;
 
     // ── latency telemetry: only the wall-clock instants stay in JS (the Rust core has no
     //    clock); the AGGREGATION (chunks/avg/rtf) now lives in WasmNemotron.
@@ -127,6 +139,7 @@ export class NemotronEngine {
     this._firstTextAt = 0;      // performance.now() when first text was emitted
     // Last typed Stats snapshot (snake_case from EngineStats), refreshed on each stats() call.
     this._lastStats = null;
+    this.onFatal = null;        // (Error) => void — hard bounds never fail silently
   }
 
   /** Dispatch a typed EngineEvent: forward it raw, then translate to the legacy callbacks. */
@@ -178,7 +191,7 @@ export class NemotronEngine {
 
     const base = await this._resolveModelBase();
     // Encoder dominates the download (~881 MB) — stream it so we can show real progress.
-    this.onStatus?.('Downloading Nemotron model (encoder ~881 MB, first load only)…', 5);
+    this.onStatus?.('Loading Nemotron model (encoder ~881 MB; browser-managed repeat cache)…', 5);
     const enc = await this._fetchBytes(base + 'encoder.onnx', 'encoder.onnx');
     const [dec, tok] = await Promise.all([
       this._fetchBytes(base + 'decoder_joint.onnx', 'decoder_joint.onnx'),
@@ -188,6 +201,8 @@ export class NemotronEngine {
     this.onStatus?.('Building onnxruntime-web sessions…', 82);
     raiseOrtWasmThreads(this.numThreads);
     this.engine = await WasmNemotron.create(enc, dec, tok);
+    this.backlog = new this._mod.WasmNemotronBacklog(this.feedSamples);
+    this._spool = new OpfsAudioSpool();
     const w = (typeof window !== 'undefined') ? window : {};
     console.log(`[nemotron] ort-web wasm threads = ${w.ort?.env?.wasm?.numThreads ?? '(default)'}`
       + ` (requested ${this.numThreads}, crossOriginIsolated=${!!w.crossOriginIsolated})`);
@@ -208,11 +223,20 @@ export class NemotronEngine {
   /** Reset all streaming state for a fresh utterance/session. */
   reset() {
     this.engine?.reset();
-    this._pending.length = 0;
-    this._chain = Promise.resolve();
+    this.backlog?.reset();
+    const oldSpool = this._spool;
+    this._spool = new OpfsAudioSpool();
+    if (oldSpool) oldSpool.clear().catch((e) => {
+      console.warn('[nemotron-spool] reset cleanup failed:', e && e.message || e);
+    });
+    this._spillWrites.clear();
+    this._drainPromise = null;
+    this._finalRequested = false;
+    this._isDecoding = false;
+    this._fatalError = null;
+    this._generation++;
     this._startedAt = 0; this._firstTextAt = 0;
     this._lastStats = null;
-    this._drainedSamples = 0;
   }
 
   /**
@@ -224,24 +248,36 @@ export class NemotronEngine {
    * runs 0.6–0.9 s+backlog ahead of the transcript. Speaker attribution uses
    * this so each sentence's audio slice aligns with its words.
    */
-  get consumedSamples() { return this._drainedSamples || 0; }
+  get consumedSamples() { return this.backlog?.consumedSamples || 0; }
 
   /** Feed 16 kHz mono Float32 samples. Buffers, then drains whole chunks single-file. */
   feed(samples) {
-    if (!this.engine || !samples || !samples.length) return;
+    if (!this.engine || !this.backlog || !samples || !samples.length || this._fatalError) return;
     if (!this._startedAt) this._startedAt = performance.now();
-    for (let i = 0; i < samples.length; i++) this._pending.push(samples[i]);
-    this._kick(false);
+    try {
+      this.backlog.pushSamples(samples);
+      this._flushStagedSpills();
+      void this._kick(false).catch(() => {});
+    } catch (error) {
+      this._fail(error);
+    }
   }
 
   /** Drain the buffer + decode the trailing partial chunk. Call once at end of stream. */
   async finalize() {
-    this._kick(true);
-    await this._chain;                       // ensure all queued chunks have decoded
+    if (this._fatalError) throw this._fatalError;
+    this._finalRequested = true;
+    // A feed-triggered non-final drain may already be between its last action
+    // and its `.finally()` cleanup. Await it first, then start one guaranteed
+    // final pass so a trailing partial chunk cannot be skipped by that race.
+    if (this._drainPromise) await this._drainPromise;
+    await this._kick(true);                  // includes OPFS spill commits + all queued chunks
+    if (this._fatalError) throw this._fatalError;
     if (!this.engine) return '';
     const t0 = performance.now();
     const raw = await this.engine.finalize();
     this.engine.recordDecodeMs(performance.now() - t0);
+    this._finalRequested = false;
     if (raw == null) return '';
     const event = JSON.parse(raw);
     this._dispatch(event);
@@ -255,13 +291,25 @@ export class NemotronEngine {
    */
   stats() {
     const ttft = (this._firstTextAt && this._startedAt) ? Math.round(this._firstTextAt - this._startedAt) : 0;
-    if (this.engine) {
+    const backlog = this.backlog
+      ? JSON.parse(this.backlog.snapshot())
+      : { pending_samples: 0, resident_samples: 0, spooled_samples: 0, spill_count: 0 };
+    const pendingSamples = backlog.pending_samples;
+    // Do not mutably enter WasmNemotron while its async decode future owns the
+    // same Rust object. The separate backlog object remains safe to sample.
+    if (this.engine && !this._isDecoding) {
       // Refresh the typed snapshot, passing the two clock-derived deltas Rust can't compute.
-      this._dispatch(JSON.parse(this.engine.statsEvent(ttft, this._pending.length)));
+      this._dispatch(JSON.parse(this.engine.statsEvent(ttft, pendingSamples)));
     }
     const s = this._lastStats;
     if (!s) {
-      return { loadMs: 0, chunks: 0, avgChunkMs: 0, lastChunkMs: 0, audioSecs: 0, rtf: 0, timeToFirstTextMs: ttft, pendingSamples: this._pending.length };
+      return {
+        loadMs: 0, chunks: 0, avgChunkMs: 0, lastChunkMs: 0, audioSecs: 0, rtf: 0,
+        timeToFirstTextMs: ttft, pendingSamples,
+        residentSamples: backlog.resident_samples,
+        spooledSamples: backlog.spooled_samples,
+        spillCount: backlog.spill_count,
+      };
     }
     // Map the typed (snake_case) EngineStats back to the camelCase the UI already reads.
     return {
@@ -272,34 +320,128 @@ export class NemotronEngine {
       audioSecs: s.audio_secs,
       rtf: s.rtf,
       timeToFirstTextMs: s.ttft_ms,
-      pendingSamples: s.pending_samples,
+      pendingSamples,
+      residentSamples: backlog.resident_samples,
+      spooledSamples: backlog.spooled_samples,
+      spillCount: backlog.spill_count,
     };
   }
 
   // ── internals ──
   _kick(final) {
-    this._chain = this._chain.then(() => this._drain(final)).catch((e) => {
-      console.warn('[nemotron] chunk decode error', e && e.message || e);
+    if (final) this._finalRequested = true;
+    if (this._drainPromise) return this._drainPromise;
+    const generation = this._generation;
+    this._drainPromise = this._drain(generation).catch((error) => {
+      this._fail(error);
+      throw error;
+    }).finally(() => {
+      if (generation === this._generation) this._drainPromise = null;
     });
+    return this._drainPromise;
   }
 
-  async _drain(final) {
-    if (!this.engine) return;
-    while (this._pending.length >= this.feedSamples || (final && this._pending.length > 0)) {
-      const take = final ? this._pending.length : this.feedSamples;
-      const c = this._pending.splice(0, take);
-      const buf = Float32Array.from(c);
-      // transcribe_chunk returns a typed Partial event (or null for an empty chunk).
-      // Measure the decode cost around the await and report it to Rust after (the
-      // cost is only knowable once the await resolves), so Rust owns the aggregation.
+  _flushStagedSpills() {
+    if (!this.backlog || !this._spool || this._fatalError) return;
+    for (;;) {
+      const desc = JSON.parse(this.backlog.stagedSpill());
+      if (!desc) return;
+      const samples = this.backlog.takeStagedSpill(desc.id);
+      const generation = this._generation;
+      const spool = this._spool;
+      const write = spool.write(desc.id, samples).then(() => {
+        if (generation !== this._generation) return spool.remove(desc.id);
+        this.backlog.markSpillReady(desc.id);
+        this._flushStagedSpills();
+        void this._kick(false).catch(() => {});
+      }).catch((error) => {
+        const message = generation === this._generation && this.backlog
+          ? this.backlog.markSpillFailed(desc.id, error && error.message || String(error))
+          : error && error.message || String(error);
+        const fatal = new Error(message);
+        this._fail(fatal);
+        // The sticky fatal state is the error channel. Consume this individual
+        // write rejection so the browser does not also report an unhandled
+        // Promise while app.stop() performs the real shutdown.
+      }).finally(() => {
+        this._spillWrites.delete(desc.id);
+      });
+      this._spillWrites.set(desc.id, write);
+    }
+  }
+
+  async _drain(generation) {
+    if (!this.engine || !this.backlog) return;
+    while (generation === this._generation && !this._fatalError) {
+      this._flushStagedSpills();
+      const action = JSON.parse(this.backlog.nextDecode(this._finalRequested));
+      if (action.source === 'wait_for_spill') {
+        if (!this._finalRequested) return;
+        const writes = Array.from(this._spillWrites.values());
+        if (!writes.length) throw new Error('Nemotron backlog is waiting for a spill with no active OPFS write');
+        await Promise.all(writes);
+        continue;
+      }
+      if (action.source === 'empty') return;
+
+      let buf;
+      const fromMemory = action.source === 'memory';
+      if (fromMemory) {
+        buf = this.backlog.takeMemory(action.count);
+      } else if (action.source === 'spool') {
+        buf = await this._spool.read(action.id, action.offset_samples, action.count);
+      } else {
+        throw new Error(`unknown Nemotron backlog action: ${action.source}`);
+      }
+
+      // transcribe_chunk returns a typed Partial event (or null for an empty
+      // chunk). Only this host await remains in JS; capacity/order are Rust law.
       const t0 = performance.now();
-      const raw = await this.engine.transcribeChunk(buf);
-      this.engine.recordDecodeMs(performance.now() - t0);
-      // Advance BEFORE dispatch so onText handlers reading consumedSamples see
-      // the position including the chunk this text came from.
-      this._drainedSamples = (this._drainedSamples || 0) + buf.length;
+      let raw;
+      this._isDecoding = true;
+      try {
+        raw = await this.engine.transcribeChunk(buf);
+        this.engine.recordDecodeMs(performance.now() - t0);
+      } catch (error) {
+        if (fromMemory) {
+          try { this.backlog.nackMemory(); } catch (_) {}
+        }
+        throw error;
+      } finally {
+        this._isDecoding = false;
+      }
+
+      // Acknowledge BEFORE dispatch so onText handlers reading consumedSamples
+      // see the position including the chunk that produced this text.
+      if (fromMemory) {
+        this.backlog.ackMemory(action.count);
+      } else {
+        const completed = this.backlog.ackSpill(action.id, action.count);
+        if (completed) await this._spool.remove(action.id);
+      }
       if (raw != null) this._dispatch(JSON.parse(raw));
-      if (final) break;   // final pass takes everything in one shot
+    }
+  }
+
+  _fail(error) {
+    if (this._fatalError) return;
+    const fatal = error instanceof Error ? error : new Error(String(error));
+    this._fatalError = fatal;
+    console.error('[nemotron] fatal:', fatal.message);
+    this.onStatus?.(`Nemotron stopped to protect memory: ${fatal.message}`, null);
+    // A hard stop must not strand raw PCM. Wait for in-flight writes to settle,
+    // then delete every temporary spill owned by this engine session. Capture
+    // the spool so a later reset cannot make this cleanup touch the new session.
+    const spool = this._spool;
+    const writes = Array.from(this._spillWrites.values());
+    if (spool) {
+      void Promise.allSettled(writes).then(() => spool.clear()).catch((cleanupError) => {
+        console.error('[nemotron-spool] fatal cleanup failed:',
+          cleanupError && cleanupError.message || cleanupError);
+      });
+    }
+    try { this.onFatal?.(fatal); } catch (callbackError) {
+      console.error('[nemotron] fatal callback failed:', callbackError);
     }
   }
 
@@ -335,10 +477,10 @@ export class NemotronEngine {
   _cacheKey(label) { return `nemotron/${NEMOTRON_REV}/${label}`; }
 
   /**
-   * Cache-aware fetch: try the on-device OPFS cache first (instant, offline,
-   * never leaves the machine), else hit the network and write-through for next
-   * time. Every failure path degrades to a plain network load — the cache can
-   * never wedge a model load.
+   * Cache-aware fetch: try OPFS first; on a miss, stream the response directly
+   * into OPFS and close/verify it BEFORE returning bytes for WASM construction.
+   * This prevents the old cold-start overlap (full 881 MB JS buffer + OPFS
+   * write + wasm-bindgen copy + ONNX session build at the same time).
    */
   async _fetchBytes(url, fileLabel) {
     const label = fileLabel || url;
@@ -351,35 +493,30 @@ export class NemotronEngine {
         return hit;
       }
     }
-    const bytes = await this._networkFetchBytes(url, label);
-    if (!this._noCache) {
-      // Write-through off the hot path; a cache-write failure must not fail the load.
-      writeModel(key, bytes, { url }).then(
-        () => console.log(`[nemotron] ${label}: cached to device (OPFS) — instant on next load`),
-        (e) => console.warn(`[nemotron] ${label}: cache write skipped:`, (e && e.message) || e),
-      );
+
+    if (!this._noCache && modelCacheAvailable()) {
+      try {
+        const response = await this._fetchModelResponse(url);
+        const progress = this._progressReporter(label);
+        const bytes = await writeModelResponse(key, response, { url }, progress);
+        console.log(`[nemotron] ${label}: streamed to device cache, closed, then read for initialization (${bytes.length} B)`);
+        return bytes;
+      } catch (error) {
+        // A cache problem must not wedge loading. The response may already have
+        // been consumed, so make the fallback an explicit clean network fetch.
+        console.warn(`[nemotron] ${label}: streaming cache path failed; retrying without cache:`,
+          error && error.message || error);
+      }
     }
-    return bytes;
+    return this._networkFetchBytes(url, label);
   }
 
   /** Plain network fetch of one model file (the original, pre-cache behaviour). */
   async _networkFetchBytes(url, fileLabel) {
-    const r = await fetch(url);
-    if (!r.ok) throw new Error(`fetch ${url}: ${r.status}`);
-    // A static host's SPA fallback serves index.html with a 200 for paths that
-    // don't exist — feeding HTML into the onnx session builder produces an
-    // opaque downstream wedge. Fail HERE, loudly, instead.
-    const ct = r.headers.get('content-type') || '';
-    if (/text\/html/i.test(ct)) {
-      throw new Error(`fetch ${url}: got ${ct} instead of model bytes (static-host SPA fallback?)`);
-    }
+    const r = await this._fetchModelResponse(url);
     const len = +(r.headers.get('content-length') || 0);
     const label = fileLabel || url;
-    // The LoadProgress events flow through silent-web (the free wasm function), produced
-    // even though the engine isn't built yet during the encoder download (it's built FROM
-    // these bytes). The module is loaded before any fetch, so the function is available.
-    const progress = (loaded, total) =>
-      this._dispatch(JSON.parse(this._mod.nemotronLoadProgressEvent(label, loaded, total)));
+    const progress = this._progressReporter(label);
     // Stream the encoder so LoadProgress events fire incrementally; small files in one shot.
     const wantProgress = /encoder/i.test(label) && r.body && len;
     if (!wantProgress) {
@@ -398,6 +535,27 @@ export class NemotronEngine {
       progress(off, len);
     }
     return out;
+  }
+
+  async _fetchModelResponse(url) {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`fetch ${url}: ${r.status}`);
+    // A static host's SPA fallback serves index.html with a 200 for paths that
+    // don't exist — feeding HTML into the onnx session builder produces an
+    // opaque downstream wedge. Fail HERE, loudly, instead.
+    const ct = r.headers.get('content-type') || '';
+    if (/text\/html/i.test(ct)) {
+      throw new Error(`fetch ${url}: got ${ct} instead of model bytes (static-host SPA fallback?)`);
+    }
+    return r;
+  }
+
+  _progressReporter(label) {
+    // The LoadProgress events flow through silent-web (the free wasm function), produced
+    // even though the engine isn't built yet during the encoder download (it's built FROM
+    // these bytes). The module is loaded before any fetch, so the function is available.
+    return (loaded, total) =>
+      this._dispatch(JSON.parse(this._mod.nemotronLoadProgressEvent(label, loaded, total)));
   }
 }
 

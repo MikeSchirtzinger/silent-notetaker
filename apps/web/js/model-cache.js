@@ -34,6 +34,8 @@
 const OPFS_OK = typeof navigator !== 'undefined'
   && navigator.storage && typeof navigator.storage.getDirectory === 'function';
 
+export function modelCacheAvailable() { return OPFS_OK; }
+
 let _root = null;
 async function root() {
   if (_root) return _root;
@@ -117,7 +119,91 @@ export async function writeModel(key, bytes, info = {}) {
   } finally { await mw.close(); }
 }
 
+/**
+ * Stream a network Response directly into OPFS, commit its metadata, then read
+ * the completed file once for model construction.
+ *
+ * This is the cold-load path for large weights. It deliberately never builds a
+ * full network Uint8Array while an OPFS write and WASM/ONNX session build are
+ * also active. At most one response chunk is held during download; the method
+ * resolves only after the data file and sidecar are closed and verified.
+ *
+ * `onProgress(loaded, total)` is called after each committed stream chunk.
+ */
+export async function writeModelResponse(key, response, info = {}, onProgress = null) {
+  if (!OPFS_OK) throw new Error('OPFS unavailable');
+  if (!response || !response.ok) {
+    throw new Error(`cannot cache unsuccessful response (${response && response.status})`);
+  }
+  await requestPersistentStorage();
+  const base = safe(key);
+  const total = +(response.headers.get('content-length') || 0);
+  const dataH = await handle(base + '.bin', true);
+  const writable = await dataH.createWritable();
+  let loaded = 0;
+  try {
+    if (response.body && typeof response.body.getReader === 'function') {
+      const reader = response.body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        await writable.write(value);
+        loaded += value.byteLength;
+        if (onProgress) onProgress(loaded, total);
+      }
+    } else {
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      await writable.write(bytes);
+      loaded = bytes.byteLength;
+      if (onProgress) onProgress(loaded, total || loaded);
+    }
+    await writable.close();
+  } catch (error) {
+    try { await writable.abort(); } catch (_) {}
+    throw error;
+  }
+
+  if (total && loaded !== total) {
+    await removeModel(key);
+    throw new Error(`short model download for ${key}: ${loaded} != ${total} bytes`);
+  }
+
+  const metaH = await handle(base + '.meta', true);
+  const meta = JSON.stringify({ len: loaded, url: info.url || null, ts: Date.now() });
+  const mw = await metaH.createWritable();
+  try {
+    await mw.write(meta);
+    await mw.close();
+  } catch (error) {
+    try { await mw.abort(); } catch (_) {}
+    await removeModel(key);
+    throw error;
+  }
+
+  const bytes = await readModel(key);
+  if (!bytes || bytes.length !== loaded) {
+    await removeModel(key);
+    throw new Error(`committed model cache verification failed for ${key}`);
+  }
+  return bytes;
+}
+
 // ── management helpers (debug + a future "Manage models" panel) ───────────────
+
+/** Delete one logical model entry. Returns the number of files removed. */
+export async function removeModel(key) {
+  if (!OPFS_OK) return 0;
+  const base = safe(key);
+  const r = await root();
+  let removed = 0;
+  for (const suffix of ['.bin', '.meta']) {
+    try {
+      await r.removeEntry(base + suffix);
+      removed++;
+    } catch (_) {}
+  }
+  return removed;
+}
 
 /** Delete every file this cache created. Returns the count removed. */
 export async function clearModelCache() {
@@ -158,6 +244,7 @@ export async function cacheStats() {
 // testing: __modelCache.stats() / __modelCache.clear().
 if (typeof window !== 'undefined') {
   window.__modelCache = Object.assign(window.__modelCache || {}, {
-    stats: cacheStats, clear: clearModelCache, readModel, writeModel, requestPersistentStorage,
+    stats: cacheStats, clear: clearModelCache, readModel, writeModel,
+    writeModelResponse, removeModel, modelCacheAvailable, requestPersistentStorage,
   });
 }

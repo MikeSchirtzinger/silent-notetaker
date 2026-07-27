@@ -20,13 +20,13 @@
 //!   [`silent_core::EngineEvent::Partial`]; the end-of-stream tail emits
 //!   [`silent_core::EngineEvent::Final`].
 //!
-//! The chunk feeding / decode itself is **unchanged** — [`WasmNemotron`] calls
+//! The decode itself is **unchanged** — [`WasmNemotron`] calls
 //! [`nemotron_asr::WasmAsr::transcribe_chunk`] / `finalize` / `reset` exactly as
-//! `nemotron-engine.js` did. Only the JS-facing event glue migrated. The buffer
-//! drain loop (whole-chunk slicing) and the model-byte fetching stay in the thin
-//! JS loader (`nemotron-engine.js`): fetching bytes and serializing audio off
-//! the mic are host *execution*, not policy, and keeping them in JS preserves
-//! the streaming hot-path measured baseline (no extra wasm round-trip per feed).
+//! before. [`WasmNemotronBacklog`] now owns the queue bound, spill ordering, and
+//! overload behavior through the native-tested
+//! [`silent_inference::nemotron_backlog`] policy. JavaScript retains only the
+//! browser hands: microphone delivery, OPFS reads/writes, fetch, and the async
+//! call executor.
 //!
 //! # Event shape
 //!
@@ -46,7 +46,9 @@
 use nemotron_asr::WasmAsr;
 use silent_core::events::{EngineEvent, EngineStats};
 use silent_core::ids::TimeRange;
+use silent_inference::nemotron_backlog::{NemotronBacklog, NemotronBacklogConfig};
 
+use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -63,6 +65,191 @@ fn to_js_err<E: std::fmt::Display>(e: E) -> JsError {
 fn event_to_js(ev: &EngineEvent) -> Result<JsValue, JsError> {
     let s = serde_json::to_string(ev).map_err(to_js_err)?;
     Ok(JsValue::from_str(&s))
+}
+
+fn value_to_js<T: Serialize>(value: &T) -> Result<JsValue, JsError> {
+    let s = serde_json::to_string(value).map_err(to_js_err)?;
+    Ok(JsValue::from_str(&s))
+}
+
+// ---------------------------------------------------------------------------
+// WasmNemotronBacklog — bounded audio queue + OPFS spill ordering
+// ---------------------------------------------------------------------------
+
+/// Browser boundary for the pure-Rust bounded Nemotron backlog policy.
+///
+/// The browser host supplies captured PCM and executes the returned commands:
+/// staged segments are written to temporary origin-private files; spool reads
+/// and in-memory chunks are passed to [`WasmNemotron::transcribe_chunk`].
+/// Capacity, ordering, acknowledgements, and terminal overload decisions stay
+/// in Rust.
+#[wasm_bindgen]
+pub struct WasmNemotronBacklog {
+    policy: NemotronBacklog,
+}
+
+#[wasm_bindgen]
+impl WasmNemotronBacklog {
+    /// Create the shipping 60-second resident / 30-minute disk-bounded policy.
+    ///
+    /// `chunk_samples` is the decoder feed selected by the host (normally 4,000
+    /// samples = 250 ms).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsError` if `chunk_samples` is zero.
+    #[wasm_bindgen(constructor)]
+    pub fn new(chunk_samples: u32) -> Result<WasmNemotronBacklog, JsError> {
+        console_error_panic_hook::set_once();
+        let config = NemotronBacklogConfig::shipping_with_chunk_samples(chunk_samples as usize);
+        let policy = NemotronBacklog::new(config).map_err(to_js_err)?;
+        Ok(Self { policy })
+    }
+
+    /// Append captured 16 kHz Float32 PCM and return the bounded queue snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Throws on the sticky RAM/disk bound or a host protocol violation. The JS
+    /// executor treats this as fatal and stops capture loudly.
+    #[wasm_bindgen(js_name = pushSamples)]
+    pub fn push_samples(&mut self, samples: &[f32]) -> Result<JsValue, JsError> {
+        let snapshot = self.policy.push_samples(samples).map_err(to_js_err)?;
+        value_to_js(&snapshot)
+    }
+
+    /// Describe the oldest batch waiting to cross into the OPFS executor.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsError` only on JSON serialization failure.
+    #[wasm_bindgen(js_name = stagedSpill)]
+    pub fn staged_spill(&self) -> Result<JsValue, JsError> {
+        value_to_js(&self.policy.staged_spill())
+    }
+
+    /// Take the exact staged batch named by [`staged_spill`](Self::staged_spill).
+    ///
+    /// # Errors
+    ///
+    /// Throws when the host requests an unknown or out-of-order spill id.
+    #[wasm_bindgen(js_name = takeStagedSpill)]
+    pub fn take_staged_spill(&mut self, id: u32) -> Result<Box<[f32]>, JsError> {
+        let batch = self.policy.take_staged_spill(id).map_err(to_js_err)?;
+        Ok(batch.samples.into_boxed_slice())
+    }
+
+    /// Report that the temporary OPFS file is durably closed and readable.
+    ///
+    /// # Errors
+    ///
+    /// Throws for an unknown/out-of-state spill id.
+    #[wasm_bindgen(js_name = markSpillReady)]
+    pub fn mark_spill_ready(&mut self, id: u32) -> Result<JsValue, JsError> {
+        let snapshot = self.policy.mark_spill_ready(id).map_err(to_js_err)?;
+        value_to_js(&snapshot)
+    }
+
+    /// Make an OPFS write failure terminal. Returns the exact error string the
+    /// UI should surface.
+    #[wasm_bindgen(js_name = markSpillFailed)]
+    #[must_use]
+    pub fn mark_spill_failed(&mut self, id: u32, message: &str) -> String {
+        self.policy.mark_spill_failed(id, message).to_string()
+    }
+
+    /// Return the next ordered decode command.
+    ///
+    /// # Errors
+    ///
+    /// Throws on a sticky bound failure or acknowledgement protocol violation.
+    #[wasm_bindgen(js_name = nextDecode)]
+    pub fn next_decode(&self, final_pass: bool) -> Result<JsValue, JsError> {
+        let action = self.policy.next_decode(final_pass).map_err(to_js_err)?;
+        value_to_js(&action)
+    }
+
+    /// Copy the commanded in-memory chunk to the JS executor while retaining a
+    /// bounded acknowledgement copy.
+    ///
+    /// # Errors
+    ///
+    /// Throws when the count/source does not match [`next_decode`](Self::next_decode).
+    #[wasm_bindgen(js_name = takeMemory)]
+    pub fn take_memory(&mut self, count: u32) -> Result<Box<[f32]>, JsError> {
+        let samples = self.policy.take_memory(count as usize).map_err(to_js_err)?;
+        Ok(samples.into_boxed_slice())
+    }
+
+    /// Commit a successfully decoded in-memory chunk.
+    ///
+    /// # Errors
+    ///
+    /// Throws for a mismatched acknowledgement.
+    #[wasm_bindgen(js_name = ackMemory)]
+    pub fn ack_memory(&mut self, count: u32) -> Result<JsValue, JsError> {
+        let snapshot = self.policy.ack_memory(count as usize).map_err(to_js_err)?;
+        value_to_js(&snapshot)
+    }
+
+    /// Put a failed in-memory decode back at the exact queue front.
+    ///
+    /// # Errors
+    ///
+    /// Throws when no memory chunk is awaiting acknowledgement.
+    #[wasm_bindgen(js_name = nackMemory)]
+    pub fn nack_memory(&mut self) -> Result<JsValue, JsError> {
+        let snapshot = self.policy.nack_memory().map_err(to_js_err)?;
+        value_to_js(&snapshot)
+    }
+
+    /// Commit a successfully decoded OPFS range. Returns `true` when the host
+    /// may delete the completed spill file.
+    ///
+    /// # Errors
+    ///
+    /// Throws for an out-of-order id/count.
+    #[wasm_bindgen(js_name = ackSpill)]
+    pub fn ack_spill(&mut self, id: u32, count: u32) -> Result<bool, JsError> {
+        self.policy.ack_spill(id, count as usize).map_err(to_js_err)
+    }
+
+    /// Current bounded queue telemetry.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsError` only on JSON serialization failure.
+    pub fn snapshot(&self) -> Result<JsValue, JsError> {
+        value_to_js(&self.policy.snapshot())
+    }
+
+    /// Audio successfully handed through the decoder in this session.
+    #[wasm_bindgen(getter, js_name = consumedSamples)]
+    #[must_use]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "session PCM counts stay far below JavaScript's exact 2^53 integer limit"
+    )]
+    pub fn consumed_samples(&self) -> f64 {
+        self.policy.snapshot().consumed_samples as f64
+    }
+
+    /// Total samples waiting in memory or OPFS.
+    #[wasm_bindgen(getter, js_name = pendingSamples)]
+    #[must_use]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "shipping policy caps pending audio below 30 minutes at 16 kHz"
+    )]
+    pub fn pending_samples(&self) -> u32 {
+        self.policy.snapshot().pending_samples as u32
+    }
+
+    /// Clear all per-session audio. Spill ids remain monotonic so late browser
+    /// callbacks cannot alias new-session files.
+    pub fn reset(&mut self) {
+        self.policy.reset();
+    }
 }
 
 // ---------------------------------------------------------------------------

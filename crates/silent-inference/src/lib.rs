@@ -64,6 +64,7 @@
 
 pub mod dual;
 pub mod engine;
+pub mod nemotron_backlog;
 pub mod selection;
 pub mod sensevoice;
 pub mod voxtral_recycle;

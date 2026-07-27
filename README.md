@@ -6,7 +6,7 @@ A private AI meeting notetaker that runs entirely in your browser. Open a tab, h
 
 > Top-5 Global Demo at AI Tinkerers.
 
-**▶ Try it now — [silentnotetaker.com](https://silentnotetaker.com)** · nothing to install, runs entirely in your browser. Use Chrome or Edge; the first load downloads the models (a few hundred MB) and caches them, so give it a minute on the first visit.
+**▶ Try it now — [silentnotetaker.com](https://silentnotetaker.com)** · nothing to install, runs entirely in your browser. Use Chrome or Edge; the first load downloads the models (a few hundred MB) into a browser-managed local cache, so give it a minute on the first visit. The browser may still evict that cache under storage pressure.
 
 ---
 
@@ -100,7 +100,7 @@ The UI shell — markup, styles, engine loaders, the inlined transcription worke
 | `silent-diarization` | TitaNet speaker embeddings + speaker tracking |
 | `silent-notes` | Note trigger extraction + Qwen smart-question scheduling |
 | `silent-storage` | On-device storage schema + migrations |
-| `silent-inference` | JS-host engine command dispatch |
+| `silent-inference` | JS-host dispatch plus bounded streaming/backlog policy |
 | `silent-audio` | Audio chunking policy |
 | `silent-extension-sdk` | Sandboxed extension permission model |
 | `silent-web` | The wasm-bindgen boundary that exposes all of the above to the UI |
@@ -134,7 +134,7 @@ Models are pulled from Hugging Face at runtime and cached locally.
 
 ## Privacy statement
 
-Audio is captured, turned into model inputs, and consumed in-process. It is **never** written to a network request. There is no analytics endpoint, no telemetry host, and no crash-reporting origin in the codebase. The complete list of origins the app can contact is the CSP `connect-src` allowlist (Hugging Face for weights, two CDNs for runtimes, and the optional localhost Claude bridge), generated from `registry/models.toml` and enforced by the browser. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full trust boundary.
+Audio is captured, turned into model inputs, and consumed on-device. It is **never** written to a network request. If Nemotron falls behind, bounded PCM segments may temporarily enter the browser's origin-private local storage and are deleted after use or stop. There is no analytics endpoint, no telemetry host, and no crash-reporting origin in the codebase. The complete list of origins the app can contact is the CSP `connect-src` allowlist (Hugging Face for weights, two CDNs for runtimes, and the optional localhost Claude bridge), generated from `registry/models.toml` and enforced by the browser. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full trust boundary.
 
 ---
 

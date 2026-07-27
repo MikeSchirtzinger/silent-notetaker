@@ -19,6 +19,8 @@ executors, the bridge socket).
 | `capture.js` | `getUserMedia` / `getDisplayMedia` / AudioWorklet capture and the WebAudio graph; screenshot pipeline (15 s interval, JPEG, perceptual-hash dedup). Emits `AudioChunk` samples to the engine layer via callbacks. `TranscriptionManager` in `index.html` delegates all audio capture and screenshot operations to a `CaptureGraph` instance exported from this module. | Phase 1 — implemented (task k6) |
 | `transformers-host.js` | The `js-transformers` model host worker source (`EXECUTOR_WORKER_SRC`). Previously inlined in `whisper-engine.js`; exported here so any future js-transformers host can import it without duplicating it. The executor loads the transformers.js ASR pipeline and runs `transcriber(audio)` per chunk; it contains NO policy (VAD / hallucination / dedup / chunk boundaries — Rust). | Phase 1 — implemented (task k6) |
 | `ort-web-loader.js` | `ort-web` runtime glue — `raiseOrtWasmThreads` (previously inlined in `nemotron-engine.js`). Raises the onnxruntime-web WASM thread count before the runtime's first session allocates the thread pool. Imported by `nemotron-engine.js`; shared by any future ort-web host. Vendored-asset wiring lands in Phase 1/2 (docs/research/spike-ci-wasm.md). | Phase 1 — implemented (task k6) |
+| `model-cache.js` | OPFS executor for browser-managed model-weight storage. It streams network responses, commits files, and verifies reads; cache identity and engine behavior remain outside this browser I/O module. | Implemented |
+| `audio-spool.js` | OPFS executor for temporary Nemotron overflow PCM. It performs exact Rust-commanded writes, range reads, and deletes; queue capacity, ordering, spill timing, retry, and hard limits live in `silent-inference::nemotron_backlog`. | Implemented |
 | `bridge-client.js` | Thin WebSocket client for `bridge.py` over `ws://localhost:8765`. The `ClaudeBridge` executor class: connect / disconnect / send / sendTranscript / sendScreenshot / requestSummary / query / updateIndicator. Reconnect/backoff POLICY lives in Rust (`bridge-engine.js` → `WasmBridgeReconnect`); this module is the EXECUTOR only. Dynamically imported by `App._initBridge()` in `index.html`; the inbound message dispatch (`_handleBridgeMessage`) stays in `index.html` because it references DOM globals. | Phase 4 — pre-implemented (task k6); reconnect policy already in Rust |
 
 ## Module map
@@ -28,6 +30,8 @@ apps/web/js/
 ├── capture.js           — CaptureGraph class (audio + screenshot)
 ├── transformers-host.js — EXECUTOR_WORKER_SRC (ASR pipeline blob-worker source)
 ├── ort-web-loader.js    — raiseOrtWasmThreads (ort-web thread count trap)
+├── model-cache.js       — streaming OPFS model-weight executor
+├── audio-spool.js       — temporary OPFS PCM executor (Rust-commanded)
 ├── bridge-client.js     — ClaudeBridge class (WS executor)
 └── README.md            — this file
 ```
@@ -41,6 +45,8 @@ index.html (classic <script>)
 
 nemotron-engine.js (ES module)
   └── static import  → apps/web/js/ort-web-loader.js (raiseOrtWasmThreads)
+  └── static import  → apps/web/js/model-cache.js    (model fetch/cache I/O)
+  └── static import  → apps/web/js/audio-spool.js    (temporary PCM file I/O)
 
 whisper-engine.js (ES module)
   └── static import  → apps/web/js/transformers-host.js (EXECUTOR_WORKER_SRC)

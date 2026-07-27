@@ -3717,6 +3717,22 @@ class TranscriptionManager {
     if (this.speakerTracker) this.speakerTracker.embedder.load().catch(() => {}); // prewarm speaker model
 
     eng.onText = (frag) => this._nemotronAppend(frag);
+    eng.onFatal = (error) => {
+      const message = `Nemotron stopped safely: ${error && error.message || error}`;
+      this.onStatus(message, null);
+      // A hard queue/storage failure cannot preserve both audio and the memory
+      // bound. Stop the real recording flow loudly; never keep a fake
+      // "recording" indicator running after transcription has stopped.
+      if (typeof app !== 'undefined' && app && typeof app.stop === 'function') {
+        // app.stop() normally ends with the generic "Recording stopped" copy;
+        // restore the actual failure afterward so the reason remains visible.
+        void app.stop().catch((stopError) => {
+          console.error('[nemotron] fatal stop flow failed:', stopError);
+        }).finally(() => this.onStatus(message, null));
+      } else {
+        this.stop();
+      }
+    };
 
     await this._startAudioCapture((samples) => {
       this.nemoRing.append(samples);
@@ -4561,7 +4577,11 @@ const PerfMonitor = {
         const lagSecs = (asrStats.pendingSamples || 0) / 16000;
         if (lagSecs >= 10) {
           this._lagging = true;
-          app.handleStatus(`Transcription is ~${Math.round(lagSecs)}s behind live audio — this machine can't keep up right now. Nothing is lost; text catches up as it decodes (or at Stop).`, null);
+          const spooledSecs = (asrStats.spooledSamples || 0) / 16000;
+          const storage = spooledSecs > 0
+            ? ` ${Math.round(spooledSecs)}s is temporarily in private device storage`
+            : ' Audio remains inside the bounded in-memory queue';
+          app.handleStatus(`Transcription is ~${Math.round(lagSecs)}s behind live audio.${storage}; RAM stays bounded while text catches up.`, null);
         } else if (this._lagging && lagSecs < 2) {
           this._lagging = false;
           app.handleStatus('Nemotron caught up — streaming transcription active', null);
