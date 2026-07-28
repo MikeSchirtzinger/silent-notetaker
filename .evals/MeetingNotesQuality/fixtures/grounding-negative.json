@@ -1,0 +1,37 @@
+{
+  "id": "grounding_negative",
+  "title": "Incident Follow-up",
+  "agenda": "Incident findings\nRelease gate\nMonitoring follow-up",
+  "transcriptSegments": [
+    "Checkout requests reached 1.2 seconds at p99 during the incident.",
+    "The vendor logs needed for root-cause analysis are still missing.",
+    "The team agreed that no release will ship until those logs arrive and the failure mode is understood.",
+    "Someone should investigate better monitoring next week, but we did not assign an owner or a deadline.",
+    "We do not yet know whether the database or the payment gateway caused the slowdown."
+  ],
+  "expectedConcepts": [
+    {"id":"latency","all":[["p99"],["1.2","1 2"]]},
+    {"id":"missing-logs","all":[["vendor"],["logs"],["missing"]]},
+    {"id":"release-gate","all":[["release"],["logs"],["until","before"]]},
+    {"id":"cause-open","all":[["database"],["payment"],["gateway"]]}
+  ],
+  "forbiddenClaims": [
+    "Alice",
+    "Bob",
+    "Sarah",
+    "Friday",
+    "database caused the slowdown",
+    "payment gateway caused the slowdown"
+  ],
+  "expectedAgenda": [
+    {"title":"Incident findings","status":"discussed"},
+    {"title":"Release gate","status":"discussed"},
+    {"title":"Monitoring follow-up","status":"partial"}
+  ],
+  "expectedMinimums": {
+    "sections": 3,
+    "decisions": 1,
+    "actions": 0,
+    "questions": 1
+  }
+}

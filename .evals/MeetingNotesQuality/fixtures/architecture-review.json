@@ -1,0 +1,33 @@
+{
+  "id": "architecture_review",
+  "title": "Architecture Review",
+  "agenda": "",
+  "transcriptSegments": [
+    "Let's settle the database question from last week. Postgres makes more sense than Mongo because our user data is relational.",
+    "Agreed. We will use Postgres for the user database and can add a document store later if needed.",
+    "Sarah will own the migration script and have it ready by Thursday before the staging deploy.",
+    "Read latency hit 800 milliseconds at p99 last month. We still need to learn whether connection pooling will help.",
+    "The new caching layer cut API response time by 40 percent.",
+    "The auth service is blocked because the OAuth provider has not sent sandbox credentials. Mike will follow up with the vendor this week.",
+    "We also agreed to move launch to the 15th so QA has more runway."
+  ],
+  "expectedConcepts": [
+    {"id":"database-choice","all":[["postgres"],["user","database"]]},
+    {"id":"migration-action","all":[["sarah"],["migration"],["thursday"]]},
+    {"id":"latency-risk","all":[["p99"],["800","eight hundred"]]},
+    {"id":"cache-gain","all":[["caching","cache"],["40","forty"]]},
+    {"id":"oauth-blocker","all":[["oauth"],["sandbox"],["credentials"]]},
+    {"id":"launch-date","all":[["launch"],["15th","15"]]}
+  ],
+  "forbiddenClaims": [
+    "launch on the 14th",
+    "Sarah — follow up with the OAuth vendor",
+    "Mike — prepare the migration"
+  ],
+  "expectedMinimums": {
+    "sections": 2,
+    "decisions": 2,
+    "actions": 2,
+    "questions": 1
+  }
+}

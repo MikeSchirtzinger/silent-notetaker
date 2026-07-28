@@ -1,0 +1,28 @@
+{
+  "rubric_version": 3,
+  "protected_hashes": {
+    "rubric.json": "dfc36353f1889cc5a386dda9eb14781dbc316c4db86689c8593a55d21b81d138",
+    "verifiers/check_inline_js.sh": "abb211f737f17fa3d4ad1d4dcb083b4e605c21a144b88b6e3cdc2c2d8790b805",
+    "verifiers/held-out.json": "af5e6ea171bad6228749ba35c6fe75242bc77cec33af9076383287eb9ebce339",
+    "verifiers/held-out.test.mjs": "f1162b545846296d41420d479fef636be8a94ae1bd07ce578ef9c11a9aa1b48d",
+    "verifiers/verify_agenda_wiring.sh": "1692c794179f3505378df8698723f288288b3490035692842c0c77936b28d748",
+    "verifiers/verify_browser_smoke.sh": "28b481ece546068f8896a9c958afc5fd6d6c47d2fd3456872cb2c788be4f8a0d",
+    "verifiers/verify_no_mock_results.sh": "ac56d42f7d7a0d1e4562302cd74263a6f2e817b0fe107e35aefb288eb6a04f82",
+    "verifiers/verify_persistence.sh": "7e67132236ddb930ca60a30883355f183910d1bc401bd5802810a485e3f9aeb4",
+    "verifiers/verify_pipeline.sh": "db96838a2b4e48ae8ec6cb4d45fec1a39b00c958c5df10131f5a4c8ff4141e3e",
+    "verifiers/verify_real_benchmark.sh": "8635a2f6d17525390a4aaf76d800c1652ad7af95c005b64f03749934651ff06f",
+    "verifiers/verify_settings.sh": "9d4e57fe94faea6f661c60b2a8e78c3434be10f0e45e7e5db00139b44de3d3d1",
+    "verifiers/verify_substantive_output.sh": "16cf2f46608444f83132767a500859e500900d63d5f5db255337ce6d2f6e7ed5",
+    "verifiers/verify_test_count.sh": "412ef16c0cceca59ad96754d0f060c3da9bdacc1cafe6211931023ac39540abc"
+  },
+  "iterations": [
+    {
+      "n": 0,
+      "timestamp": "2026-07-28T00:53:43.654Z",
+      "reward": 1,
+      "floor": 1,
+      "ceiling": 1,
+      "failing": []
+    }
+  ]
+}

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Final Notes — real-model benchmark</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    body { margin: 0; padding: 28px; background: #0b0d10; color: #edf0f5; }
+    main { max-width: 920px; margin: 0 auto; }
+    h1 { margin: 0; font-size: 20px; }
+    .sub { margin: 6px 0 18px; color: #9098a8; font-size: 13px; }
+    button { border: 0; border-radius: 7px; padding: 9px 15px; background: #6d5dfc; color: white; font-weight: 650; cursor: pointer; }
+    button:disabled { opacity: .5; cursor: wait; }
+    #status { margin: 14px 0; min-height: 20px; color: #f6c85f; font: 12px/1.5 ui-monospace, monospace; white-space: pre-wrap; }
+    .result { margin: 10px 0; padding: 14px 16px; border: 1px solid #272c35; border-radius: 8px; background: #12151a; }
+    .result-head { display: flex; align-items: baseline; gap: 10px; }
+    .result-title { font-weight: 650; }
+    .pass { color: #57d39b; } .fail { color: #ff7c7c; }
+    .meta { margin-left: auto; color: #9098a8; font: 11px ui-monospace, monospace; }
+    pre { margin: 10px 0 0; padding: 10px; overflow: auto; background: #0b0d10; border-radius: 6px; color: #cbd2df; font: 11px/1.45 ui-monospace, monospace; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Canonical Meeting Notes benchmark</h1>
+    <p class="sub">Real Qwen3 0.6B · Transformers.js · WebGPU · deterministic decoding · no fallback</p>
+    <button id="run">Run real-model benchmark</button>
+    <div id="status">Ready.</div>
+    <div id="results"></div>
+  </main>
+
+  <script type="module">
+    import { pipeline, env } from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.0.0-next.7/dist/transformers.min.js';
+    import {
+      FINAL_NOTES_SYSTEM,
+      buildFinalNotesRequest,
+      extractGroundedEvidence,
+      finalNotesToMarkdown,
+      formatMappedEvidence,
+      mergeEvidenceIntoFinalNotes,
+      parseNaturalFinalNotes,
+    } from '../final-notes.mjs';
+    import { scoreMeetingNotes } from '../.evals/MeetingNotesQuality/score-output.mjs';
+
+    const MODEL = 'onnx-community/Qwen3-0.6B-ONNX';
+    const DEVICE = 'webgpu';
+    const DTYPE = 'q4f16';
+    const runButton = document.getElementById('run');
+    const status = document.getElementById('status');
+    const results = document.getElementById('results');
+    env.allowLocalModels = false;
+    env.useBrowserCache = true;
+
+    let generator = null;
+
+    async function loadItems() {
+      const text = await fetch('../.evals/MeetingNotesQuality/items.jsonl').then((response) => {
+        if (!response.ok) throw new Error(`items HTTP ${response.status}`);
+        return response.text();
+      });
+      const items = text.split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+      return Promise.all(items.map(async (item) => ({
+        item,
+        fixture: await fetch(`../.evals/MeetingNotesQuality/${item.fixture}`).then((response) => {
+          if (!response.ok) throw new Error(`${item.fixture} HTTP ${response.status}`);
+          return response.json();
+        }),
+      })));
+    }
+
+    async function loadModel() {
+      if (generator) return generator;
+      status.textContent = `Loading ${MODEL} on ${DEVICE}/${DTYPE}…`;
+      generator = await pipeline('text-generation', MODEL, {
+        device: DEVICE,
+        dtype: DTYPE,
+        progress_callback: (progress) => {
+          if (progress.status === 'downloading' && progress.total > 0) {
+            status.textContent = `Downloading ${progress.file}: ${Math.round(progress.loaded / progress.total * 100)}%`;
+          }
+        },
+      });
+      return generator;
+    }
+
+    function renderItem(fixture, scored, markdown, elapsedMs) {
+      const card = document.createElement('section');
+      card.className = 'result';
+      const head = document.createElement('div');
+      head.className = 'result-head';
+      const title = document.createElement('span');
+      title.className = 'result-title';
+      title.textContent = fixture.title;
+      const verdict = document.createElement('span');
+      verdict.className = scored.pass ? 'pass' : 'fail';
+      verdict.textContent = scored.pass ? 'PASS' : 'FAIL';
+      const meta = document.createElement('span');
+      meta.className = 'meta';
+      meta.textContent = `${scored.score.toFixed(2)} · ${(elapsedMs / 1000).toFixed(1)}s`;
+      const output = document.createElement('pre');
+      output.textContent = markdown;
+      head.append(title, verdict, meta);
+      card.append(head, output);
+      results.appendChild(card);
+    }
+
+    async function generateRaw(gen, system, userText, prefix, maxNewTokens) {
+      const messages = [
+        { role: 'system', content: system },
+        { role: 'user', content: userText },
+      ];
+      let prompt = gen.tokenizer.apply_chat_template(messages, {
+        tokenize: false,
+        add_generation_prompt: true,
+        enable_thinking: false,
+      });
+      prompt += prefix;
+      const started = performance.now();
+      const generated = await gen(prompt, {
+        max_new_tokens: maxNewTokens,
+        do_sample: false,
+        return_full_text: false,
+      });
+      const text = Array.isArray(generated) ? generated[0].generated_text : generated.generated_text;
+      return {
+        elapsedMs: Math.round(performance.now() - started),
+        text: prefix + String(text || '')
+          .replace(/<think>[\s\S]*?<\/think>/g, '')
+          .replace(/^["'\s]+|["'\s]+$/g, '')
+          .trim(),
+      };
+    }
+
+    async function generateFixture(gen, fixture) {
+      let elapsedMs = 0;
+      const evidenceNotes = extractGroundedEvidence(fixture.transcriptSegments);
+      const evidence = formatMappedEvidence(evidenceNotes);
+      const request = buildFinalNotesRequest({
+        transcriptSegments: fixture.transcriptSegments,
+        agendaText: fixture.agenda,
+        evidence,
+      });
+      status.textContent = `Synthesizing: ${fixture.title}`;
+      const final = await generateRaw(
+        gen,
+        FINAL_NOTES_SYSTEM,
+        `Meeting source:\n${request.userText}`,
+        '',
+        850,
+      );
+      elapsedMs += final.elapsedMs;
+      const rawOutput = final.text;
+      let notes = parseNaturalFinalNotes(rawOutput, fixture.agenda);
+      notes = mergeEvidenceIntoFinalNotes(
+        notes,
+        evidenceNotes,
+        fixture.agenda,
+        fixture.transcriptSegments,
+      );
+      const markdown = finalNotesToMarkdown(notes, {
+        title: fixture.title,
+        date: 'July 27, 2026',
+        duration: '20:00',
+      });
+      const scored = scoreMeetingNotes(fixture, notes, markdown);
+      if (!notes.modelOverviewUsed) scored.pass = false;
+      return {
+        rawOutput,
+        groundedEvidence: evidenceNotes,
+        modelOverviewUsed: notes.modelOverviewUsed,
+        notes,
+        markdown,
+        elapsedMs,
+        scored,
+      };
+    }
+
+    async function runBenchmark() {
+      runButton.disabled = true;
+      results.innerHTML = '';
+      const startedAt = new Date().toISOString();
+      try {
+        if (!navigator.gpu) throw new Error('WebGPU is unavailable; fallback is forbidden');
+        const entries = await loadItems();
+        const gen = await loadModel();
+        const itemRuns = [];
+        for (let index = 0; index < entries.length; index += 1) {
+          const { item, fixture } = entries[index];
+          status.textContent = `Generating ${index + 1}/${entries.length}: ${fixture.title}`;
+          const output = await generateFixture(gen, fixture);
+          itemRuns.push({
+            id: item.id,
+            score: output.scored.score,
+            pass: output.scored.pass,
+            dimensions: output.scored.dimensions,
+            conceptResults: output.scored.conceptResults,
+            forbiddenResults: output.scored.forbiddenResults,
+            unsupportedSpecifics: output.scored.unsupportedSpecifics,
+            modelOverviewUsed: output.modelOverviewUsed,
+            elapsedMs: output.elapsedMs,
+            groundedEvidence: output.groundedEvidence,
+            rawOutput: output.rawOutput,
+            markdown: output.markdown,
+          });
+          renderItem(fixture, output.scored, output.markdown, output.elapsedMs);
+        }
+        const passRate = itemRuns.filter((item) => item.pass).length / itemRuns.length;
+        const meanScore = itemRuns.reduce((sum, item) => sum + item.score, 0) / itemRuns.length;
+        window.__benchmarkResult = {
+          benchmark: 'MeetingNotesQuality-v1',
+          subject: 'qwen3-0.6b-webgpu-q4f16',
+          status: 'complete',
+          mock: false,
+          fallback: false,
+          backend: 'transformers.js',
+          model: MODEL,
+          device: DEVICE,
+          dtype: DTYPE,
+          decoding: { doSample: false, maxNewTokens: 850 },
+          policyVersion: 1,
+          startedAt,
+          finishedAt: new Date().toISOString(),
+          passRate: Number(passRate.toFixed(4)),
+          meanScore: Number(meanScore.toFixed(4)),
+          items: itemRuns,
+        };
+        status.textContent = `Complete: ${(passRate * 100).toFixed(0)}% pass · ${meanScore.toFixed(2)} mean score`;
+      } catch (error) {
+        window.__benchmarkResult = {
+          status: 'failed',
+          mock: false,
+          fallback: false,
+          backend: 'transformers.js',
+          model: MODEL,
+          error: error?.message || String(error),
+        };
+        status.textContent = `ERROR: ${window.__benchmarkResult.error}`;
+        console.error(error);
+      } finally {
+        runButton.disabled = false;
+      }
+      return window.__benchmarkResult;
+    }
+
+    window.runBenchmark = runBenchmark;
+    window.__benchmarkGenerate = async (system, userText, prefix = '', maxNewTokens = 850) => {
+      const gen = await loadModel();
+      return generateRaw(gen, system, userText, prefix, maxNewTokens);
+    };
+    window.__benchmarkReady = true;
+    runButton.addEventListener('click', runBenchmark);
+    if (new URLSearchParams(location.search).get('autorun') === '1') runBenchmark();
+  </script>
+</body>
+</html>

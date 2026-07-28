@@ -173,6 +173,67 @@
       color: var(--text);
     }
 
+    /* Optional agenda — progressive disclosure inside the notes surface. */
+    .agenda-toggle-btn.has-items {
+      color: var(--accent);
+      border-color: var(--accent);
+      background: var(--accent-glow);
+    }
+    .agenda-editor-panel {
+      margin-bottom: 16px;
+      padding: 14px 16px 12px;
+      border-block: 1px solid var(--border);
+      background: var(--surface-raised);
+      animation: fadeSlideIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+    }
+    .agenda-editor-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 8px;
+    }
+    .agenda-editor-title {
+      color: var(--text);
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .agenda-editor-count {
+      color: var(--text-faint);
+      font-family: var(--font-mono);
+      font-size: 10px;
+      white-space: nowrap;
+    }
+    .agenda-editor {
+      display: block;
+      width: 100%;
+      min-height: 92px;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--bg);
+      color: var(--text);
+      padding: 10px 12px;
+      font: 13px/1.55 var(--font-ui);
+      outline: none;
+      caret-color: var(--accent);
+    }
+    .agenda-editor:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-glow);
+    }
+    .agenda-editor:disabled {
+      color: var(--text-muted);
+      cursor: not-allowed;
+      opacity: 0.75;
+    }
+    .agenda-editor::placeholder { color: var(--text-faint); }
+    .agenda-editor-help {
+      margin-top: 7px;
+      color: var(--text-muted);
+      font-size: 11px;
+    }
+
     .timer {
       font-family: var(--font-mono);
       font-size: 15px;
@@ -948,11 +1009,34 @@
     .live-outline { margin-bottom: 18px; padding: 12px 14px; border: 1px solid var(--accent-dim); border-radius: var(--radius-sm); background: rgba(0,0,0,0.12); }
     .live-outline-header { color: var(--accent); display: flex; align-items: center; gap: 8px; }
     .live-outline-group { margin-top: 10px; }
-    .live-outline-topic { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 4px; }
+    .live-outline-topic { display: flex; align-items: baseline; gap: 8px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); margin-bottom: 4px; }
     .live-outline-item { font-size: 13px; color: var(--text); padding: 3px 0 3px 4px; display: flex; align-items: baseline; gap: 7px; }
     .live-outline-item .note-chip { flex-shrink: 0; }
     .live-outline-spinner { width: 10px; height: 10px; border: 2px solid var(--accent-dim); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.9s linear infinite; margin-left: auto; }
     .live-outline-status { font-size: 12px; color: var(--text-dim); margin-top: 8px; font-style: italic; }
+    .final-notes-overview {
+      margin: 2px 0 14px;
+      padding: 11px 13px;
+      border-inline-start: 2px solid var(--accent);
+      background: var(--accent-glow);
+      color: var(--text);
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .agenda-status {
+      margin-inline-start: auto;
+      color: var(--text-faint);
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+    .agenda-status.partial { color: var(--decisions); }
+    .agenda-status.not-discussed { color: var(--text-muted); }
+    .live-outline-group.not-discussed .live-outline-item {
+      color: var(--text-muted);
+      font-style: italic;
+    }
     .note-chip { display: inline-block; font-size: 9px; font-weight: 600; text-transform: uppercase;
       letter-spacing: 0.05em; padding: 1px 5px; border-radius: 3px; margin-right: 6px; vertical-align: 1px; }
     .note-chip.decisions { color: var(--decisions); background: var(--decisions-dim); }
@@ -1244,6 +1328,36 @@
       width: 100%; min-width: 0; min-height: 88px; resize: vertical; line-height: 1.45;
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px;
     }
+    .settings-advanced {
+      margin-bottom: 12px;
+      border: 1px solid var(--border-subtle);
+      border-radius: var(--radius-sm);
+      background: rgba(0,0,0,0.08);
+    }
+    .settings-advanced > summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 12px;
+      color: var(--text-muted);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      list-style: none;
+      user-select: none;
+    }
+    .settings-advanced > summary::-webkit-details-marker { display: none; }
+    .settings-advanced > summary::before {
+      content: '\25B8';
+      color: var(--text-faint);
+      font-size: 10px;
+      transition: transform 0.15s;
+    }
+    .settings-advanced[open] > summary::before { transform: rotate(90deg); }
+    .settings-advanced-body {
+      padding: 2px 12px 12px;
+      border-top: 1px solid var(--border-subtle);
+    }
     .settings-toggle {
       appearance: none;
       width: 36px;
@@ -1523,6 +1637,9 @@
       <div class="panel-header">
         <span class="panel-title">Meeting Notes</span>
         <div class="panel-actions">
+          <button class="btn btn-ghost agenda-toggle-btn" id="agendaToggleBtn" onclick="toggleAgendaEditor()" style="font-size:12px;padding:4px 10px;" aria-expanded="false" aria-controls="agendaEditorPanel">
+            + Agenda
+          </button>
           <button class="btn btn-ghost" id="copyNotesBtn" onclick="copyNotes()" style="font-size:12px;padding:4px 10px;">
             Copy as Markdown
           </button>
@@ -1540,6 +1657,22 @@
       <!-- Notes body -->
       <div class="notes-body" id="notesBody">
 
+        <section class="agenda-editor-panel" id="agendaEditorPanel" hidden>
+          <div class="agenda-editor-head">
+            <span class="agenda-editor-title">Meeting agenda</span>
+            <span class="agenda-editor-count" id="agendaItemCount">0 items</span>
+          </div>
+          <textarea
+            class="agenda-editor"
+            id="meetingAgenda"
+            rows="4"
+            maxlength="2400"
+            placeholder="One topic per line&#10;Database choice&#10;Launch timing&#10;Open risks"
+            aria-label="Meeting agenda, one topic per line"
+          ></textarea>
+          <p class="agenda-editor-help">Optional. Final notes follow this order and mark untouched items as not discussed.</p>
+        </section>
+
         <!-- Screenshots strip (shown when tab sharing is active) -->
         <div class="screenshots-strip" id="screenshotsStrip" style="display:none"></div>
 
@@ -1550,8 +1683,8 @@
         <div class="live-outline" id="liveOutline" style="display:none">
           <div class="section-header live-outline-header">
             <span class="section-icon">&#9776;</span>
-            Meeting Outline
-            <span class="ai-badge">on-device AI &middot; forming live</span>
+            <span id="outlineTitle">Live Draft</span>
+            <span class="ai-badge" id="outlineBadge">on-device AI &middot; forming live</span>
             <span class="live-outline-spinner" id="liveOutlineSpinner" style="display:none"></span>
           </div>
           <div class="live-outline-status" id="liveOutlineStatus" style="display:none"></div>
@@ -2155,8 +2288,9 @@ async function _ensureStorageLoaded() {
 // is loaded, then delegates to the Rust wasm surface. Async (Promises), like the
 // Dexie calls it replaces. The numeric ids returned match what Dexie returned.
 const storage = {
-  async addMeeting(title, startTime) { return (await _ensureStorageLoaded()).addMeeting(title, startTime); },
+  async addMeeting(title, agenda, startTime) { return (await _ensureStorageLoaded()).addMeeting(title, agenda, startTime); },
   async updateMeetingEnd(id, endTime, duration) { return (await _ensureStorageLoaded()).updateMeetingEnd(id, endTime, duration); },
+  async saveFinalNotes(id, markdown) { return (await _ensureStorageLoaded()).saveFinalNotes(id, markdown); },
   async addTranscriptChunk(meetingId, timestamp, text) { return (await _ensureStorageLoaded()).addTranscriptChunk(meetingId, timestamp, text); },
   async addNote(meetingId, category, text, timestamp, triggerPhrase) { return (await _ensureStorageLoaded()).addNote(meetingId, category, text, timestamp, triggerPhrase); },
   async updateNoteText(id, text) { return (await _ensureStorageLoaded()).updateNoteText(id, text); },
@@ -2171,6 +2305,19 @@ const storage = {
   async saveSpeakerNames(meetingId, names) { return (await _ensureStorageLoaded()).saveSpeakerNames(meetingId, names); },
   async loadSpeakerNames(meetingId) { return (await _ensureStorageLoaded()).loadSpeakerNames(meetingId); },
 };
+
+// Whole-meeting final-notes policy. DOM-free and shared with the native tests
+// and benchmark so browser behavior cannot quietly drift from the eval surface.
+let FinalNotesPolicy = null;
+let _finalNotesPolicyPromise = null;
+function _ensureFinalNotesPolicy() {
+  if (_finalNotesPolicyPromise) return _finalNotesPolicyPromise;
+  _finalNotesPolicyPromise = import('./final-notes.mjs').then(mod => {
+    FinalNotesPolicy = mod;
+    return mod;
+  });
+  return _finalNotesPolicyPromise;
+}
 
 // sharedExportsEngine: the single ExportsEngine, loaded once at boot. The
 // export/copy/history formatters (notesToMarkdown, transcriptText,
@@ -2789,7 +2936,7 @@ function resolveQwenModelKey(forDevice) {
    slot is OFF. This is a first-class supported configuration — silent-core
    models it as SessionConfig.notes_model_off, the empty NotesSlot=None state.
    When on, the Qwen worker is never loaded: no smart-questions teleprompter, no
-   AI final notes, no question recap. In this mode the live regex trigger notes
+   live draft, and no canonical final synthesis. In this mode the regex trigger notes
    (row 16, NoteExtractor, model-free) are the FALLBACK note source — they only
    run here. When the AI model is on (default) the regex pass stays off; the live
    AI outline + AI final notes own the notes panel. */
@@ -2866,22 +3013,52 @@ QUESTION| the open or unresolved question
 Rules: tags must be TOPIC, DECISION, ACTION, KEYPOINT, or QUESTION — nothing else. Never invent facts or guess owners/dates. If the excerpt has nothing noteworthy, output: NONE
 Output only tagged lines.`;
 
+const AGENDA_DRAFT_KEY = 'silentNotetaker_agendaDraft';
+
+function meetingAgendaText() {
+  return (document.getElementById('meetingAgenda')?.value || '').trim();
+}
+
+function _agendaItems() {
+  if (!FinalNotesPolicy) {
+    return meetingAgendaText().split(/\r?\n/).map(s => s.trim()).filter(Boolean).slice(0, 12);
+  }
+  return FinalNotesPolicy.parseAgenda(meetingAgendaText());
+}
+
+function updateAgendaUi() {
+  const items = _agendaItems();
+  const button = document.getElementById('agendaToggleBtn');
+  const count = document.getElementById('agendaItemCount');
+  if (button) {
+    button.classList.toggle('has-items', items.length > 0);
+    button.textContent = items.length ? `Agenda · ${items.length}` : '+ Agenda';
+  }
+  if (count) count.textContent = `${items.length} item${items.length === 1 ? '' : 's'}`;
+}
+
+function toggleAgendaEditor(force) {
+  const panel = document.getElementById('agendaEditorPanel');
+  const button = document.getElementById('agendaToggleBtn');
+  if (!panel || !button) return;
+  const open = typeof force === 'boolean' ? force : panel.hidden;
+  panel.hidden = !open;
+  button.setAttribute('aria-expanded', String(open));
+  if (open) document.getElementById('meetingAgenda')?.focus();
+}
+
+function setAgendaLocked(locked) {
+  const editor = document.getElementById('meetingAgenda');
+  if (!editor) return;
+  editor.disabled = Boolean(locked);
+  editor.title = locked ? 'Start a new meeting to change this agenda' : '';
+}
+
 /* ════════════════════════════════════════════
    Custom AI prompts — every system prompt the notes/question models run with is
    user-tunable in Settings (persisted under settings.prompts, OVERRIDES ONLY —
    an untouched prompt tracks future default improvements automatically).
 ═══════════════════════════════════════════ */
-/* Recap per-type prompt defaults — hoisted out of generateQuestionRecap so the
-   Settings editor and the recap generator read the SAME source of truth. */
-const RECAP_RULES = ` Each question must reference something actually discussed, ask exactly one thing, and be answerable by someone who was in the meeting. One per line. No numbering, no preamble, no quotes.`;
-const RECAP_TYPES = {
-  clarify:  { label: 'Clarifying',       system: `You were an engaged participant in this meeting. Produce up to 3 CLARIFYING questions still worth getting answered — ambiguities or gaps that will block execution if left unresolved.` },
-  risk:     { label: "Devil's Advocate", system: `You were an engaged participant in this meeting. Produce up to 3 pointed questions that challenge the decisions made — the assumption most likely to be wrong, the risk nobody priced in, or the constraint everyone glossed over.` },
-  followup: { label: 'Follow-up',        system: `You were an engaged participant in this meeting. Produce up to 3 FOLLOW-UP questions that turn talk into work: pin down the owner, the deadline, or what "done" looks like for things left vague.` },
-  coverage: { label: 'Not Covered',      system: `You were an engaged participant in this meeting. Compare what was discussed against what this kind of work normally requires, and produce up to 3 questions that raise important things the meeting did not discuss at all.` },
-  deepen:   { label: 'Push Further',     system: `You were an engaged participant in this meeting. Pick the most promising ideas that were only briefly mentioned, and produce up to 3 questions that develop those specific ideas into something concrete and more ambitious.` },
-};
-
 /** The user's prompt override for `key`, or `def` when not customized (empty/
  *  whitespace overrides are treated as "not customized" so a cleared textarea
  *  can never silently break a model). */
@@ -2956,7 +3133,7 @@ Rules:
 /* Registry driving the Settings "AI Prompts" editor AND the save path. `def` is
    lazy so each field always reflects the live default constant. */
 const PROMPT_FIELDS = [
-  { key: 'notes_system', group: 'notes', label: 'Note extraction (AI Final Notes at Stop)',
+  { key: 'notes_system', group: 'notes', label: 'Live draft extraction',
     def: () => NOTES_SYSTEM },
   { key: 'smartq_rules', group: 'live',  label: 'Shared rules (appended to every type)',
     def: () => SmartQ.HEURISTICS },
@@ -2965,14 +3142,6 @@ const PROMPT_FIELDS = [
     label: null,  // resolved lazily from SmartQ.TYPES below (defined earlier in this file)
     def: () => SmartQ._typeByKey(k).system,
     labelFn: () => `Type: ${SmartQ._typeByKey(k).label}`,
-  })),
-  { key: 'recap_rules', group: 'recap', label: 'Shared rules (appended to every type)',
-    def: () => RECAP_RULES },
-  ...Object.keys(RECAP_TYPES).map(k => ({
-    key: `recap_${k}`, group: 'recap',
-    label: null,
-    def: () => RECAP_TYPES[k].system,
-    labelFn: () => `Type: ${RECAP_TYPES[k].label}`,
   })),
   { key: 'bridge_screenshot', group: 'bridge', label: 'Screenshot analysis (📊 key points)',
     def: () => BRIDGE_SCREENSHOT_SYSTEM },
@@ -2999,7 +3168,18 @@ function chunkTranscript(text, target = 1100) {
 
 /** Drop near-duplicate notes (same category, ≥60% keyword overlap) from overlapping chunks. */
 function dedupeNotes(notes) {
-  return (_notesEngineReady && sharedNotesEngine) ? sharedNotesEngine.dedupeNotes(notes) : notes;
+  if (!(_notesEngineReady && sharedNotesEngine)) return notes;
+  const deduped = sharedNotesEngine.dedupeNotes(notes);
+  // The Rust policy intentionally owns only {cat,text,topic}. Restore additive
+  // host metadata (for example the long-map `part`) from the first matching
+  // source note without changing Rust's keep-first ordering.
+  return deduped.map(note => ({
+    ...(notes.find(candidate =>
+      candidate.cat === note.cat
+      && candidate.text === note.text
+      && candidate.topic === note.topic) || {}),
+    ...note,
+  }));
 }
 
 /** parseQwenNotes + format-drift salvage. The 0.6B's adherence to the
@@ -3064,11 +3244,17 @@ const LiveOutline = {
   MIN_CHARS: 450,           // validated 0.6B recall sweet spot ≈500 chars/chunk
   MIN_INTERVAL_MS: 60000,   // bound Qwen usage — at most one outline pass/min
   _buf: '', _lastGenAt: 0, _busy: false, _notes: [], _fails: 0,
+  _finalNotes: null, _finalMarkdown: '',
 
   reset() {
     this._buf = ''; this._lastGenAt = 0; this._busy = false; this._notes = []; this._fails = 0;
+    this._finalNotes = null; this._finalMarkdown = '';
     const body = document.getElementById('liveOutlineBody');
     if (body) body.innerHTML = '';
+    const title = document.getElementById('outlineTitle');
+    const badge = document.getElementById('outlineBadge');
+    if (title) title.textContent = 'Live Draft';
+    if (badge) badge.textContent = 'on-device AI · forming live';
     this._showStatus(false);
     const wrap = document.getElementById('liveOutline');
     if (wrap) wrap.style.display = 'none';
@@ -3187,6 +3373,85 @@ const LiveOutline = {
       group.appendChild(item);
     }
   },
+  /* Replace the provisional live outline with the canonical, whole-meeting
+     synthesis. Model text is written with textContent only. */
+  renderFinal(notes, markdown) {
+    const wrap = document.getElementById('liveOutline');
+    const body = document.getElementById('liveOutlineBody');
+    if (!wrap || !body || !notes) return;
+
+    this._finalNotes = notes;
+    this._finalMarkdown = String(markdown || '');
+    body.innerHTML = '';
+    wrap.style.display = '';
+    this._showStatus(false);
+    this._spinner(false);
+
+    const title = document.getElementById('outlineTitle');
+    const badge = document.getElementById('outlineBadge');
+    if (title) title.textContent = 'Final Meeting Notes';
+    if (badge) badge.textContent = 'on-device AI · synthesized at Stop';
+
+    if (notes.overview) {
+      const overview = document.createElement('div');
+      overview.className = 'final-notes-overview';
+      overview.textContent = notes.overview;
+      body.appendChild(overview);
+    }
+
+    const CAT_CHIP = {
+      decisions: 'Decision',
+      actions: 'Action',
+      keypoints: 'Key point',
+      questions: 'Open question',
+    };
+    for (const section of notes.sections || []) {
+      const group = document.createElement('div');
+      group.className = `live-outline-group fade-slide-in${section.status === 'not discussed' ? ' not-discussed' : ''}`;
+
+      const topic = document.createElement('div');
+      topic.className = 'live-outline-topic';
+      const topicText = document.createElement('span');
+      topicText.textContent = section.title || 'Discussion';
+      topic.appendChild(topicText);
+
+      if (section.status && section.status !== 'discussed') {
+        const status = document.createElement('span');
+        status.className = `agenda-status ${section.status.replace(/\s+/g, '-')}`;
+        status.textContent = section.status === 'partial' ? 'Partially discussed' : 'Not discussed';
+        topic.appendChild(status);
+      }
+      group.appendChild(topic);
+
+      if (section.summary) {
+        const summary = document.createElement('div');
+        summary.className = 'live-outline-item';
+        summary.textContent = section.summary;
+        group.appendChild(summary);
+      } else if (section.status === 'not discussed') {
+        const skipped = document.createElement('div');
+        skipped.className = 'live-outline-item';
+        skipped.textContent = 'No discussion was captured for this agenda item.';
+        group.appendChild(skipped);
+      }
+
+      for (const key of ['decisions', 'actions', 'keypoints', 'questions']) {
+        for (const text of section[key] || []) {
+          const item = document.createElement('div');
+          item.className = 'live-outline-item';
+          const chip = document.createElement('span');
+          chip.className = `note-chip ${key}`;
+          chip.textContent = CAT_CHIP[key];
+          const value = document.createElement('span');
+          value.textContent = text;
+          item.appendChild(chip);
+          item.appendChild(value);
+          group.appendChild(item);
+        }
+      }
+      body.appendChild(group);
+    }
+  },
   _spinner(on) {
     const s = document.getElementById('liveOutlineSpinner');
     if (s) s.style.display = on ? '' : 'none';
@@ -3214,6 +3479,7 @@ const LiveOutline = {
   /* Markdown for Copy-as-Markdown — appended after the Rust notesToMarkdown
      output (that format is golden-pinned policy; this is additive JS). */
   toMarkdown() {
+    if (this._finalMarkdown) return this._finalMarkdown;
     if (!this._notes.length) return '';
     const CAT = { decisions: 'Decision', actions: 'Action', keypoints: 'Key point', questions: 'Question' };
     let md = '## Meeting Outline (formed live, on-device AI)\n';
@@ -4632,6 +4898,10 @@ class App {
     this.timerInterval = null;   // the host's 1 s tick handle (machine has no clock)
     this.totalNotes = 0;
     this.totalWords = 0;
+    this.finalNotes = null;
+    this.finalNotesMarkdown = '';
+    this.finalNotesError = null;
+    this._finalNotesPromise = null;
     // bridge-client.js is an ES module (permanent JS module, PRD R2); this is a
     // classic script, so ClaudeBridge is dynamically imported. Until the import
     // resolves, `this.bridge` is a null-safe proxy with the same interface so all
@@ -4719,17 +4989,15 @@ class App {
     };
   }
 
-  // Push the current settings booleans into the session machine so its
-  // stop-time hooks (recluster / final notes / question recap / auto summary —
-  // Appendix A rows 18-21, 31) match the user's settings. Called on load and
-  // before each Stop (the app reads settings fresh inside stop()).
+  // Final synthesis is part of Stop whenever the notes model is enabled. The
+  // retired per-pass toggles stay false at this compatibility boundary.
   _syncSessionConfig() {
     const s = (typeof loadSettings === 'function') ? loadSettings() : {};
     this.session.setConfig({
-      aiFinalNotes:   s.aiFinalNotes,
+      aiFinalNotes:   !notesModelOff(),
       smartQuestions: s.smartQuestions,
-      smartqRecap:    s.smartqRecap,
-      autoSummary:    s.autoSummary,
+      smartqRecap:    false,
+      autoSummary:    false,
       notesModelOff:  notesModelOff(),
     });
   }
@@ -4822,10 +5090,13 @@ class App {
       const out = this.session.start(titleInput, this._startEpoch);
       // The machine's resolved title (trim → default-if-empty → 120-char clamp).
       const title = this.session.title;
+      const agenda = meetingAgendaText();
       // The start side effect: resume without reload (warm) vs cold load.
       const canResume = out.effects.some(fx => fx.tag === 'resume_capture_no_reload');
 
-      this.meetingId = await storage.addMeeting(title || 'Untitled Meeting', this._startEpoch);
+      this.meetingId = await storage.addMeeting(title || 'Untitled Meeting', agenda, this._startEpoch);
+      setAgendaLocked(true);
+      toggleAgendaEditor(false);
 
       // PRD Phase 6 / R7: notify installed extensions that a meeting started
       // (gated per-extension on meeting.metadata; ungranted extensions get
@@ -4947,6 +5218,7 @@ class App {
     } catch (err) {
       this.handleStatus('Failed to start: ' + err.message, null);
       PerfMonitor.stop();
+      setAgendaLocked(false);
       startBtn.disabled = false;
       startBtn.textContent = '&#9679; Start';
     }
@@ -4957,7 +5229,7 @@ class App {
     if (this.tm) {
       // Flush the regex trigger-note buffer — only in transcript-only mode, where
       // these model-free notes are the fallback (mirrors handleFinal's gate).
-      if (loadSettings().triggerDetection && notesModelOff()) {
+      if (notesModelOff()) {
         const flushed = this.noteEngine.flush();
         for (const note of flushed) {
           const id = await _addNoteObj(this.meetingId, note);
@@ -5046,13 +5318,12 @@ class App {
     // gate, carried for the bridge request below.
     if (stopFx) this.showSummary();
 
-    // Stop-time on-device passes (WebGPU — GPU is free now) — inject into the open
-    // summary modal. The gating is now the Rust machine's decision: transcript-only
-    // mode (notes model = Off) is authoritative over the per-pass flags
-    // (silent-core SessionMachine::stop_hooks forces final_notes && question_recap
-    // false when notes_model_off). The summary modal already opened above.
-    if (hooks.final_notes) this.generateFinalNotes();
-    if (hooks.question_recap) this.generateQuestionRecap();
+    // Canonical final notes are automatic whenever the notes model is enabled.
+    // Keep the promise for browser/eval verification and prevent a duplicate pass.
+    if (hooks.final_notes) {
+      this._finalNotesPromise = this.generateFinalNotes();
+      this._finalNotesPromise.catch(() => {}); // failure is already surfaced in the modal + toast
+    }
 
     // Request enhanced summary from Claude if connected
     if (this.bridge.connected) {
@@ -5083,6 +5354,17 @@ class App {
     this._startEpoch = null;
     this.totalNotes = 0;
     this.totalWords = 0;
+    this.finalNotes = null;
+    this.finalNotesMarkdown = '';
+    this.finalNotesError = null;
+    this._finalNotesPromise = null;
+
+    const agenda = document.getElementById('meetingAgenda');
+    if (agenda) agenda.value = '';
+    try { localStorage.removeItem(AGENDA_DRAFT_KEY); } catch (_) {}
+    setAgendaLocked(false);
+    toggleAgendaEditor(false);
+    updateAgendaUi();
 
     // Clear UI
     document.getElementById('transcriptContent').innerHTML = '';
@@ -5250,7 +5532,7 @@ class App {
     // stays off — its trigger patterns capture raw transcript noise on talks and
     // lectures (see experiments/notes-quality/ANALYSIS.md). Final text only.
     const s = loadSettings();
-    if (s.triggerDetection && notesModelOff()) {
+    if (notesModelOff()) {
       const noteResults = this.noteEngine.analyze(text);
       OpenQs.consider(text);   // resolve any prior open questions this text answers (before adding new ones)
       for (const note of noteResults) {
@@ -5717,115 +5999,131 @@ class App {
     overlay.style.display = 'flex';
   }
 
-  /* Smart-questions recap: at Stop the GPU is free, so generate a fuller question set
-     (per enabled type) over the whole transcript on WebGPU, plus the still-open
-     questions tracked live. Injects asynchronously into the open summary modal. */
-  async generateQuestionRecap() {
-    const transcript = [...document.querySelectorAll('.transcript-text')].map(el => el.textContent.trim()).filter(Boolean).join(' ');
-    if (transcript.length < 80) return;  // too little to synthesize from
-
-    const body = document.querySelector('.modal-body');
-    if (!body) return;  // summary modal not open
-    const section = document.createElement('div');
-    section.className = 'recap-section';
-    section.id = 'recapSection';
-    section.innerHTML = `<div class="summary-section-header questions">Questions to Take Forward</div><div class="recap-loading" id="recapLoading">Generating on-device (Qwen, WebGPU)…</div>`;
-    body.appendChild(section);
-
-    const s = loadSettings();
-    const sel = (Array.isArray(s.smartqTypes) && s.smartqTypes.length) ? s.smartqTypes : SmartQ.TYPES.map(t => t.key);
-    // Defaults hoisted to RECAP_TYPES / RECAP_RULES (top level); each piece is
-    // user-tunable in Settings → AI Prompts (customPrompt returns the override).
-    const PROMPTS = Object.fromEntries(Object.entries(RECAP_TYPES).map(([key, t]) => [key, {
-      label: t.label,
-      system: customPrompt(`recap_${key}`, t.system) + customPrompt('recap_rules', RECAP_RULES),
-    }]));
-    syncRecapGeneratorToLive();   // reuse the live model's cached weights (no second download)
-    const stillOpen = OpenQs.openTexts();
-    const ctx = transcript.slice(-4000);  // cap recap context
-
-    const groups = [];
-    try {
-      for (const key of sel) {
-        const p = PROMPTS[key]; if (!p) continue;
-        const r = await recapQuestionGenerator.generate(ctx, { system: p.system, maxTokens: 160 });
-        // Per-type line cleaning (strip numbering/bullets + one edge quote, drop
-        // ≤6-char lines, dedup, top 3) is the Rust recap policy.
-        const qs = (_notesEngineReady && sharedNotesEngine) ? sharedNotesEngine.recapCleanGroup(r.question || '') : [];
-        if (qs.length) groups.push({ label: p.label, qs });
-      }
-    } catch (e) {
-      console.warn('[recap]', e && e.message || e);
-    }
-
-    const sec = document.getElementById('recapSection');
-    if (!sec) return;  // modal closed before recap finished
-    let html = '';
-    if (stillOpen.length) {
-      html += `<div class="recap-group"><div class="recap-group-label">Unanswered from the meeting</div>${stillOpen.slice(0, 5).map(t => `<div class="recap-q">${esc(t)}</div>`).join('')}</div>`;
-    }
-    for (const g of groups) {
-      html += `<div class="recap-group"><div class="recap-group-label">${esc(g.label)}</div>${g.qs.map(t => `<div class="recap-q">${esc(t)}</div>`).join('')}</div>`;
-    }
-    sec.innerHTML = `<div class="summary-section-header questions">Questions to Take Forward</div>${html || '<div class="modal-empty">No additional questions surfaced.</div>'}`;
-  }
-
-  /* Final Meeting Notes (additive): at Stop the GPU is free, so re-derive a clean,
-     distilled, correctly-categorized note set from the full transcript on WebGPU.
-     This does NOT touch the live regex notes above — it's a separate AI artifact,
-     clearly labelled. Chunked for recall, deduped across chunks. */
+  /* Canonical whole-meeting notes. The live outline is provisional. At Stop,
+     one ordinary meeting-notes request reads the complete meeting (up to the
+     direct context bound) while an exact source register prevents the small
+     local model from losing owners, metrics, blockers, or late details. */
   async generateFinalNotes() {
     const mount = document.getElementById('aiNotesMount');
     if (!mount) return;  // summary modal not open
-    const transcript = [...document.querySelectorAll('.transcript-text')].map(el => el.textContent.trim()).filter(Boolean).join(' ');
-    if (transcript.length < 80) { mount.remove(); return; }  // too little to synthesize from
+    const transcriptSegments = [...document.querySelectorAll('.transcript-text')]
+      .map(el => el.textContent.trim())
+      .filter(Boolean);
+    const transcript = transcriptSegments.join(' ');
+    if (transcript.length < 80) {
+      mount.innerHTML = '<div class="modal-empty">Not enough transcript to synthesize final notes.</div>';
+      return;
+    }
 
-    const HEADER = `<div class="summary-section-header ai-notes-header">AI Meeting Notes<span class="ai-badge">on-device · Qwen · WebGPU</span></div>`;
-    mount.innerHTML = `<div class="summary-section ai-notes">${HEADER}<div class="recap-loading">Generating on-device…</div></div>`;
+    const HEADER = `<div class="summary-section-header ai-notes-header">Final Meeting Notes<span class="ai-badge">on-device AI · whole meeting</span></div>`;
+    mount.innerHTML = `<div class="summary-section ai-notes">${HEADER}<div class="recap-loading">Synthesizing the whole meeting…</div></div>`;
 
-    // A 0.6B model self-limits to ~4 notes per call regardless of input length, so feed it
-    // SMALL chunks (~2-3 sentences) and aggregate — validated sweet spot ≈500 chars. For long
-    // meetings, grow the chunk so the count (and WebGPU latency) stays bounded (~18 chunks).
-    // The target = max(500, ceil(len/18)) + 22-chunk cap is the Rust final-notes policy.
-    const chunks = (_notesEngineReady && sharedNotesEngine) ? sharedNotesEngine.finalNotesChunks(transcript) : [];
-    syncRecapGeneratorToLive();   // reuse the live model's cached weights (no second download)
-    let notes = [];
+    this.finalNotesError = null;
     try {
-      for (const chunk of chunks) {
-        // Same structured-output API as the live outline (userLabel + TOPIC| seed)
-        // so the at-Stop final notes parse cleanly into tagged lines too.
-        const r = await recapQuestionGenerator.generate(chunk, { system: customPrompt('notes_system', NOTES_SYSTEM), maxTokens: 400, noMeta: false,
-          userLabel: 'Transcript excerpt:', prefix: 'TOPIC| ' });
-        notes.push(...parseQwenNotesSalvage(r.question));
-      }
-    } catch (e) {
-      console.warn('[ai-notes]', e && e.message || e);
-    }
-    notes = dedupeNotes(notes);
+      const policy = await _ensureFinalNotesPolicy();
+      await _ensureNotesLoaded();
+      syncRecapGeneratorToLive();   // reuse the live model's cached weights
 
-    const sec = mount.querySelector('.ai-notes');
-    if (!sec) return;  // modal closed before generation finished
-    // Meeting-minutes outline: chronological topic sections (notes arrive in chunk
-    // order) with per-item category chips, then a consolidated Action Items register —
-    // actions repeat there because that's where people look for them afterwards.
-    const CAT_CHIP = { decisions: 'Decision', actions: 'Action', keypoints: 'Key point', questions: 'Question' };
-    const topics = [];
-    for (const n of notes) {
-      const label = n.topic || 'Discussion';
-      const last = topics[topics.length - 1];
-      if (last && last.label.toLowerCase() === label.toLowerCase()) last.items.push(n);
-      else topics.push({ label, items: [n] });
+      const mapped = policy.extractGroundedEvidence(transcriptSegments);
+      const evidence = policy.formatMappedEvidence(dedupeNotes(mapped));
+      if (transcript.length > policy.DIRECT_TRANSCRIPT_MAX_CHARS && !evidence) {
+        throw new Error('Long meeting produced no evidence for final synthesis');
+      }
+      const loading = mount.querySelector('.recap-loading');
+      if (loading) {
+        loading.textContent = 'Synthesizing the whole meeting…';
+      }
+
+      const request = policy.buildFinalNotesRequest({
+        transcriptSegments,
+        agendaText: meetingAgendaText(),
+        evidence,
+      });
+      const generated = await recapQuestionGenerator.generate(request.userText, {
+        system: policy.FINAL_NOTES_SYSTEM,
+        maxTokens: 850,
+        noMeta: false,
+        userLabel: 'Meeting source:',
+      });
+      let notes = policy.parseNaturalFinalNotes(
+        generated.question || '',
+        meetingAgendaText(),
+      );
+      notes = policy.mergeEvidenceIntoFinalNotes(
+        notes,
+        mapped,
+        meetingAgendaText(),
+        transcriptSegments,
+      );
+      if (!policy.finalNotesHasSubstance(notes)) {
+        throw new Error('The model returned no usable whole-meeting notes');
+      }
+      if (!notes.modelOverviewUsed) {
+        throw new Error('The model returned no grounded whole-meeting summary');
+      }
+
+      const meta = {
+        title: document.getElementById('meetingTitle').value.trim() || 'Meeting Notes',
+        date: new Date().toLocaleDateString('en-US', {
+          year: 'numeric', month: 'long', day: 'numeric',
+        }),
+        duration: this.currentDurationStr(),
+      };
+      const markdown = policy.finalNotesToMarkdown(notes, meta);
+      if (!this.meetingId) throw new Error('Meeting id is missing; final notes were not saved');
+      await storage.saveFinalNotes(this.meetingId, markdown);
+
+      this.finalNotes = notes;
+      this.finalNotesMarkdown = markdown;
+      LiveOutline.renderFinal(notes, markdown);
+      this._renderFinalNotesModal(notes, HEADER);
+      showToast('Final meeting notes are ready');
+      return notes;
+    } catch (e) {
+      const message = e && e.message ? e.message : String(e);
+      this.finalNotesError = message;
+      console.error('[final-notes]', message);
+      const sec = mount.querySelector('.ai-notes');
+      if (sec) {
+        sec.innerHTML = `${HEADER}<div class="modal-empty">Final notes failed: ${esc(message)}. The live draft was kept.</div>`;
+      }
+      showToast('Final notes failed — live draft kept', 4500);
+      throw e;
     }
-    const item = (n) => `<div class="summary-item"><span class="note-chip ${n.cat}">${CAT_CHIP[n.cat]}</span>${esc(n.text)}</div>`;
-    let body = '';
-    for (const t of topics) {
-      body += `<div class="ai-notes-group"><div class="ai-notes-group-label keypoints">${esc(t.label)}</div>${t.items.map(item).join('')}</div>`;
-    }
-    const actions = notes.filter(n => n.cat === 'actions');
-    if (actions.length) {
-      body += `<div class="ai-notes-group"><div class="ai-notes-group-label actions">Action Items</div>${actions.map(n => `<div class="summary-item">${esc(n.text)}</div>`).join('')}</div>`;
-    }
-    sec.innerHTML = HEADER + (body || '<div class="modal-empty">No notes surfaced on-device.</div>');
+  }
+
+  _renderFinalNotesModal(notes, headerHtml) {
+    const mount = document.getElementById('aiNotesMount');
+    if (!mount) return;
+    const CAT_CHIP = {
+      decisions: 'Decision',
+      actions: 'Action',
+      keypoints: 'Key point',
+      questions: 'Open question',
+    };
+    const groups = (notes.sections || []).map(section => {
+      const status = section.status && section.status !== 'discussed'
+        ? `<span class="agenda-status ${esc(section.status.replace(/\s+/g, '-'))}">${section.status === 'partial' ? 'Partially discussed' : 'Not discussed'}</span>`
+        : '';
+      const summary = section.summary
+        ? `<div class="summary-item">${esc(section.summary)}</div>`
+        : (section.status === 'not discussed'
+          ? '<div class="summary-item" style="color:var(--text-muted);font-style:italic">No discussion was captured for this agenda item.</div>'
+          : '');
+      const items = ['decisions', 'actions', 'keypoints', 'questions'].flatMap(key =>
+        (section[key] || []).map(text =>
+          `<div class="summary-item"><span class="note-chip ${key}">${CAT_CHIP[key]}</span>${esc(text)}</div>`),
+      ).join('');
+      return `<div class="ai-notes-group">
+        <div class="ai-notes-group-label keypoints" style="display:flex;align-items:center;gap:8px">${esc(section.title)}${status}</div>
+        ${summary}${items}
+      </div>`;
+    }).join('');
+    mount.innerHTML = `<div class="summary-section ai-notes">
+      ${headerHtml}
+      ${notes.overview ? `<div class="final-notes-overview">${esc(notes.overview)}</div>` : ''}
+      ${groups}
+    </div>`;
   }
 
   addScreenshotThumbnail(base64, timestamp) {
@@ -5899,6 +6197,14 @@ function showToast(msg, duration = 2200) {
    Copy summary markdown (from summary modal)
 ═══════════════════════════════════════════ */
 function copySummaryMarkdown() {
+  if (app.finalNotesMarkdown) {
+    navigator.clipboard.writeText(app.finalNotesMarkdown).then(() => {
+      showToast('Final meeting notes copied as Markdown');
+    }).catch(() => {
+      openExportModal(app.finalNotesMarkdown);
+    });
+    return;
+  }
   const base = app.notesToMarkdown();
   // Walk the additive AI Meeting Notes groups from the DOM; the Rust
   // `silent-core::export::summary_markdown_with_ai` policy composes the append
@@ -5924,6 +6230,14 @@ function copySummaryMarkdown() {
    Copy notes action
 ═══════════════════════════════════════════ */
 function copyNotes() {
+  if (app.finalNotesMarkdown) {
+    navigator.clipboard.writeText(app.finalNotesMarkdown).then(() => {
+      showToast('Final meeting notes copied as Markdown');
+    }).catch(() => {
+      openExportModal(app.finalNotesMarkdown);
+    });
+    return;
+  }
   let md = app.notesToMarkdown();
   const outline = LiveOutline.toMarkdown();
   const hasBuckets = md && md.split('\n').length >= 3;
@@ -6131,7 +6445,7 @@ async function openMeetingDetail(id) {
   // per-line stamps, no empty-text filter — Appendix A rows 29, 30). The
   // exporter clamps an empty title to "Meeting Notes" itself.
   const title = meeting.title || 'Meeting Notes';
-  const md = exportsEngine.historyReplayMarkdown(
+  const md = meeting.finalNotes || exportsEngine.historyReplayMarkdown(
     title, date, dur,
     notes.map(n => ({ category: n.category, text: n.text })),
   );
@@ -7205,9 +7519,6 @@ const DEFAULT_SETTINGS = {
   device: 'webgpu',
   claudeBridge: true,
   screenshots: true,
-  triggerDetection: true,
-  autoSummary: true,
-  aiFinalNotes: true,        // Qwen-generated final meeting notes at Stop (WebGPU, additive — does not replace live notes)
   liveOutline: true,         // Qwen meeting outline forming live in the notes panel during recording
   bridgeUrl: 'ws://localhost:8765',
   showTimestamps: true,      // per-line timestamps visible + included in copied text
@@ -7215,7 +7526,6 @@ const DEFAULT_SETTINGS = {
   showSpeakerLabels: true,   // per-line speaker tags visible (toggle via the "Speakers:" header)
   smartQuestions: true,                              // live "ask now" teleprompter (Qwen WASM)
   smartqTypes: ['clarify', 'risk', 'followup', 'coverage', 'deepen'],  // which question types rotate
-  smartqRecap: true,                                 // WebGPU question recap when recording stops
   qwenModel: 'auto',         // AI model for questions/notes: 'auto' (device-tier pick) | '0.6b' | '1.7b' | 'off' (transcript-only mode)
   prompts: {},               // user prompt OVERRIDES by PROMPT_FIELDS key (absent key = live default; see customPrompt())
 };
@@ -7224,6 +7534,12 @@ function loadSettings() {
   try {
     const saved = localStorage.getItem('silentNotetaker_settings');
     const s = saved ? { ...DEFAULT_SETTINGS, ...JSON.parse(saved) } : { ...DEFAULT_SETTINGS };
+    // Retired settings: trigger detection is now an internal transcript-only
+    // fallback; final synthesis and the Stop summary are canonical behavior;
+    // the partial-context question recap was removed.
+    for (const key of ['triggerDetection', 'autoSummary', 'aiFinalNotes', 'smartqRecap']) {
+      delete s[key];
+    }
     // Migration: users who never customized question types (saved set == the pre-'coverage'/
     // 'deepen' default trio) pick up the new defaults; anyone else keeps their choice.
     const old = ['clarify', 'risk', 'followup'];
@@ -7295,9 +7611,8 @@ function _renderModelOptions(s) {
 function _renderPromptEditors(s) {
   const overrides = (s && s.prompts) || {};
   const GROUPS = [
-    { id: 'notes',  title: 'Meeting notes model',        hint: 'runs at Stop (AI Final Notes)' },
+    { id: 'notes',  title: 'Long-meeting evidence map',  hint: 'used before whole-meeting synthesis' },
     { id: 'live',   title: 'Live "Ask Now" questions',   hint: 'teleprompter, during the meeting' },
-    { id: 'recap',  title: 'Question recap',             hint: 'runs at Stop (Questions to Take Forward)' },
     { id: 'bridge', title: 'Claude bridge',              hint: 'screenshots, enhanced notes, summary (when bridge connected)' },
   ];
   return GROUPS.map(g => {
@@ -7423,31 +7738,16 @@ function openSettings() {
         </label>
 
         <label class="settings-row settings-toggle-row">
-          <span class="settings-label">Auto Note Detection<span class="settings-hint">Regex fallback for transcript-only mode — detects decisions, actions &amp; questions when the AI notes model is off</span></span>
-          <input type="checkbox" id="settingTriggers" class="settings-toggle" ${s.triggerDetection ? 'checked' : ''}>
-        </label>
-
-        <label class="settings-row settings-toggle-row">
-          <span class="settings-label">Auto Summary on Stop<span class="settings-hint">Show structured summary when recording ends</span></span>
-          <input type="checkbox" id="settingSummary" class="settings-toggle" ${s.autoSummary ? 'checked' : ''}>
-        </label>
-
-        <label class="settings-row settings-toggle-row">
-          <span class="settings-label">AI Final Notes<span class="settings-hint">On-device Qwen re-derives clean notes at Stop (WebGPU) — added below the live notes, never replaces them</span></span>
-          <input type="checkbox" id="settingAiNotes" class="settings-toggle" ${s.aiFinalNotes !== false ? 'checked' : ''}>
-        </label>
-
-        <label class="settings-row settings-toggle-row">
-          <span class="settings-label">Live Meeting Outline<span class="settings-hint">On-device Qwen builds a topic-by-topic outline in the notes panel as the meeting progresses (~1 pass/min)</span></span>
+          <span class="settings-label">Live Draft<span class="settings-hint">Build a provisional topic outline during the meeting; Stop replaces it with whole-meeting notes</span></span>
           <input type="checkbox" id="settingLiveOutline" class="settings-toggle" ${s.liveOutline !== false ? 'checked' : ''}>
         </label>
       </div>
 
       <div class="settings-section">
-        <div class="settings-section-title">Smart Questions</div>
+        <div class="settings-section-title">On-device Notes &amp; Questions</div>
 
         <label class="settings-row">
-          <span class="settings-label">AI model<span class="settings-hint">Powers questions &amp; notes. ${esc(GpuCaps.detail)} → auto picks ${QWEN_MODELS[resolveQwenModelKey('webgpu')].label.split(' — ')[0]}${(() => { try { return localStorage.getItem('qwenAutoDemoted') === '1' ? ' (1.7B previously failed to initialize here)' : ''; } catch (_) { return ''; } })()}</span></span>
+          <span class="settings-label">AI model<span class="settings-hint">Powers final meeting notes, the live draft, and Ask Now. ${esc(GpuCaps.detail)} → auto picks ${QWEN_MODELS[resolveQwenModelKey('webgpu')].label.split(' — ')[0]}${(() => { try { return localStorage.getItem('qwenAutoDemoted') === '1' ? ' (1.7B previously failed to initialize here)' : ''; } catch (_) { return ''; } })()}</span></span>
           <select id="settingQwenModel" class="settings-select">
             <option value="auto" ${(!s.qwenModel || s.qwenModel === 'auto') ? 'selected' : ''}>Auto — pick for this device (recommended)</option>
             <option value="0.6b" ${s.qwenModel === '0.6b' ? 'selected' : ''}>${QWEN_MODELS['0.6b'].label}</option>
@@ -7462,7 +7762,7 @@ function openSettings() {
         </label>
 
         <div class="settings-row" style="flex-direction:column; align-items:stretch; gap:9px;">
-          <span class="settings-label">Question types<span class="settings-hint">Which kinds rotate in the teleprompter &amp; recap</span></span>
+          <span class="settings-label">Question types<span class="settings-hint">Which kinds rotate in the Ask Now teleprompter</span></span>
           <div class="settings-checks">
             <label class="settings-check"><input type="checkbox" id="settingSmartQClarify" ${(s.smartqTypes||[]).includes('clarify') ? 'checked' : ''}> Clarifying — pin down the ambiguity that bites later</label>
             <label class="settings-check"><input type="checkbox" id="settingSmartQRisk" ${(s.smartqTypes||[]).includes('risk') ? 'checked' : ''}> Devil's advocate — challenge a decision / expose a risk</label>
@@ -7472,25 +7772,25 @@ function openSettings() {
           </div>
         </div>
 
-        <label class="settings-row settings-toggle-row">
-          <span class="settings-label">Question Recap on Stop<span class="settings-hint">Generate a full question set (WebGPU) when recording ends</span></span>
-          <input type="checkbox" id="settingSmartQRecap" class="settings-toggle" ${s.smartqRecap !== false ? 'checked' : ''}>
-        </label>
       </div>
 
-      <div class="settings-section">
-        <div class="settings-section-title">AI Prompts</div>
-        <p class="settings-hint" style="margin-bottom:8px">Tune the exact system prompts the on-device notes &amp; question models run with. An edited prompt is saved with your settings; an untouched one tracks future app defaults. The notes model parses its own output — keep the <code>TOPIC|</code> / <code>CATEGORY| note text</code> line format or the AI Final Notes panel will come up empty.</p>
-        ${_renderPromptEditors(s)}
-      </div>
+      <details class="settings-advanced">
+        <summary>Advanced AI prompts</summary>
+        <div class="settings-advanced-body">
+          <p class="settings-hint" style="margin:10px 0 8px">Customize live questions, long-meeting evidence extraction, and the optional bridge. The canonical whole-meeting synthesis protocol stays fixed so agenda ordering and grounding remain reliable.</p>
+          ${_renderPromptEditors(s)}
+        </div>
+      </details>
 
-      <div class="settings-section">
-        <div class="settings-section-title">Bridge Server</div>
-        <label class="settings-row">
-          <span class="settings-label">WebSocket URL</span>
-          <input type="text" id="settingBridgeUrl" class="settings-input" value="${esc(s.bridgeUrl)}">
-        </label>
-      </div>
+      <details class="settings-advanced">
+        <summary>Advanced bridge connection</summary>
+        <div class="settings-advanced-body">
+          <label class="settings-row">
+            <span class="settings-label">WebSocket URL</span>
+            <input type="text" id="settingBridgeUrl" class="settings-input" value="${esc(s.bridgeUrl)}">
+          </label>
+        </div>
+      </details>
 
       <div class="settings-section">
         <div class="settings-section-title">Extensions</div>
@@ -7541,14 +7841,10 @@ function applySettings() {
     device: document.getElementById('settingDevice').value,
     claudeBridge: document.getElementById('settingClaude').checked,
     screenshots: document.getElementById('settingScreenshots').checked,
-    triggerDetection: document.getElementById('settingTriggers').checked,
-    autoSummary: document.getElementById('settingSummary').checked,
-    aiFinalNotes: document.getElementById('settingAiNotes').checked,
     liveOutline: document.getElementById('settingLiveOutline').checked,
     smartQuestions: document.getElementById('settingSmartQ').checked,
     smartqTypes: ['clarify', 'risk', 'followup', 'coverage', 'deepen'].filter(k =>
       document.getElementById('settingSmartQ' + k.charAt(0).toUpperCase() + k.slice(1)).checked),
-    smartqRecap: document.getElementById('settingSmartQRecap').checked,
     qwenModel: document.getElementById('settingQwenModel').value,
     bridgeUrl: document.getElementById('settingBridgeUrl').value.trim() || DEFAULT_SETTINGS.bridgeUrl,
     // AI prompt overrides: persist ONLY textareas that differ from the live
@@ -7668,6 +7964,18 @@ document.getElementById('meetingTitle').addEventListener('input', (e) => {
   }
 });
 
+// Agenda drafts persist locally before Start. Once recording begins the agenda
+// is frozen so the stored source and the final-notes structure cannot diverge.
+const _agendaEditor = document.getElementById('meetingAgenda');
+if (_agendaEditor) {
+  try { _agendaEditor.value = localStorage.getItem(AGENDA_DRAFT_KEY) || ''; } catch (_) {}
+  _agendaEditor.addEventListener('input', () => {
+    try { localStorage.setItem(AGENDA_DRAFT_KEY, _agendaEditor.value); } catch (_) {}
+    updateAgendaUi();
+  });
+}
+updateAgendaUi();
+
 // Initialize time-display controls from saved settings
 refreshTimeUI();
 applyTimestampVisibility();
@@ -7734,6 +8042,13 @@ _ensureStorageLoaded().then(() => {
   console.log('[SilentNotetaker] storage ready (Rust/WASM IndexedDB)');
 }).catch(err => {
   app.handleStatus('Storage error: ' + (err && err.message ? err.message : err), null);
+});
+
+_ensureFinalNotesPolicy().then(() => {
+  updateAgendaUi();
+  console.log('[SilentNotetaker] whole-meeting notes policy ready');
+}).catch(err => {
+  console.error('[final-notes] policy preload failed', err);
 });
 
 // Preload the export-formatting engine so the synchronous copy/history

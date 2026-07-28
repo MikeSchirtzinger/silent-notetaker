@@ -1,0 +1,109 @@
+{
+  "benchmark": "MeetingNotesQuality-v1",
+  "subject": "qwen3-0.6b-webgpu-q4f16",
+  "status": "complete",
+  "mock": false,
+  "fallback": false,
+  "backend": "transformers.js",
+  "model": "onnx-community/Qwen3-0.6B-ONNX",
+  "device": "webgpu",
+  "dtype": "q4f16",
+  "decoding": {
+    "doSample": false,
+    "maxNewTokens": 850
+  },
+  "policyVersion": 1,
+  "startedAt": "2026-07-28T00:49:14.515Z",
+  "finishedAt": "2026-07-28T00:49:32.143Z",
+  "passRate": 1,
+  "meanScore": 1,
+  "items": [
+    {
+      "id": "architecture_review",
+      "score": 1,
+      "pass": true,
+      "dimensions": {
+        "coverage": 1,
+        "grounding": 1,
+        "structure": 1,
+        "agenda": 1
+      },
+      "conceptResults": [
+        {"id": "database-choice", "pass": true},
+        {"id": "migration-action", "pass": true},
+        {"id": "latency-risk", "pass": true},
+        {"id": "cache-gain", "pass": true},
+        {"id": "oauth-blocker", "pass": true},
+        {"id": "launch-date", "pass": true}
+      ],
+      "forbiddenResults": [
+        {"claim": "launch on the 14th", "present": false},
+        {"claim": "Sarah — follow up with the OAuth vendor", "present": false},
+        {"claim": "Mike — prepare the migration", "present": false}
+      ],
+      "unsupportedSpecifics": [],
+      "modelOverviewUsed": true,
+      "elapsedMs": 5044,
+      "rawOutput": "**Meeting Notes**\n\n**Summary:**  \nThe meeting focused on resolving database-related issues and aligning on a new launch strategy. Key points included the recommendation to use Postgres for user data, the discussion on latency and caching improvements, and the agreement to move the launch to the 15th for QA runway.\n\n**Topics:**  \n- Database recommendation (Postgres vs. Mongo)  \n- Latency and connection pooling discussion  \n- Caching improvements  \n- Auth service blocking resolution  \n- Launch strategy alignment\n\n**Decisions:**  \n- Use Postgres for user database  \n- Add document store later if needed  \n- Sarah will own the migration script by Thursday  \n- Caching layer improved API response time by 40%  \n- Auth service is blocked due to OAuth provider not sending sandbox credentials  \n- Launch moved to 15th for QA runway\n\n**Action Items:**  \n- Sarah will own the migration script by Thursday  \n- Mike will follow up with the vendor this week  \n- QA will have more runway after the launch\n\n**Open Questions:**  \n- What is the next step regarding the document store?  \n- How will the new caching layer affect API performance?",
+      "markdown": "# Architecture Review\n**Date:** July 27, 2026  **Duration:** 20:00\n\n> The meeting focused on resolving database-related issues and aligning on a new launch strategy. Key points included the recommendation to use Postgres for user data, the discussion on latency and caching improvements, and the agreement to move the launch to the 15th for QA runway.\n\n## Discussion\n\n### 1. Database recommendation (Postgres vs. Mongo)\n- **Decision:** We will use Postgres for the user database and can add a document store later if needed.\n- **Key point:** Postgres makes more sense than Mongo because our user data is relational.\n\n### 2. Latency\n- **Key point:** Read latency hit 800 milliseconds at p99 last month.\n\n### 3. Connection pooling discussion\n- **Open question:** We still need to learn whether connection pooling will help.\n\n### 4. Caching improvements\n- **Key point:** The new caching layer cut API response time by 40 percent.\n\n### 5. Auth service blocking resolution\n- **Key point:** The auth service is blocked because the OAuth provider has not sent sandbox credentials.\n\n### 6. Launch strategy alignment\n- **Decision:** We also agreed to move launch to the 15th so QA has more runway.\n\n### 7. Other discussion\n- **Action:** Sarah will own the migration script and have it ready by Thursday before the staging deploy.\n- **Action:** Mike will follow up with the vendor this week.\n\n## Decisions\n- We will use Postgres for the user database and can add a document store later if needed.\n- We also agreed to move launch to the 15th so QA has more runway.\n\n## Action Items\n- [ ] Sarah will own the migration script and have it ready by Thursday before the staging deploy.\n- [ ] Mike will follow up with the vendor this week.\n\n## Open Questions\n- We still need to learn whether connection pooling will help."
+    },
+    {
+      "id": "agenda_coverage",
+      "score": 1,
+      "pass": true,
+      "dimensions": {
+        "coverage": 1,
+        "grounding": 1,
+        "structure": 1,
+        "agenda": 1
+      },
+      "conceptResults": [
+        {"id": "budget-cap", "pass": true},
+        {"id": "budget-decision", "pass": true},
+        {"id": "launch-date", "pass": true},
+        {"id": "rollout-action", "pass": true},
+        {"id": "off-agenda-support", "pass": true}
+      ],
+      "forbiddenResults": [
+        {"claim": "Accessibility review completed", "present": false},
+        {"claim": "Accessibility passed", "present": false},
+        {"claim": "budget increase approved", "present": false}
+      ],
+      "unsupportedSpecifics": [],
+      "modelOverviewUsed": true,
+      "elapsedMs": 3878,
+      "rawOutput": "**Meeting Notes**  \n\n**1. Budget Approval**  \n- The approved annual budget cap remains **$750,000**.  \n- Finance confirmed the current split fits under the cap.  \n\n**2. Launch Timing**  \n- The team agreed to move the launch to **August 15**.  \n- QA has a full final week available for this timing.  \n\n**3. Accessibility Review**  \n- The accessibility review has been completed and is ready for implementation.  \n\n**Decisions**  \n- Budget cap remains approved.  \n- Launch timing confirmed as August 15.  \n- Accessibility review is complete.  \n\n**Actions**  \n- Priya will publish the revised rollout plan by **Tuesday**.  \n- Support will draft an escalation guide for the rollout.  \n\n**Open Questions**  \n- What is the timeline for the accessibility review?  \n- Are there any blockers or concerns regarding the launch timing?",
+      "markdown": "# Quarterly Planning\n**Date:** July 27, 2026  **Duration:** 20:00\n\n> The approved annual budget cap remains $750,000.\n\n## Discussion\n\n### 1. Budget approval\n- **Decision:** The approved annual budget cap remains seven hundred fifty thousand dollars.\n- **Decision:** We agreed to keep the existing cap and not request an increase this quarter.\n- **Key point:** Finance confirmed the current split fits under it.\n\n### 2. Launch timing\n- **Decision:** The team agreed to move the launch to August 15.\n- **Action:** Priya will publish the revised rollout plan by Tuesday.\n- **Key point:** For launch timing, August 15 gives QA a full final week.\n\n### 3. Accessibility review\n_Not discussed_\n\n### 4. Other discussion\n- **Action:** Support will draft an escalation guide for the rollout.\n\n## Decisions\n- The approved annual budget cap remains seven hundred fifty thousand dollars.\n- We agreed to keep the existing cap and not request an increase this quarter.\n- The team agreed to move the launch to August 15.\n\n## Action Items\n- [ ] Priya will publish the revised rollout plan by Tuesday.\n- [ ] Support will draft an escalation guide for the rollout."
+    },
+    {
+      "id": "grounding_negative",
+      "score": 1,
+      "pass": true,
+      "dimensions": {
+        "coverage": 1,
+        "grounding": 1,
+        "structure": 1,
+        "agenda": 1
+      },
+      "conceptResults": [
+        {"id": "latency", "pass": true},
+        {"id": "missing-logs", "pass": true},
+        {"id": "release-gate", "pass": true},
+        {"id": "cause-open", "pass": true}
+      ],
+      "forbiddenResults": [
+        {"claim": "Alice", "present": false},
+        {"claim": "Bob", "present": false},
+        {"claim": "Sarah", "present": false},
+        {"claim": "Friday", "present": false},
+        {"claim": "database caused the slowdown", "present": false},
+        {"claim": "payment gateway caused the slowdown", "present": false}
+      ],
+      "unsupportedSpecifics": [],
+      "modelOverviewUsed": true,
+      "elapsedMs": 4483,
+      "rawOutput": "**Meeting Notes**  \n\n**1. Incident findings**  \n- The incident involved checkout requests reaching 1.2 seconds at p99.  \n- This was a result of a system issue that required immediate attention.  \n\n**2. Release gate**  \n- The release gate was not fully operational due to missing vendor logs.  \n- The team agreed that no release will ship until the logs are delivered and the failure mode is understood.  \n\n**3. Monitoring follow-up**  \n- Monitoring was not fully implemented next week, and no owner or deadline was assigned for the next monitoring session.  \n- A follow-up was planned, but the issue was not fully resolved.  \n\n**Decisions**  \n- The team decided to proceed with the release only if the vendor logs are delivered and the failure mode is understood.  \n- Monitoring was planned, but the issue was not fully resolved.  \n\n**Action items**  \n- The vendor logs need to be delivered by the next monitoring session.  \n- An owner and deadline were not assigned for the next monitoring session.  \n\n**Open questions**  \n- What caused the slowdown in the database or payment gateway?  \n- Are the vendor logs still missing?",
+      "markdown": "# Incident Follow-up\n**Date:** July 27, 2026  **Duration:** 20:00\n\n> The incident involved checkout requests reaching 1.2 seconds at p99.\n\n## Discussion\n\n### 1. Incident findings\n- **Key point:** Checkout requests reached 1.2 seconds at p99 during the incident.\n- **Key point:** The vendor logs needed for root-cause analysis are still missing.\n- **Open question:** We do not yet know whether the database or the payment gateway caused the slowdown.\n\n### 2. Release gate\n- **Decision:** The team agreed that no release will ship until those logs arrive and the failure mode is understood.\n\n### 3. Monitoring follow-up\n_Partially discussed_\n- **Key point:** Someone should investigate better monitoring next week, but we did not assign an owner or a deadline.\n\n## Decisions\n- The team agreed that no release will ship until those logs arrive and the failure mode is understood.\n\n## Open Questions\n- We do not yet know whether the database or the payment gateway caused the slowdown."
+    }
+  ]
+}

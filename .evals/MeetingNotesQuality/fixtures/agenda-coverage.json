@@ -1,0 +1,36 @@
+{
+  "id": "agenda_coverage",
+  "title": "Quarterly Planning",
+  "agenda": "Budget approval\nLaunch timing\nAccessibility review",
+  "transcriptSegments": [
+    "The approved annual budget cap remains seven hundred fifty thousand dollars. Finance confirmed the current split fits under it.",
+    "We agreed to keep the existing cap and not request an increase this quarter.",
+    "For launch timing, August 15 gives QA a full final week. The team agreed to move the launch to August 15.",
+    "Priya will publish the revised rollout plan by Tuesday.",
+    "Separately, support will draft an escalation guide for the rollout."
+  ],
+  "expectedConcepts": [
+    {"id":"budget-cap","all":[["750","seven hundred fifty"],["budget","cap"]]},
+    {"id":"budget-decision","all":[["keep","remain","existing"],["cap"]]},
+    {"id":"launch-date","all":[["august"],["15"]]},
+    {"id":"rollout-action","all":[["priya"],["rollout"],["tuesday"]]},
+    {"id":"off-agenda-support","all":[["support"],["escalation"]]}
+  ],
+  "forbiddenClaims": [
+    "Accessibility review completed",
+    "Accessibility passed",
+    "budget increase approved"
+  ],
+  "expectedAgenda": [
+    {"title":"Budget approval","status":"discussed"},
+    {"title":"Launch timing","status":"discussed"},
+    {"title":"Accessibility review","status":"not discussed"},
+    {"title":"Other discussion","status":"discussed"}
+  ],
+  "expectedMinimums": {
+    "sections": 4,
+    "decisions": 2,
+    "actions": 1,
+    "questions": 0
+  }
+}

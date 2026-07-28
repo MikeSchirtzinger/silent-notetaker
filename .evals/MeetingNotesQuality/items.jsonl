@@ -1,0 +1,3 @@
+{"id":"architecture_review","domain":"planning","split":"public","fixture":"fixtures/architecture-review.json","fixtureSha256":"4bdda8a3630410764cf0129b55875750d3494f905ff1788c5544c6dc510227bb","scoring":"binary-concepts-plus-structure","gate":true}
+{"id":"agenda_coverage","domain":"agenda-reconciliation","split":"public","fixture":"fixtures/agenda-coverage.json","fixtureSha256":"409ca17c9385f8d18edf4c23ed95e4da06cdd86b0db5fba8281d2a32aa346a97","scoring":"binary-concepts-plus-agenda","gate":true}
+{"id":"grounding_negative","domain":"non-invention","split":"public","fixture":"fixtures/grounding-negative.json","fixtureSha256":"29b2665f3e4a2de7a25559bb5f1b9e71fe6cea0d9c3a9c95466aba48df4d9c6e","scoring":"binary-concepts-plus-forbidden-claims","gate":true}

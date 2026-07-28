@@ -161,20 +161,59 @@ async fn add_autoinc(db: &Database, store_name: &str, record: &JsValue) -> Resul
 // meetings (Appendix A rows 1, 3, 33)
 // ---------------------------------------------------------------------------
 
-/// `db.meetings.add({ title, startTime, endTime: null, duration: 0 })`.
+/// `db.meetings.add({ title, agenda, finalNotes: "", startTime, endTime: null,
+/// duration: 0 })`.
 /// Returns the new meeting id.
 ///
 /// # Errors
 ///
 /// Returns [`StorageError`] if the write fails.
-pub async fn add_meeting(title: &str, start_time: f64) -> Result<u32> {
+pub async fn add_meeting(title: &str, agenda: &str, start_time: f64) -> Result<u32> {
     let db = open_db().await?;
     let obj = Object::new();
     set(&obj, "title", &JsValue::from_str(title))?;
+    set(&obj, "agenda", &JsValue::from_str(agenda))?;
+    set(&obj, "finalNotes", &JsValue::from_str(""))?;
     set(&obj, "startTime", &JsValue::from_f64(start_time))?;
     set(&obj, "endTime", &JsValue::NULL)?;
     set(&obj, "duration", &JsValue::from_f64(0.0))?;
     add_autoinc(&db, "meetings", &obj.into()).await
+}
+
+/// Persist the canonical whole-meeting Markdown generated at Stop.
+///
+/// Reads the meeting row, patches only `finalNotes`, and writes the same row
+/// back so title, agenda, timing, and any future additive fields survive.
+///
+/// # Errors
+///
+/// Returns [`StorageError`] if the meeting is missing or the write fails.
+pub async fn save_final_notes(meeting_id: u32, final_notes: &str) -> Result<()> {
+    let db = open_db().await?;
+    let tx = db
+        .transaction(["meetings"])
+        .with_mode(TransactionMode::Readwrite)
+        .build()?;
+    let store = tx.object_store("meetings")?;
+    let existing: Option<JsValue> = store
+        .get::<JsValue, u32, _>(meeting_id)
+        .primitive()
+        .map_err(|e| StorageError::Operation(format!("get meeting: {e:?}")))?
+        .await
+        .map_err(|e| StorageError::Operation(format!("get meeting await: {e:?}")))?;
+    let row = existing.ok_or_else(|| {
+        StorageError::Operation(format!("meeting {meeting_id} not found for final notes"))
+    })?;
+    let obj: Object = row.into();
+    set(&obj, "finalNotes", &JsValue::from_str(final_notes))?;
+    store
+        .put(&JsValue::from(obj))
+        .build()
+        .map_err(|e| StorageError::Operation(format!("put meeting: {e:?}")))?
+        .await
+        .map_err(|e| StorageError::Operation(format!("put meeting await: {e:?}")))?;
+    tx.commit().await?;
+    Ok(())
 }
 
 /// `db.meetings.update(id, { endTime, duration })` — the Stop-time write.

@@ -115,11 +115,26 @@ pub async fn read_database_summary() -> Result<JsValue, JsValue> {
 /// # Errors
 /// Rejects with a string on a write failure.
 #[wasm_bindgen]
-pub async fn add_meeting(title: String, start_time: f64) -> Result<JsValue, JsValue> {
-    let id = silent_storage::writer::add_meeting(&title, start_time)
+pub async fn add_meeting(
+    title: String,
+    agenda: String,
+    start_time: f64,
+) -> Result<JsValue, JsValue> {
+    let id = silent_storage::writer::add_meeting(&title, &agenda, start_time)
         .await
         .map_err(err)?;
     Ok(JsValue::from_f64(f64::from(id)))
+}
+
+/// Persist the canonical whole-meeting Markdown generated at Stop.
+///
+/// # Errors
+/// Rejects with a string if the meeting is missing or the write fails.
+#[wasm_bindgen]
+pub async fn save_final_notes(meeting_id: u32, final_notes: String) -> Result<(), JsValue> {
+    silent_storage::writer::save_final_notes(meeting_id, &final_notes)
+        .await
+        .map_err(err)
 }
 
 /// `db.meetings.update(id, { endTime, duration })` (the Stop write).
@@ -315,6 +330,18 @@ pub async fn search_history(query: String) -> Result<JsValue, JsValue> {
         .chain(snap.transcript_chunks.iter().map(|c| TextRow {
             meeting_id: i64::from(c.meeting_id),
             text: c.text.clone(),
+        }))
+        .chain(snap.meetings.iter().flat_map(|m| {
+            [
+                TextRow {
+                    meeting_id: i64::from(m.id),
+                    text: m.agenda.clone(),
+                },
+                TextRow {
+                    meeting_id: i64::from(m.id),
+                    text: m.final_notes.clone(),
+                },
+            ]
         }))
         .collect();
 

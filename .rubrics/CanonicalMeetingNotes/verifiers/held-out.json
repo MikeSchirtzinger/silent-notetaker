@@ -1,0 +1,8 @@
+{
+  "agenda": "Vendor readiness\nRollout timing\nAccessibility review",
+  "raw": "OVERVIEW| The team delayed rollout while vendor credentials remain unavailable.\nSECTION| Rollout timing\nSTATUS| discussed\nSUMMARY| The rollout moved to August 15 to preserve a full QA week.\nDECISION| Move rollout to August 15.\nSECTION| Vendor readiness\nSTATUS| partial\nSUMMARY| Sandbox credentials are still unavailable.\nQUESTION| When will the vendor provide sandbox credentials?\nSECTION| Support coverage\nSUMMARY| Support will publish an escalation guide.\nACTION| Support — publish the escalation guide",
+  "forbidden": [
+    "Friday",
+    "Alice"
+  ]
+}

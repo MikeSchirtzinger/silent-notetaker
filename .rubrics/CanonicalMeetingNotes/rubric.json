@@ -1,0 +1,150 @@
+{
+  "task": "CanonicalMeetingNotes",
+  "goal": "Stopping a recorded meeting produces grounded, shareable whole-meeting notes, optionally organized by the supplied agenda, and persists them for history replay.",
+  "version": 3,
+  "environment": "/Users/mike/dev/silent-notetaker",
+  "target_reward": 0.95,
+  "max_iterations": 10,
+  "plateau_window": 3,
+  "criteria": [
+    {
+      "id": "C1",
+      "desc": "Whole-meeting policy passes direct and reducer mode tests",
+      "weight": 3,
+      "type": "command",
+      "check": "cd /Users/mike/dev/silent-notetaker && node --test tests/final-notes-policy.test.mjs",
+      "expect": "exit0",
+      "timeout_s": 60
+    },
+    {
+      "id": "C2",
+      "desc": "Legacy meetings deserialize with empty additive note fields",
+      "weight": 2,
+      "type": "command",
+      "check": "cd /Users/mike/dev/silent-notetaker && cargo test -p silent-core storage::tests::meeting_deserializes_null_end_time",
+      "expect": "exit0",
+      "timeout_s": 180
+    },
+    {
+      "id": "C3",
+      "desc": "Stop pipeline performs one natural whole-meeting synthesis with a grounded source register",
+      "weight": 3,
+      "type": "script",
+      "check": "verifiers/verify_pipeline.sh",
+      "expect": "exit0",
+      "timeout_s": 30
+    },
+    {
+      "id": "C4",
+      "desc": "Agenda persists and controls canonical section ordering",
+      "weight": 2,
+      "type": "script",
+      "check": "verifiers/verify_agenda_wiring.sh",
+      "expect": "exit0",
+      "timeout_s": 30
+    },
+    {
+      "id": "C5",
+      "desc": "Canonical Markdown persists and replays from meeting history",
+      "weight": 3,
+      "type": "script",
+      "check": "verifiers/verify_persistence.sh",
+      "expect": "exit0",
+      "timeout_s": 30
+    },
+    {
+      "id": "C6",
+      "desc": "Retired incomplete settings are absent from rendered controls",
+      "weight": 2,
+      "type": "script",
+      "check": "verifiers/verify_settings.sh",
+      "expect": "exit0",
+      "timeout_s": 30
+    },
+    {
+      "id": "C7",
+      "desc": "Benchmark manifest and item bank pass schema validation",
+      "weight": 2,
+      "type": "command",
+      "check": "cd /Users/mike/dev/silent-notetaker && node .evals/MeetingNotesQuality/validate-benchmark.mjs",
+      "expect": "exit0",
+      "timeout_s": 60
+    },
+    {
+      "id": "C8",
+      "desc": "Scorer passes public tests and a held-out case",
+      "weight": 2,
+      "type": "command",
+      "check": "cd /Users/mike/dev/silent-notetaker && node --test .evals/MeetingNotesQuality/score-output.test.mjs .rubrics/CanonicalMeetingNotes/verifiers/held-out.test.mjs",
+      "expect": "exit0",
+      "timeout_s": 60
+    },
+    {
+      "id": "C9",
+      "desc": "Real Qwen run records grounded substantive canonical notes",
+      "weight": 3,
+      "type": "script",
+      "check": "verifiers/verify_real_benchmark.sh",
+      "expect": "exit0",
+      "timeout_s": 30
+    },
+    {
+      "id": "C10",
+      "desc": "Browser smoke verifies agenda settings and final rendering",
+      "weight": 2,
+      "type": "script",
+      "check": "verifiers/verify_browser_smoke.sh",
+      "expect": "exit0",
+      "timeout_s": 30
+    },
+    {
+      "id": "C11",
+      "desc": "All Rust workspace tests remain fully passing",
+      "weight": 1,
+      "type": "command",
+      "check": "cd /Users/mike/dev/silent-notetaker && cargo test --workspace --quiet",
+      "expect": "exit0",
+      "timeout_s": 600
+    },
+    {
+      "id": "C12",
+      "desc": "Every classic inline application script parses successfully",
+      "weight": 2,
+      "type": "script",
+      "check": "verifiers/check_inline_js.sh",
+      "expect": "exit0",
+      "timeout_s": 30
+    }
+  ],
+  "composites": [],
+  "constraints": [],
+  "anti_criteria": [
+    {
+      "id": "A1",
+      "desc": "Automated test count never drops below baseline 428",
+      "weight": 5,
+      "type": "script",
+      "check": "verifiers/verify_test_count.sh",
+      "expect": "exit0",
+      "timeout_s": 30
+    },
+    {
+      "id": "A2",
+      "desc": "Core fixture still produces substantive shareable Markdown",
+      "weight": 5,
+      "type": "script",
+      "check": "verifiers/verify_substantive_output.sh",
+      "expect": "exit0",
+      "timeout_s": 30
+    },
+    {
+      "id": "A3",
+      "desc": "Benchmark evidence rejects mock and fallback model runs",
+      "weight": 5,
+      "type": "script",
+      "check": "verifiers/verify_no_mock_results.sh",
+      "expect": "exit0",
+      "timeout_s": 30
+    }
+  ]
+}

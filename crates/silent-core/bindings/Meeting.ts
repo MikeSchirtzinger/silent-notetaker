@@ -3,7 +3,11 @@
 /**
  * A `meetings` row.
  *
- * Dexie schema: `++id, title, startTime, endTime, duration`.
+ * IndexedDB row: `++id, title, agenda, finalNotes, startTime, endTime, duration`.
+ *
+ * `agenda` and `finalNotes` are non-indexed additive fields. Existing Dexie and
+ * Rust-owned rows omit them, so both deserialize with empty defaults without an
+ * IndexedDB schema-version bump.
  */
 export type Meeting = { 
 /**
@@ -15,6 +19,14 @@ id: number,
  * trusted as-is — a longer legacy value is preserved, not truncated).
  */
 title: string, 
+/**
+ * Optional pre-meeting agenda, stored exactly as the user entered it.
+ */
+agenda: string,
+/**
+ * Canonical whole-meeting notes Markdown generated at Stop.
+ */
+finalNotes: string,
 /**
  * Unix epoch milliseconds at recording start.
  */

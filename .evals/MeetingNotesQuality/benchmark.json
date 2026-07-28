@@ -1,0 +1,30 @@
+{
+  "id": "MeetingNotesQuality-v1",
+  "construct": "Grounded whole-meeting note synthesis",
+  "claimScope": "Descriptive results on the frozen short-meeting transcripts only. No IRT, latent-capability, item-difficulty, discrimination, or population-generalization claim.",
+  "version": 1,
+  "policyVersion": 1,
+  "createdAt": "2026-07-27",
+  "items": "items.jsonl",
+  "subjects": "subjects.jsonl",
+  "runner": "../../dev/final-notes-benchmark.html",
+  "scorer": "score-output.mjs",
+  "minimumItems": 3,
+  "passThreshold": 0.7,
+  "targetPassRate": 0.75,
+  "targetMeanScore": 0.75,
+  "dimensions": {
+    "coverage": 0.5,
+    "grounding": 0.2,
+    "structure": 0.15,
+    "agenda": 0.15
+  },
+  "splits": {
+    "public": [
+      "architecture_review",
+      "agenda_coverage",
+      "grounding_negative"
+    ],
+    "heldOut": "The implementation rubric owns a separate hash-locked verifier fixture."
+  }
+}

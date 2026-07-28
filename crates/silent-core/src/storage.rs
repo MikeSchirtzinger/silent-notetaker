@@ -72,7 +72,11 @@ use serde::{Deserialize, Serialize};
 
 /// A `meetings` row.
 ///
-/// Dexie schema: `++id, title, startTime, endTime, duration`.
+/// IndexedDB row: `++id, title, agenda, finalNotes, startTime, endTime, duration`.
+///
+/// `agenda` and `finalNotes` are non-indexed additive fields. Existing Dexie and
+/// Rust-owned rows omit them, so both deserialize with empty defaults without an
+/// IndexedDB schema-version bump.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(test, derive(ts_rs::TS))]
 #[cfg_attr(test, ts(export))]
@@ -82,6 +86,13 @@ pub struct Meeting {
     /// Human-readable title (UI caps input at 120 chars; the stored value is
     /// trusted as-is — a longer legacy value is preserved, not truncated).
     pub title: String,
+    /// Optional pre-meeting agenda, stored exactly as the user entered it.
+    #[serde(default)]
+    pub agenda: String,
+    /// Canonical whole-meeting notes Markdown generated at Stop.
+    #[serde(rename = "finalNotes", default)]
+    #[cfg_attr(test, ts(rename = "finalNotes"))]
+    pub final_notes: String,
     /// Unix epoch milliseconds at recording start.
     #[serde(rename = "startTime")]
     pub start_time: f64,
@@ -484,12 +495,15 @@ mod tests {
         let m = Meeting {
             id: 1,
             title: "Q1 Kickoff".into(),
+            agenda: "Budget\nLaunch".into(),
+            final_notes: "# Q1 Kickoff".into(),
             start_time: 1_700_000_000_000.0,
             end_time: Some(1_700_003_600_000.0),
             duration: 3_600_000.0,
         };
         let json = serde_json::to_string(&m).expect("serialize");
         assert!(json.contains("\"startTime\""), "camelCase key: {json}");
+        assert!(json.contains("\"finalNotes\""), "camelCase key: {json}");
         let m2: Meeting = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(m, m2);
     }
@@ -503,6 +517,11 @@ mod tests {
         let m: Meeting = serde_json::from_str(raw).expect("null endTime must deserialize");
         assert_eq!(m.id, 7);
         assert!(m.end_time.is_none(), "endTime: null → None");
+        assert!(m.agenda.is_empty(), "legacy row agenda defaults empty");
+        assert!(
+            m.final_notes.is_empty(),
+            "legacy row finalNotes defaults empty"
+        );
         // `0.0` is exactly representable; compare bit patterns to satisfy the
         // float_cmp lint while asserting the exact stored value.
         assert_eq!(m.duration.to_bits(), 0.0_f64.to_bits());
@@ -669,6 +688,8 @@ mod tests {
             meetings: vec![Meeting {
                 id: 1,
                 title: "m".into(),
+                agenda: String::new(),
+                final_notes: String::new(),
                 start_time: 0.0,
                 end_time: None,
                 duration: 0.0,
@@ -766,6 +787,14 @@ mod tests {
             decl.contains("startTime: number"),
             "TS field must be `startTime: number`: {decl}"
         );
+        assert!(
+            decl.contains("agenda: string"),
+            "TS field must expose the agenda: {decl}"
+        );
+        assert!(
+            decl.contains("finalNotes: string"),
+            "TS field must expose canonical notes: {decl}"
+        );
     }
 
     /// `endTime: null` must round-trip as `null` (Dexie writes `null`, not an
@@ -776,6 +805,8 @@ mod tests {
         let m = Meeting {
             id: 7,
             title: "In progress".into(),
+            agenda: String::new(),
+            final_notes: String::new(),
             start_time: 1_700_000_000_000.0,
             end_time: None,
             duration: 0.0,

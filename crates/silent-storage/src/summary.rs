@@ -87,6 +87,8 @@ pub fn meetings_to_js(meetings: &[Meeting]) -> Result<JsValue> {
         let obj = Object::new();
         set(&obj, "id", &num(u64::from(m.id)))?;
         set(&obj, "title", &JsValue::from_str(&m.title))?;
+        set(&obj, "agenda", &JsValue::from_str(&m.agenda))?;
+        set(&obj, "finalNotes", &JsValue::from_str(&m.final_notes))?;
         set(&obj, "startTime", &JsValue::from_f64(m.start_time))?;
         set(
             &obj,

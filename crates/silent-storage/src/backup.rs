@@ -208,6 +208,8 @@ mod tests {
             meetings: vec![Meeting {
                 id: 1,
                 title: "Q1".into(),
+                agenda: "Budget".into(),
+                final_notes: "# Q1".into(),
                 start_time: 1_700_000_000_000.0,
                 end_time: None,
                 duration: 0.0,

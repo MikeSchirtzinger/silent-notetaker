@@ -52,6 +52,8 @@ fn sample_snapshot() -> StorageSnapshot {
         meetings: vec![Meeting {
             id: 1,
             title: "Browser Meeting".into(),
+            agenda: "Storage".into(),
+            final_notes: "# Browser Meeting".into(),
             start_time: 1_700_000_000_000.0,
             end_time: None,
             duration: 0.0,

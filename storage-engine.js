@@ -111,13 +111,23 @@ export class StorageEngine {
   // ── meetings (Appendix A rows 1, 3, 33) ─────────────────────────────────────
 
   /**
-   * `db.meetings.add({ title, startTime, endTime:null, duration:0 })`.
+   * `db.meetings.add({ title, agenda, finalNotes:'', startTime,
+   * endTime:null, duration:0 })`.
    * @param {string} title
+   * @param {string} agenda
    * @param {number} startTime  epoch ms
    * @returns {Promise<number>} new meeting id
    */
-  addMeeting(title, startTime) {
-    return this._m().add_meeting(String(title || ''), startTime);
+  addMeeting(title, agenda, startTime) {
+    return this._m().add_meeting(String(title || ''), String(agenda || ''), startTime);
+  }
+
+  /**
+   * Persist the canonical whole-meeting Markdown generated at Stop.
+   * @returns {Promise<void>}
+   */
+  saveFinalNotes(meetingId, finalNotes) {
+    return this._m().save_final_notes(Number(meetingId), String(finalNotes || ''));
   }
 
   /**

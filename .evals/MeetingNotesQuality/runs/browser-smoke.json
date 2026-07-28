@@ -1,0 +1,15 @@
+{
+  "checkedAt": "2026-07-28T00:46:00-04:00",
+  "browser": "Chrome headless via CDP",
+  "agendaEditorVisible": true,
+  "agendaCountCorrect": true,
+  "retiredSettingsAbsent": true,
+  "advancedSettingsCollapsed": true,
+  "finalNotesRendered": true,
+  "finalNotesTitleCorrect": true,
+  "notDiscussedVisible": true,
+  "consoleErrorsEmpty": true,
+  "persistenceAgendaRoundTrip": true,
+  "persistenceFinalNotesRoundTrip": true,
+  "screenshot": ".evals/MeetingNotesQuality/runs/final-notes-ui.png"
+}
