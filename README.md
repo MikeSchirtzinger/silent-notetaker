@@ -2,34 +2,34 @@
 
 **Meeting notes that never leave your machine. No backend, no account, no upload.**
 
-A private AI meeting notetaker that runs entirely in your browser. Open a tab, hit record, and it transcribes in real time, figures out *who said what*, and pulls out decisions, action items, key points, and open questions as they happen — all on-device, using speech and language models that run locally on your CPU and GPU. Nothing is ever sent to a server.
+A private AI meeting notetaker that runs entirely in your browser. Open a tab, hit record, and it transcribes in real time, figures out *who said what*, and pulls out decisions, action items, key points, and open questions as they happen, all on-device, using speech and language models that run locally on your CPU and GPU. Nothing is ever sent to a server.
 
 > Top-5 Global Demo at AI Tinkerers.
 
-**▶ Try it now — [silentnotetaker.com](https://silentnotetaker.com)** · nothing to install, runs entirely in your browser. Use Chrome or Edge; the first load downloads the models (a few hundred MB) into a browser-managed local cache, so give it a minute on the first visit. The browser may still evict that cache under storage pressure.
+**▶ Try it now: [silentnotetaker.com](https://silentnotetaker.com)** · nothing to install, runs entirely in your browser. Use Chrome or Edge; the first load downloads the models (a few hundred MB) into a browser-managed local cache, so give it a minute on the first visit. The browser may still evict that cache under storage pressure.
 
 ---
 
 ## Why
 
-Every mainstream AI notetaker works the same way: it joins your call, **streams your audio to someone else's servers**, runs the AI there, and sends a summary back. The good ones are careful — encryption, SOC 2, "we delete the audio after transcription." Even the privacy-marketed ones (Granola, for example) still send your meeting to cloud LLMs and store it on their infrastructure. Their privacy is a **promise**, backed by a company.
+Every mainstream AI notetaker works the same way: it joins your call, **streams your audio to someone else's servers**, runs the AI there, and sends a summary back. The good ones are careful: encryption, SOC 2, "we delete the audio after transcription." Even the privacy-marketed ones (Granola, for example) still send your meeting to cloud LLMs and store it on their infrastructure. Their privacy is a **promise**, backed by a company.
 
-Silent Notetaker makes the promise structurally unnecessary. The audio is captured, fed to the models, and consumed **in-process** — it is never serialized into a network request. This is privacy **by architecture, not by policy**, and you can verify it: open your browser's network panel and watch. The only things the app ever fetches are JavaScript runtimes and model weights (downloaded once, then cached). A `Content-Security-Policy` `connect-src` allowlist — enforced, not report-only — makes the browser itself refuse any connection outside that set.
+Silent Notetaker makes the promise structurally unnecessary. The audio is captured, fed to the models, and consumed **in-process**. It is never serialized into a network request. This is privacy **by architecture, not by policy**, and you can verify it: open your browser's network panel and watch. The only things the app ever fetches are JavaScript runtimes and model weights (downloaded once, then cached). A `Content-Security-Policy` `connect-src` allowlist, enforced and not report-only, makes the browser itself refuse any connection outside that set.
 
-There are whole categories of conversation — legal, medical, hiring, finance, M&A, journalism with sources — where "the audio left the building" is a non-starter. This is built for those.
+There are whole categories of conversation (legal, medical, hiring, finance, M&A, journalism with sources) where "the audio left the building" is a non-starter. This is built for those.
 
 ---
 
 ## Features
 
-- **Live transcription** — streaming speech-to-text as you talk.
-- **Speaker identification** — labels each line by speaker (`S1`, `S2`, …) using on-device voice embeddings. Click any tag to rename a speaker; the name propagates everywhere.
-- **Automatic note extraction** — sorts the conversation in real time into **Decisions**, **Action Items**, **Key Points**, and **Open Questions**.
-- **Live meeting outline & smart questions** — a small on-device LLM builds an outline as you go and suggests a sharp question worth asking *right now*.
-- **Slide / screen capture** — optionally grab tab audio and screenshots of shared slides.
-- **Local-first storage** — every meeting is saved on your device. Nothing is uploaded.
-- **Clean export** — copy the whole meeting as structured Markdown.
-- **Optional Claude bridge** — connect to Claude for sharper summaries via a local server *you* run. Entirely optional; the app is fully functional without it.
+- **Live transcription**: streaming speech-to-text as you talk.
+- **Speaker identification**: labels each line by speaker (`S1`, `S2`, …) using on-device voice embeddings. Click any tag to rename a speaker; the name propagates everywhere.
+- **Automatic note extraction**: sorts the conversation in real time into **Decisions**, **Action Items**, **Key Points**, and **Open Questions**.
+- **Live meeting outline & smart questions**: a small on-device LLM builds an outline as you go and suggests a sharp question worth asking *right now*.
+- **Slide / screen capture**: optionally grab tab audio and screenshots of shared slides.
+- **Local-first storage**: every meeting is saved on your device. Nothing is uploaded.
+- **Clean export**: copy the whole meeting as structured Markdown.
+- **Optional Claude bridge**: connect to Claude for sharper summaries via a local server *you* run. Entirely optional; the app is fully functional without it.
 
 ---
 
@@ -37,6 +37,7 @@ There are whole categories of conversation — legal, medical, hiring, finance, 
 
 The whole pipeline runs client-side, in your browser:
 
+<!-- credo-lint:allow-fenced pre-existing ASCII architecture diagram, mic icon labels the input node -->
 ```
   🎤 Microphone
        │
@@ -54,10 +55,10 @@ The whole pipeline runs client-side, in your browser:
         Note extraction (Rust)  ───────────────▶  UI + local storage
                                                   (Rust/WASM, on-device)
 
-  (optional)  ⇄  Claude bridge (ws://localhost:8765 — a server you run)
+  (optional)  ⇄  Claude bridge (ws://localhost:8765, a server you run)
 ```
 
-The design splits work across silicon so nothing contends: the **default ASR (Nemotron streaming)** runs on **CPU/WASM**, which leaves the **GPU free for on-device Qwen** to generate notes and questions. Heavier engines like Voxtral take the GPU when selected. The application *policy* — engine selection, diarization, note triggers, question scheduling, storage, the recording state machine — is written in **Rust, compiled to WebAssembly**, driving a thin HTML/JS shell.
+The design splits work across silicon so nothing contends: the **default ASR (Nemotron streaming)** runs on **CPU/WASM**, which leaves the **GPU free for on-device Qwen** to generate notes and questions. Heavier engines like Voxtral take the GPU when selected. The application *policy* (engine selection, diarization, note triggers, question scheduling, storage, the recording state machine) is written in **Rust, compiled to WebAssembly**, driving a thin HTML/JS shell.
 
 ---
 
@@ -65,7 +66,7 @@ The design splits work across silicon so nothing contends: the **default ASR (Ne
 
 **Requirements:** Chrome or Edge (most complete WebGPU support), a microphone, and a few hundred MB of free disk for the first-run model cache.
 
-**Fastest — just open it:** **[silentnotetaker.com](https://silentnotetaker.com)**. Same app, hosted on Cloudflare Pages with the cross-origin-isolation headers already set. Nothing is uploaded — the page only fetches JS runtimes and model weights (see [Privacy statement](#privacy-statement)). The first visit downloads the selected model; the large weights (the Nemotron encoder is ~880 MB) are then persisted **on-device in the browser's private file system (OPFS)**, keyed to the pinned model revision, so repeat visits skip the download entirely and the app works offline. It's purely a local cache, and bumping the model pin auto-invalidates the old copy.
+**Fastest, just open it:** **[silentnotetaker.com](https://silentnotetaker.com)**. Same app, hosted on Cloudflare Pages with the cross-origin-isolation headers already set. Nothing is uploaded. The page only fetches JS runtimes and model weights (see [Privacy statement](#privacy-statement)). The first visit downloads the selected model; the large weights (the Nemotron encoder is ~880 MB) are then persisted **on-device in the browser's private file system (OPFS)**, keyed to the pinned model revision, so repeat visits skip the download entirely and the app works offline. It's purely a local cache, and bumping the model pin auto-invalidates the old copy.
 
 **Run it locally** (full source, same behavior):
 
@@ -75,9 +76,9 @@ cd silent-notetaker
 ./start.sh
 ```
 
-`start.sh` launches a local server with the right headers and opens the app at **http://localhost:8080**. Pick an engine, click **Start**, allow the mic, and talk. The first run downloads the selected model from Hugging Face and caches it on-device in the browser's private storage (OPFS), keyed to the model revision — so everyday repeat runs skip the download and work offline (bumping the pin re-fetches).
+`start.sh` launches a local server with the right headers and opens the app at **http://localhost:8080**. Pick an engine, click **Start**, allow the mic, and talk. The first run downloads the selected model from Hugging Face and caches it on-device in the browser's private storage (OPFS), keyed to the model revision, so everyday repeat runs skip the download and work offline (bumping the pin re-fetches).
 
-> **Why a server and not just opening the file?** The on-device models use multithreaded WebAssembly, which the browser only enables when the page is "cross-origin isolated" (it needs `SharedArrayBuffer`). That requires two HTTP headers (`COOP` + `COEP`) you can't set from a `file://` URL. `start.sh` runs a tiny server that sends them — a Rust (axum) one if you have `cargo`, otherwise a dependency-free Python fallback (`coi-server.py`). A plain `python -m http.server` will *load* the app but run single-threaded and several times slower.
+> **Why a server and not just opening the file?** The on-device models use multithreaded WebAssembly, which the browser only enables when the page is "cross-origin isolated" (it needs `SharedArrayBuffer`). That requires two HTTP headers (`COOP` + `COEP`) you can't set from a `file://` URL. `start.sh` runs a tiny server that sends them: a Rust (axum) one if you have `cargo`, otherwise a dependency-free Python fallback (`coi-server.py`). A plain `python -m http.server` will *load* the app but run single-threaded and several times slower.
 
 **Building the WebAssembly modules** (only needed if you change the Rust crates):
 
@@ -91,7 +92,7 @@ The app is fully static and deploys to **Cloudflare Pages** (the `_headers` file
 
 ## Architecture
 
-The UI shell — markup, styles, engine loaders, the inlined transcription worker — lives in `index.html` and a handful of small ES modules (`nemotron-engine.js`, `diarization-engine.js`, `storage-engine.js`, …). The application *policy* lives in Rust crates under `crates/`, compiled to WebAssembly:
+The UI shell (markup, styles, engine loaders, the inlined transcription worker) lives in `index.html` and a handful of small ES modules (`nemotron-engine.js`, `diarization-engine.js`, `storage-engine.js`, …). The application *policy* lives in Rust crates under `crates/`, compiled to WebAssembly:
 
 | Crate | Responsibility |
 |---|---|
@@ -140,7 +141,14 @@ Audio is captured, turned into model inputs, and consumed on-device. It is **nev
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md). The core notetaker — capture, transcription, speaker ID, note extraction, smart questions, local storage — is **free and stays free**, and the source stays auditable.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). The core notetaker (capture, transcription, speaker ID, note extraction, smart questions, local storage) is **free and stays free**, and the source stays auditable.
+
+---
+
+## Related
+
+- [Brevity Meet](https://meet.brevity.ventures): Brevity's agentic meeting infrastructure.
+- [brevity.ventures](https://brevity.ventures): what Brevity is building.
 
 ---
 
@@ -148,4 +156,4 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md). The core notetaker — capture, transc
 
 Code is [MIT](./LICENSE). Bundled and downloaded models retain their own upstream licenses. Models by NVIDIA, Mistral AI, OpenAI, Alibaba, FunAudioLLM, and Useful Sensors.
 
-*Built by [Brevity Ventures](https://brevity.ventures) — we build private, on-device AI.*
+*Built by [Brevity Ventures](https://brevity.ventures). We build private, on-device AI.*
